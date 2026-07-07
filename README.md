@@ -263,9 +263,30 @@ Stops, archives, or deletes Ogre runtime data. Does not revert code changes.
 | `--delete` | `ogre stop 107 --delete` | Delete the issue's runtime data (after confirmation) |
 | `--list` | `ogre stop 107 --list` | Print every runtime file/dir path for the issue without deleting, so the user can pick individually |
 
-## Install / Test Locally
+## Installation
 
-From anywhere:
+Ogre is distributed through its own marketplace. From inside Claude Code, in any project:
+
+```
+/plugin marketplace add metallurgical/ogre-runner
+/plugin install ogre@ogre-runner
+```
+
+Then `/reload-plugins` if the session was already running. Try it:
+
+```
+/ogre:feature --statement "need to implement forgot password page" --name forgot-password
+```
+
+To update later:
+
+```
+/plugin marketplace update ogre-runner
+```
+
+## Install / Test Locally (development)
+
+Testing a local checkout without going through the marketplace:
 
 ```bash
 claude --plugin-dir /path/to/ogre-plugin

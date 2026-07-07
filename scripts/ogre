@@ -917,6 +917,7 @@ delete_issue_data() {
   pruned="$(prune_tasks_for_issue "$issue")"
   log "Deleted Ogre data for issue $issue. Code changes were not reverted."
   [ -n "$pruned" ] && log "Pruned $pruned task(s) for issue $issue from the shared ledger."
+  return 0
 }
 
 # Removes every ledger entry for one issue from the shared tasks.json - the
@@ -992,6 +993,9 @@ cmd_feature() {
     log "Existing plan preserved. Use: ogre status $issue"
     exit 0
   fi
+  # Choice 4 (delete_issue_data) removes logdir/tmp - recreate them since
+  # they're used unconditionally below regardless of which choice ran.
+  mkdir -p "$logdir" "$RUNTIME/tmp/issue-$issue"
 
   if [ -n "$statement" ]; then
     mkdir -p "$(dirname "$issue_path")"

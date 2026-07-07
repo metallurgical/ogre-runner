@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Mock `curl` CLI for fetch_generic_url_text (only -fsSL --max-time N <url> matters).
+# MOCK_CURL_EXIT (default 0) controls success/failure for fallback-path tests.
+set -euo pipefail
+if [ "${MOCK_CURL_EXIT:-0}" != "0" ]; then
+  exit "${MOCK_CURL_EXIT}"
+fi
+url="${*: -1}"
+cat <<HTML
+<html><body><script>ignored()</script><h1>Mock Page</h1><p>Mock content for ${url}</p></body></html>
+HTML

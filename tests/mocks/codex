@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Mock `codex` CLI for `codex exec --skip-git-repo-check [-m MODEL] - < runner`.
+# MOCK_CODEX_EXIT (default 0) controls the process exit code.
+set -euo pipefail
+cat >/dev/null # drain stdin (the runner file)
+echo "session id: mock-codex-session-1234"
+echo "Mock codex exec output"
+exit "${MOCK_CODEX_EXIT:-0}"

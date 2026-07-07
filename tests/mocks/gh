@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Mock `gh` CLI: only understands `gh issue view <input> [--comments]`.
+# MOCK_GH_EXIT (default 0) controls success/failure for fallback-path tests.
+set -euo pipefail
+if [ "${1:-}" = "issue" ] && [ "${2:-}" = "view" ]; then
+  if [ "${MOCK_GH_EXIT:-0}" != "0" ]; then
+    exit "${MOCK_GH_EXIT}"
+  fi
+  echo "# Mock GitHub Issue"
+  echo
+  echo "Body for input: ${3:-}"
+  exit 0
+fi
+exit 1

@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Mock `claude` CLI for `claude -p [--model MODEL] --session-id ID < runner`.
+# MOCK_CLAUDE_EXIT (default 0) controls the process exit code.
+set -euo pipefail
+cat >/dev/null # drain stdin (the runner file)
+echo "Mock claude -p output"
+exit "${MOCK_CLAUDE_EXIT:-0}"

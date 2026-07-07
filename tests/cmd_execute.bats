@@ -1,0 +1,185 @@
+load test_helper
+
+@test "execute with no target and no --job errors" {
+  run "${OGRE_BIN}" execute
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"Missing issue, plan path, or --job"* ]]
+}
+
+@test "execute rejects unknown option" {
+  run "${OGRE_BIN}" execute 42 --bogus
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"Unknown option: --bogus"* ]]
+}
+
+@test "execute errors when the plan does not exist" {
+  run "${OGRE_BIN}" execute 42
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"Plan not found:"* ]]
+}
+
+@test "execute --job with unknown job id errors" {
+  run "${OGRE_BIN}" execute --job job-does-not-exist
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"No issue found with job id job-does-not-exist"* ]]
+}
+
+@test "execute rejects an unsupported executor" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step"
+  run "${OGRE_BIN}" execute 42 --executor bogus
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"Unsupported executor: bogus"* ]]
+}
+
+@test "execute errors when the codex CLI is missing" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step"
+  # Real PATH minus the mocks dir - codex/claude mocks are the only ones on PATH we control.
+  run env PATH="/usr/bin:/bin" "${OGRE_BIN}" execute 42
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"codex CLI not found"* ]]
+}
+
+@test "execute --main prints instructions and does not spawn a subprocess" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step"
+  run "${OGRE_BIN}" execute 42 --main
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Mode: --main."* ]]
+  [[ "${output}" == *"recorded as pending"* ]]
+  local tid
+  tid="$(python3 -c "import json; print(json.load(open('.ai/.ogre/state/tasks.json'))[0]['id'])")"
+  [ "$(task_json_field "${tid}" status)" = "pending" ]
+}
+
+@test "execute foreground default (codex) runs the lowest pending step and marks it passed" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step" "Second step"
+  run "${OGRE_BIN}" execute 42
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Executor: codex"* ]]
+  [[ "${output}" == *"Task"*"finished: passed"* ]]
+  local tid
+  tid="$(python3 -c "
+import json
+tasks = json.load(open('.ai/.ogre/state/tasks.json'))
+t = next(t for t in tasks if t.get('step_index') == 1)
+print(t['id'])
+")"
+  [ "$(task_json_field "${tid}" status)" = "passed" ]
+  [ "$(task_json_field "${tid}" session_id)" = "mock-codex-session-1234" ]
+  [ "$(state_field 42 status)" = "executing" ]
+}
+
+@test "execute foreground with a failing codex run marks the task failed and exits non-zero" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step"
+  export MOCK_CODEX_EXIT=7
+  run "${OGRE_BIN}" execute 42
+  # `set -e` aborts cmd_execute the instant run_link_foreground returns
+  # non-zero, so the script's own exit code is the mock's raw exit code
+  # (not massaged to 1), and the "Task ... finished: ..." summary line
+  # further down is never reached - only the ledger write happens.
+  [ "${status}" -eq 7 ]
+  local tid
+  tid="$(python3 -c "import json; print(json.load(open('.ai/.ogre/state/tasks.json'))[0]['id'])")"
+  [ "$(task_json_field "${tid}" status)" = "failed" ]
+  [ "$(task_json_field "${tid}" exit_code)" = "7" ]
+}
+
+@test "execute --executor claude assigns a session id up front" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step"
+  run "${OGRE_BIN}" execute 42 --executor claude
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Executor: claude"* ]]
+  [[ "${output}" == *"Session id:"* ]]
+}
+
+@test "execute --task targets a specific step out of order" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step" "Second step"
+  "${OGRE_BIN}" task-list "$(state_field 42 job_id)" >/dev/null
+  local tid2
+  tid2="$(python3 -c "
+import json
+tasks = json.load(open('.ai/.ogre/state/tasks.json'))
+t = next(t for t in tasks if t.get('step_index') == 2)
+print(t['id'])
+")"
+  run "${OGRE_BIN}" execute 42 --task "${tid2}" --yes
+  [ "${status}" -eq 0 ]
+  [ "$(task_json_field "${tid2}" status)" = "passed" ]
+}
+
+@test "execute --step targets a specific step number" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step" "Second step"
+  run "${OGRE_BIN}" execute 42 --step 2 --yes
+  [ "${status}" -eq 0 ]
+  local tid2
+  tid2="$(python3 -c "
+import json
+tasks = json.load(open('.ai/.ogre/state/tasks.json'))
+t = next(t for t in tasks if t.get('step_index') == 2)
+print(t['id'])
+")"
+  [ "$(task_json_field "${tid2}" status)" = "passed" ]
+}
+
+@test "execute --task/--step out of order without --yes refuses non-interactively" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step" "Second step"
+  run bash -c "'${OGRE_BIN}' execute 42 --step 2 </dev/null"
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"Refusing to proceed non-interactively without confirmation"* ]]
+}
+
+@test "execute with no matching --task/--step errors" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step"
+  run "${OGRE_BIN}" execute 42 --task task-does-not-exist
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"No matching pending task for that --task/--step under issue 42"* ]]
+}
+
+@test "execute reports no pending steps left once everything has passed" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "Only step"
+  "${OGRE_BIN}" execute 42
+  run "${OGRE_BIN}" execute 42
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"No pending steps left for issue 42. Nothing to execute."* ]]
+}
+
+@test "execute --background runs detached and the task eventually passes" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step"
+  run "${OGRE_BIN}" execute 42 --background
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"started in background"* ]]
+  local tid
+  tid="$(python3 -c "import json; print(json.load(open('.ai/.ogre/state/tasks.json'))[0]['id'])")"
+  wait_for_task_status "${tid}" passed 30
+  [ "$(task_json_field "${tid}" status)" = "passed" ]
+}
+
+@test "execute on a previously-stopped task warns and requires confirmation" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step"
+  "${OGRE_BIN}" task-list "$(state_field 42 job_id)" >/dev/null
+  local tid
+  tid="$(python3 -c "import json; print(json.load(open('.ai/.ogre/state/tasks.json'))[0]['id'])")"
+  "${OGRE_BIN}" stop --task "${tid}" >/dev/null
+
+  run bash -c "'${OGRE_BIN}' execute 42 </dev/null"
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"previously stopped"* ]]
+  [[ "${output}" == *"Refusing to proceed non-interactively without confirmation"* ]]
+
+  run "${OGRE_BIN}" execute 42 --yes
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Proceeding (--yes passed)."* ]]
+  [ "$(task_json_field "${tid}" status)" = "passed" ]
+}

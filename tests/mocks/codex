@@ -1,8 +1,21 @@
 #!/usr/bin/env bash
 # Mock `codex` CLI for `codex exec --skip-git-repo-check [-m MODEL] - < runner`.
-# MOCK_CODEX_EXIT (default 0) controls the process exit code.
+# Mirrors a well-behaved real executor: reads the "Task id: `<tid>`" line the
+# runner always contains, then calls `ogre task-complete` itself, same as
+# the real handoff instructions require.
+#   MOCK_CODEX_EXIT (default 0)       - the process's own exit code. Nonzero
+#                                        simulates a crash *before* it could
+#                                        call task-complete, so that call is
+#                                        skipped (matching a real crashed CLI).
+#   MOCK_CODEX_STATUS (default passed) - status passed to `ogre task-complete`
+#   MOCK_CODEX_SKIP_COMPLETE=1        - simulate a subprocess that exits 0 but
+#                                        forgot to call task-complete anyway
 set -euo pipefail
-cat >/dev/null # drain stdin (the runner file)
+runner="$(cat)" # capture stdin (the runner file) instead of draining it
+tid="$(printf '%s\n' "$runner" | sed -n 's/.*Task id: `\(task-[^`]*\)`.*/\1/p' | head -n1)"
 echo "session id: mock-codex-session-1234"
 echo "Mock codex exec output"
+if [ "${MOCK_CODEX_EXIT:-0}" = "0" ] && [ -z "${MOCK_CODEX_SKIP_COMPLETE:-}" ] && [ -n "${tid}" ]; then
+  "${OGRE_BIN}" task-complete "${tid}" --status "${MOCK_CODEX_STATUS:-passed}"
+fi
 exit "${MOCK_CODEX_EXIT:-0}"

@@ -198,6 +198,9 @@ PY
 
 # reap_task <id> - if a background task's sentinel exit file has appeared,
 # resolve it from "running" to "passed"/"failed" and record the exit code.
+# Reaching this still-"running" means the subprocess's own task-complete
+# call never landed, so (like finalize_link_status) fail closed on exit
+# code alone rather than guessing "passed" from a bare rc==0.
 reap_task() {
   local tid="$1" issue exitfile
   issue="$(task_field "$tid" issue)"
@@ -207,11 +210,7 @@ reap_task() {
   if [ -f "$exitfile" ]; then
     local code
     code="$(cat "$exitfile")"
-    if [ "$code" = "0" ]; then
-      task_update "$tid" "status=passed" "exit_code=$code"
-    else
-      task_update "$tid" "status=failed" "exit_code=$code"
-    fi
+    task_update "$tid" "status=failed" "exit_code=$code"
     if [ "$(task_field "$tid" executor)" = "codex" ] && [ -z "$(task_field "$tid" session_id)" ]; then
       local codex_logpath codex_sid
       codex_logpath="$(task_field "$tid" log_path)"
@@ -547,8 +546,28 @@ text = open(plan_path).read()
 m = re.search(r"##\s*6\.\s*Execution Order(.*?)(\n##\s|\Z)", text, re.S)
 section = m.group(1) if m else text
 items = re.findall(r"^\s*[-*]\s*\[( |x|X)\]\s*(.+)$", section, re.M)
-completed = [t.strip() for c, t in items if c.lower() == "x"]
-pending = [t.strip() for c, t in items if c.lower() != "x"]
+
+try:
+    tasks = json.load(open(tasks_path))
+except Exception:
+    tasks = []
+issue_tasks = [t for t in tasks if t.get("issue") == issue]
+by_text = {t.get("step"): t for t in issue_tasks if t.get("step")}
+
+# A step counts as done if its checkbox is ticked OR its matched ledger task
+# already recorded "passed" - the executor sometimes finishes the real work
+# and calls task-complete but forgets to tick the box (or vice versa), and
+# either signal alone is authoritative. This is only safe because a ledger
+# "passed" can no longer come from an optimistic exit-code guess (see
+# finalize_link_status/reap_task) - it always reflects an explicit call.
+def is_done(marker, raw_text):
+    if marker.lower() == "x":
+        return True
+    t = by_text.get(raw_text.strip())
+    return bool(t and t.get("status") == "passed")
+
+completed = [raw_text.strip() for marker, raw_text in items if is_done(marker, raw_text)]
+pending = [raw_text.strip() for marker, raw_text in items if not is_done(marker, raw_text)]
 d = json.load(open(spath))
 d["completed_steps"] = completed
 d["pending_steps"] = pending
@@ -561,21 +580,15 @@ json.dump(d, open(spath, "w"), indent=2)
 
 # Seed one ledger task per checklist step (so `task-list`/`status` show every
 # step from planning onward, not just steps someone has already run
-# `ogre execute` against) and reconcile status against the plan's own
-# checkboxes - the plan file is the source of truth for "done".
+# `ogre execute` against) and reconcile status against the plan/ledger done
+# signal computed above.
 if items:
-    try:
-        tasks = json.load(open(tasks_path))
-    except Exception:
-        tasks = []
     now = datetime.datetime.now().astimezone().isoformat()
-    issue_tasks = [t for t in tasks if t.get("issue") == issue]
-    by_text = {t.get("step"): t for t in issue_tasks if t.get("step")}
     unlinked_passed = [t for t in issue_tasks if t.get("step") is None and t.get("status") == "passed"]
     changed = False
     for idx, (marker, raw_text) in enumerate(items, start=1):
         step_text = raw_text.strip()
-        done = marker.lower() == "x"
+        done = is_done(marker, raw_text)
         t = by_text.get(step_text)
         if t is None and done and unlinked_passed:
             # Best-effort migration: adopt one pre-existing (legacy) passed
@@ -1589,17 +1602,19 @@ PY
   # handoff instructions - that ledger write is the real domain signal
   # (validation passed/failed), independent of the CLI process's own exit
   # code (which is usually 0 even on a validation failure, since the LLM
-  # just reported it rather than crashing). Only fall back to the rc-based
-  # guess if the subprocess never touched the ledger at all (crashed, or
-  # forgot the step) - otherwise respect what it already recorded.
+  # just reported it rather than crashing). If the subprocess never touched
+  # the ledger at all (crashed, forgot the step, or its task-complete call
+  # silently failed), fail closed: mark it failed rather than guessing
+  # passed from a bare rc==0. rc==0 only proves the CLI exited cleanly, not
+  # that the domain task passed - trusting it as "passed" lets a broken
+  # step masquerade as done and corrupts progress tracking undetected. A
+  # false "failed" here just costs a manual rerun/task-complete.
   finalize_link_status() {
     local link_tid="$1" rc="$2"
     local current_status
     current_status="$(task_field "$link_tid" status)"
     if [ "$current_status" = "passed" ] || [ "$current_status" = "failed" ]; then
       task_update "$link_tid" "exit_code=$rc"
-    elif [ "$rc" -eq 0 ]; then
-      task_update "$link_tid" "status=passed" "exit_code=$rc"
     else
       task_update "$link_tid" "status=failed" "exit_code=$rc"
     fi

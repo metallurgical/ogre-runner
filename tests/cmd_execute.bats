@@ -72,6 +72,36 @@ print(t['id'])
   [ "$(state_field 42 status)" = "executing" ]
 }
 
+@test "execute foreground fails closed when codex exits 0 but never calls task-complete" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step"
+  export MOCK_CODEX_SKIP_COMPLETE=1
+  run "${OGRE_BIN}" execute 42
+  # rc==0 alone never proves the domain task passed - if the subprocess
+  # never wrote its own status, finalize_link_status must fail closed
+  # instead of guessing "passed" from the bare exit code.
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"Task"*"finished: failed"* ]]
+  local tid
+  tid="$(python3 -c "import json; print(json.load(open('.ai/.ogre/state/tasks.json'))[0]['id'])")"
+  [ "$(task_json_field "${tid}" status)" = "failed" ]
+  [ "$(task_json_field "${tid}" exit_code)" = "0" ]
+}
+
+@test "execute leaves a ledger-passed step out of pending_steps even if its plan checkbox was never ticked" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step" "Second step"
+  run "${OGRE_BIN}" execute 42
+  [ "${status}" -eq 0 ]
+  # The mock codex marks the task passed via `ogre task-complete` but never
+  # edits the plan file, so "First step"'s checkbox is still unticked. The
+  # ledger-passed signal alone must still be enough to advance past it.
+  [ "$(state_field 42 current_step)" = "Second step" ]
+  local pending
+  pending="$(python3 -c "import json; print(json.load(open('.ai/.ogre/state/issue-42.json'))['pending_steps'])")"
+  [[ "${pending}" != *"First step"* ]]
+}
+
 @test "execute foreground with a failing codex run marks the task failed and exits non-zero" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42
   write_plan_with_steps 42 "First step"

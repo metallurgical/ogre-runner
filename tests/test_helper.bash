@@ -1,13 +1,15 @@
 OGRE_REPO_ROOT="$(cd "${BATS_TEST_DIRNAME}/.." && pwd)"
 OGRE_BIN="${OGRE_REPO_ROOT}/scripts/ogre"
 MOCK_BIN="${BATS_TEST_DIRNAME}/mocks"
+export OGRE_BIN # mocks/codex and mocks/claude call back into it for task-complete
 
 setup() {
   TEST_TMP="$(mktemp -d)"
   cd "${TEST_TMP}"
   export PATH="${MOCK_BIN}:${PATH}"
   # Reset per-test mock behavior overrides.
-  unset MOCK_GH_EXIT MOCK_CURL_EXIT MOCK_CODEX_EXIT MOCK_CLAUDE_EXIT || true
+  unset MOCK_GH_EXIT MOCK_CURL_EXIT MOCK_CODEX_EXIT MOCK_CLAUDE_EXIT \
+    MOCK_CODEX_STATUS MOCK_CLAUDE_STATUS MOCK_CODEX_SKIP_COMPLETE MOCK_CLAUDE_SKIP_COMPLETE || true
 }
 
 teardown() {

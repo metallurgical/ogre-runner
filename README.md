@@ -82,10 +82,15 @@ Starts a new issue workflow: fetch (or write) the issue, generate the planning r
 
 Attaches a new blocker to an issue already tracked by Ogre, and forces the plan to be revised. Refuses once execution has started (use `--force` to override — manual-risk, already-completed steps aren't retroactively revised).
 
+Accepts the same input types as `ogre feature` for the blocker itself:
+
 | Option | Example | Description |
 | :--- | :--- | :--- |
 | `<issue>` (positional, required) | `ogre add-blocker 107 ...` | The already-tracked issue to attach the blocker to |
-| `<blocker>` (positional) | `ogre add-blocker 107 108` | Blocker as issue number, URL, or local file path |
+| `<blocker>` (positional) | `ogre add-blocker 107 108` | GitHub issue number (GitHub-only — resolved via `gh` + this project's git remote) |
+| `<blocker>` (positional) | `ogre add-blocker 107 https://github.com/acme/app/issues/108` | Full GitHub issue URL |
+| `<blocker>` (positional) | `ogre add-blocker 107 https://gitlab.com/acme/app/-/issues/9` | Any non-GitHub issue/page URL (GitLab, self-hosted GitLab, Bitbucket, Jira, etc.) — fetched generically as page text |
+| `<blocker>` (positional) | `ogre add-blocker 107 ./notes/blocker.docx` | Local file path (`.md`, `.txt` copied verbatim; `.docx` text-extracted) |
 | `--statement "..."` | `ogre add-blocker 107 --statement "must invalidate old tokens"` | Freeform blocker text instead of an issue/URL/path |
 | `--name SLUG` | `ogre add-blocker 107 --statement "..." --name invalidate-tokens` | Slug for the blocker's file, only used with `--statement` |
 | `--force` | `ogre add-blocker 107 108 --force` | Override the "execution already started" refusal (skips retroactive revision of completed steps — surface this warning to the user, never pass silently) |

@@ -328,8 +328,7 @@ slug_from_issue() {
   local base
   base="$(basename "$input")"
   base="${base#issue-}"
-  base="${base%.md}"
-  base="${base%.json}"
+  base="${base%.*}"
   if [[ "$base" =~ ^[0-9]+$ ]]; then
     echo "$base"
     return

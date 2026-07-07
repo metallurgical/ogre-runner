@@ -10,9 +10,11 @@ Use this skill when the user wants to add a blocker to an issue Ogre is already 
 ## Inputs
 
 - The target issue number (required, must already have Ogre state).
-- The blocker itself, one of:
-  - Issue number, GitHub issue URL, or local file path
-  - Freeform statement via `--statement "..."`
+- The blocker itself, same input types as `/ogre:feature` — one of:
+  - GitHub issue number (GitHub-only, resolved via `gh` + the project's git remote)
+  - Full issue/page URL — GitHub, GitLab, self-hosted GitLab, Bitbucket, Jira, or any other tracker. Non-GitHub links are fetched generically as page text (no API client), not via `gh`.
+  - Local file path — `.md`/`.txt` copied verbatim, `.docx` text-extracted
+  - Freeform statement via `--statement "..."` (no issue/URL/file needed)
 - Optional `--name blocker-slug` (only used with `--statement`).
 
 ## Behavior

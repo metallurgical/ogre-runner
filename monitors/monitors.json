@@ -1,7 +1,7 @@
 [
   {
     "name": "ogre-execute-log",
-    "command": "bash -c 'touched=(); while true; do for f in \"${CLAUDE_PROJECT_DIR}\"/.ai/.ogre/logs/issue-*/execute-*.log; do [ -f \"$f\" ] || continue; if [[ ! \" ${touched[*]} \" =~ \" $f \" ]]; then touched+=(\"$f\"); tail -F -n0 \"$f\" & fi; done; sleep 2; done'",
+    "command": "bash -c 'touched=(); for f in \"${CLAUDE_PROJECT_DIR}\"/.ai/.ogre/logs/issue-*/execute-*.log; do [ -f \"$f\" ] && touched+=(\"$f\"); done; while true; do for f in \"${CLAUDE_PROJECT_DIR}\"/.ai/.ogre/logs/issue-*/execute-*.log; do [ -f \"$f\" ] || continue; if [[ ! \" ${touched[*]} \" =~ \" $f \" ]]; then touched+=(\"$f\"); tail -F -n +1 \"$f\" & fi; done; sleep 2; done'",
     "description": "Ogre execute runner output (background executor progress/errors)",
     "when": "on-skill-invoke:execute"
   }

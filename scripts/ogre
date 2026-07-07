@@ -1454,6 +1454,18 @@ PY
     local step_text step_index
     step_text="$(task_field "$tid" step)"
     step_index="$(task_field "$tid" step_index)"
+
+    # A step tagged [BROWSER-CHECK] needs a real rendered browser to verify
+    # (see templates/execution-blueprint-prompt.md) - a spawned codex/claude
+    # CLI subprocess has no GUI/browser access and will burn a full run just
+    # to discover that and fail. Refuse up front and point at --main, which
+    # runs inline in this live session where real browser/MCP tools exist.
+    if [ "$iso" != "main" ] && printf '%s' "$step_text" | grep -qi '\[browser-check\]'; then
+      err "Step $step_index is tagged [BROWSER-CHECK] - it needs a real browser to verify, which a spawned codex/claude CLI subprocess doesn't have."
+      err "Re-run with --main so it runs in this live session instead: $SCRIPT_DIR/ogre execute $issue --step $step_index --main"
+      exit 1
+    fi
+
     logpath="$logdir/execute-$(date '+%Y%m%d-%H%M%S')-${tid:5:8}.log"
 
     cat > "$runner" <<EOF2

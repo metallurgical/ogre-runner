@@ -94,6 +94,7 @@ You must:
 * [ ] Step one.
 * [ ] Step two.
 * [ ] Step three.
+* [ ] `[BROWSER-CHECK]` Any step whose validation requires actually rendering the page/app in a real browser (visual layout, interactive behavior) - not just reading the markup/CSS/JS. Tag it with this exact literal prefix. `ogre execute` refuses to run a `[BROWSER-CHECK]` step through a spawned codex/claude CLI subprocess (no GUI/browser there) and tells the user to rerun with `--main` instead, where real browser/MCP tooling exists. Steps that only need static inspection (grep the file, read the diff) are not `[BROWSER-CHECK]` - don't over-tag.
 
 ## 7. Acceptance Criteria
 

@@ -1292,6 +1292,16 @@ cmd_execute() {
   mkdir -p "$logdir" "$RUNTIME/tmp/issue-$issue"
   runner="$RUNTIME/tmp/issue-$issue/run-next.md"
 
+  # True if the plan's current (next-to-run) step is tagged [BROWSER-CHECK] -
+  # see templates/execution-blueprint-prompt.md. Used to keep both the
+  # single-step path and the --all chain from handing such a step to a
+  # spawned codex/claude CLI subprocess, which has no browser access.
+  next_step_is_browser_check() {
+    local next_step
+    next_step="$(python3 -c "import json; print(json.load(open('$spath')).get('current_step') or '')" 2>/dev/null)"
+    printf '%s' "$next_step" | grep -qi '\[browser-check\]'
+  }
+
   # Writes the --all runner file for one chain link (tid/logpath vary per
   # link; plan/issue/executor/model/freshness come from the enclosing
   # cmd_execute call). Each link is told to self-assess its own context
@@ -1323,6 +1333,7 @@ Task:
 
 * Execute remaining incomplete checklist items in order, one at a time.
 * Follow the handoff rules exactly for each item.
+* If the next item is tagged \`[BROWSER-CHECK]\`, stop before attempting it - you (a spawned CLI subprocess) have no real browser access. Do not mark it passed or failed; leave it pending and report that it needs \`--main\`.
 * Update each checklist item's status in the source plan only after its own work and validation are complete.
 * Write a concise execution log to \`$link_logpath\`.
 * After finishing each item, self-assess how much of your own context window you have used so far. If you estimate more than roughly half is used, STOP right there - do not start another item, even if items remain.
@@ -1337,6 +1348,13 @@ Safety:
 * Stop if blocker dependency is missing or incompatible.
 EOF2
   }
+
+  if [ "$mode" = "all" ] && [ "$iso" != "main" ] && next_step_is_browser_check; then
+    err "Next step is tagged [BROWSER-CHECK] - it needs a real browser to verify, which a spawned codex/claude CLI subprocess doesn't have."
+    err "Finish that one step with --main first: $SCRIPT_DIR/ogre execute $issue --main"
+    err "Then resume the chain: $SCRIPT_DIR/ogre execute $issue --all"
+    exit 1
+  fi
 
   if [ "$mode" = "all" ]; then
     # Chained bulk path: a sequence of ad-hoc tasks, each covering as many
@@ -1650,7 +1668,14 @@ try:
 except Exception:
     print(0)
 " 2>/dev/null || echo 0)"
-    [ "${pending_left:-0}" -gt 0 ] 2>/dev/null
+    [ "${pending_left:-0}" -gt 0 ] 2>/dev/null || return 1
+    if [ "$iso" != "main" ] && next_step_is_browser_check; then
+      err "Next step is tagged [BROWSER-CHECK] - stopping the --all chain here (a spawned codex/claude CLI subprocess can't verify it)."
+      err "Finish that one step with --main: $SCRIPT_DIR/ogre execute $issue --main"
+      err "Then resume the chain: $SCRIPT_DIR/ogre execute $issue --all"
+      return 1
+    fi
+    return 0
   }
 
   finalize_issue_state() {

@@ -144,6 +144,28 @@ print(t['id'])
   [[ "${output}" == *"Mode: --main."* ]]
 }
 
+@test "execute --all refuses up front when the next pending step is [BROWSER-CHECK]" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "[BROWSER-CHECK] Verify the page renders correctly" "Second step"
+  run "${OGRE_BIN}" execute 42 --all --yes
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"[BROWSER-CHECK]"* ]]
+  [[ "${output}" == *"--main"* ]]
+  # Refused before spawning anything - the seeded per-step tasks (from
+  # sync_state_from_plan) exist but none was ever set running/passed/failed.
+  local statuses
+  statuses="$(python3 -c "import json; print([t.get('status') for t in json.load(open('.ai/.ogre/state/tasks.json'))])")"
+  [[ "${statuses}" != *"running"* ]]
+}
+
+@test "execute --all --main is unaffected by [BROWSER-CHECK] (real browser tools available inline)" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "[BROWSER-CHECK] Verify the page renders correctly"
+  run "${OGRE_BIN}" execute 42 --all --main
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Mode: --main."* ]]
+}
+
 @test "execute --executor claude assigns a session id up front" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42
   write_plan_with_steps 42 "First step"

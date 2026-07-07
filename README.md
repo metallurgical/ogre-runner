@@ -6,11 +6,11 @@
 
 Ask Claude Code to implement a non-trivial feature directly in one long chat session, and a few things tend to go wrong:
 
-- **Context rot.** A multi-file feature fills the session with diffs, tool output, and back-and-forth. By step 6, earlier decisions get lost and quality degrades as the context window fills up.
-- **No review gate.** Claude jumps straight from "I understand the issue" to editing files. Hallucinated methods, invented config keys, and over-scoped changes only surface after the fact.
-- **No persistent state.** If the session crashes, gets compacted, or you close the laptop mid-feature, you're reconstructing "what did we actually finish?" from `git diff` and memory.
-- **Execution and orchestration share one context.** Every file read, every failed attempt, every clarifying question from *implementing* a step pollutes the same context you need for *deciding what to do next*.
-- **Mid-flight blockers break the flow.** Three steps into a plan you realize you forgot a requirement. That usually means re-explaining everything and hoping Claude doesn't restart from scratch.
+- **Context rot.** Big features fill the chat with diffs, tool output, and back-and-forth. A few steps in, Claude starts losing track of earlier decisions and the answers get worse.
+- **No review gate.** Claude tends to start editing before it's really checked the plan. You only find the made-up method name or the missing file after it's already in the code.
+- **No persistent state.** Crash the session, get compacted, or close the laptop mid-feature, and you're stuck piecing together what actually got done from `git diff` and memory.
+- **One context doing two jobs.** The same conversation that should be deciding what's next also has to sit through every file read and failed attempt from actually doing the work. That's a lot of noise crammed into one thread.
+- **Blockers break the flow.** Realize you forgot a requirement three steps into a plan, and normally that means re-explaining the whole thing and hoping Claude doesn't just start over.
 
 ## What Ogre does about it
 

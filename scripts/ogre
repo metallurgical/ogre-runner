@@ -1,0 +1,1951 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+OGRE_VERSION="0.1.0"
+ROOT="$(pwd)"
+RUNTIME=".ai/.ogre"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+TEMPLATE_DIR="$PLUGIN_DIR/templates"
+
+usage() {
+  cat <<USAGE
+Ogre $OGRE_VERSION
+
+Usage:
+  ogre init
+  ogre feature <issue-number|issue-url|issue-file> [--blocks 1,2,url,path] [--plan issue-107.md] [--planner claude|codex] [--model MODEL]
+  ogre feature --statement "free text description" [--name my-feature] [--blocks 1,2,url,path] [--plan NAME.md] [--planner claude|codex] [--model MODEL]
+  ogre add-blocker <issue> <blocker-number|url|path> [--force]
+  ogre add-blocker <issue> --statement "free text blocker" [--name blocker-slug] [--force]
+  ogre review-plan <issue-or-plan> [--reviewer claude|codex] [--model MODEL]
+  ogre execute <issue-or-plan> [--executor codex|claude] [--model MODEL] [--all] [--fresh|--resume] [--main|--background] [--yes]
+  ogre execute --job <job-id> [same flags as above]              (same, addressed by job id)
+  ogre execute <issue-or-plan> --task <task-id>                  (target one specific seeded step out of order)
+  ogre execute <issue-or-plan> --step <n>                        (target step N, 1-based, out of order)
+  (default with no --task/--step: run the lowest-numbered pending step)
+  Isolation mode (default: foreground, brand-new codex/claude session):
+    (no flag)     foreground, new isolated session - main context untouched
+    --main        run inline in the current Claude Code session, no subprocess spawned
+    --background  same isolation as default, detached/non-blocking
+  Granularity: default targets one step; --all chains through every remaining step, each session/subprocess
+    self-assessing its own context budget and handing off to a fresh one when it estimates ~50%+ used
+    (so no single session grows unbounded - simple steps may share a session, complex ones split off).
+  ogre stop [issue] [--all] [--archive] [--delete] [--list]     (stop the job: cascades to all its tasks)
+  ogre stop --job <job-id> [--archive] [--delete] [--list]      (same, addressed by job id)
+  ogre stop --task <task-id>                                    (stop ONE task only, job/siblings untouched)
+  ogre status [issue]
+  ogre status --job <job-id>       (same as: ogre status <issue>, addressed by job id)
+  ogre status --tasks [issue]
+  ogre status --task <task-id>
+  ogre task-list <job-id>          (every task under one job, one row each)
+  ogre task-complete <task-id> [--status passed|failed] [--exit-code N]
+                                   (mark a task done when it wasn't run via --run/--background)
+
+Concepts:
+  job  = one feature/issue workflow (1:1 with an issue), id: job-<uuid>, lives in state/issue-<issue>.json
+  task = one execute attempt under a job, id: task-<uuid>, ledger: state/tasks.json (shared across all jobs)
+
+Each --run/--background task also records the native LLM CLI session id (session_id
+field, "ogre status --task <id>"), so it can be resumed directly in its own TUI:
+  claude --resume <session_id>
+  codex resume <session_id>
+
+Runtime:
+  .ai/.ogre/
+USAGE
+}
+
+log() { printf '%s\n' "$*"; }
+err() { printf 'ERROR: %s\n' "$*" >&2; }
+
+ensure_runtime() {
+  mkdir -p "$RUNTIME"/{issues,plans,reviews,logs,state,tmp,archive,prompts}
+  if [ -d "$TEMPLATE_DIR" ]; then
+    cp -f "$TEMPLATE_DIR"/*.md "$RUNTIME/prompts/" 2>/dev/null || true
+  fi
+  [ -f "$RUNTIME/state/tasks.json" ] || printf '[]' > "$RUNTIME/state/tasks.json"
+  if [ ! -f "$RUNTIME/config.json" ]; then
+    cat > "$RUNTIME/config.json" <<'JSON'
+{
+  "defaults": {
+    "planner": { "provider": "claude", "model": "sonnet-5" },
+    "plan_reviewer": { "provider": "claude", "model": "sonnet-5" },
+    "executor": { "provider": "codex", "model": "gpt-5.5" },
+    "diff_reviewer": { "provider": "codex", "model": "gpt-5.5" }
+  }
+}
+JSON
+  fi
+}
+
+now_iso() { date '+%Y-%m-%dT%H:%M:%S%z'; }
+
+json_array() { python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$@"; }
+
+gen_uuid() {
+  if command -v uuidgen >/dev/null 2>&1; then
+    uuidgen | tr '[:upper:]' '[:lower:]'
+  else
+    python3 -c 'import uuid; print(uuid.uuid4())'
+  fi
+}
+
+# One job per feature/issue (1:1, id lives in state/issue-<issue>.json).
+new_job_id() { echo "job-$(gen_uuid)"; }
+
+# One task per execute attempt, many tasks per job. Shared ledger across all issues.
+new_task_id() { echo "task-$(gen_uuid)"; }
+
+tasks_path() { echo "$RUNTIME/state/tasks.json"; }
+
+resolve_issue_by_job_id() {
+  local job_id="$1"
+  python3 -c '
+import json, sys, glob
+job_id = sys.argv[1]
+for p in glob.glob(sys.argv[2]):
+    try:
+        d = json.load(open(p))
+    except Exception:
+        continue
+    if d.get("job_id") == job_id:
+        print(d.get("issue", ""))
+        sys.exit(0)
+' "$job_id" "$RUNTIME/state/issue-*.json"
+}
+
+# task_create <id> <issue> <type> <executor> <model> <mode> <freshness> <runner> <logpath> <status>
+task_create() {
+  python3 - "$(tasks_path)" "$@" <<'PY'
+import json, sys, datetime
+path, tid, issue, ttype, executor, model, mode, freshness, runner, logpath, status = sys.argv[1:12]
+try:
+    tasks = json.load(open(path))
+except Exception:
+    tasks = []
+now = datetime.datetime.now().astimezone().isoformat()
+tasks.append({
+    "id": tid, "issue": issue, "type": ttype, "executor": executor, "model": model or None,
+    "mode": mode, "freshness": freshness, "runner": runner, "log_path": logpath,
+    "status": status, "pid": None, "exit_code": None, "session_id": None,
+    "created_at": now, "started_at": None, "ended_at": None, "updated_at": now,
+})
+json.dump(tasks, open(path, "w"), indent=2)
+PY
+}
+
+# task_update <id> <field=value> [field=value ...] - value "null" clears the field.
+task_update() {
+  local tid="$1"; shift
+  python3 - "$(tasks_path)" "$tid" "$@" <<'PY'
+import json, sys, datetime
+path, tid = sys.argv[1], sys.argv[2]
+updates = dict(kv.split("=", 1) for kv in sys.argv[3:])
+try:
+    tasks = json.load(open(path))
+except Exception:
+    tasks = []
+now = datetime.datetime.now().astimezone().isoformat()
+for t in tasks:
+    if t.get("id") == tid:
+        for k, v in updates.items():
+            if v == "null":
+                t[k] = None
+            elif k in ("exit_code", "pid") and v.lstrip("-").isdigit():
+                t[k] = int(v)
+            else:
+                t[k] = v
+        if updates.get("status") == "running" and not t.get("started_at"):
+            t["started_at"] = now
+        if updates.get("status") in ("passed", "failed", "stopped") and not t.get("ended_at"):
+            t["ended_at"] = now
+        t["updated_at"] = now
+json.dump(tasks, open(path, "w"), indent=2)
+PY
+}
+
+task_get() {
+  python3 - "$(tasks_path)" "$1" <<'PY'
+import json, sys
+path, tid = sys.argv[1], sys.argv[2]
+try:
+    tasks = json.load(open(path))
+except Exception:
+    tasks = []
+for t in tasks:
+    if t.get("id") == tid:
+        print(json.dumps(t, indent=2))
+        sys.exit(0)
+print("null")
+PY
+}
+
+task_field() {
+  python3 - "$(tasks_path)" "$1" "$2" <<'PY'
+import json, sys
+path, tid, field = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    tasks = json.load(open(path))
+except Exception:
+    tasks = []
+for t in tasks:
+    if t.get("id") == tid:
+        print(t.get(field) if t.get(field) is not None else "")
+        sys.exit(0)
+PY
+}
+
+# reap_task <id> - if a background task's sentinel exit file has appeared,
+# resolve it from "running" to "passed"/"failed" and record the exit code.
+reap_task() {
+  local tid="$1" issue exitfile
+  issue="$(task_field "$tid" issue)"
+  [ -n "$issue" ] || return 0
+  [ "$(task_field "$tid" status)" = "running" ] || return 0
+  exitfile="$RUNTIME/tmp/issue-$issue/$tid.exit"
+  if [ -f "$exitfile" ]; then
+    local code
+    code="$(cat "$exitfile")"
+    if [ "$code" = "0" ]; then
+      task_update "$tid" "status=passed" "exit_code=$code"
+    else
+      task_update "$tid" "status=failed" "exit_code=$code"
+    fi
+    if [ "$(task_field "$tid" executor)" = "codex" ] && [ -z "$(task_field "$tid" session_id)" ]; then
+      local codex_logpath codex_sid
+      codex_logpath="$(task_field "$tid" log_path)"
+      codex_sid="$(grep -m1 '^session id: ' "$codex_logpath" 2>/dev/null | sed 's/^session id: //')"
+      [ -n "$codex_sid" ] && task_update "$tid" "session_id=$codex_sid"
+    fi
+    rm -f "$exitfile" "$RUNTIME/tmp/issue-$issue/$tid.pid"
+    sync_state_from_plan "$issue"
+  fi
+}
+
+reap_all_tasks() {
+  python3 -c '
+import json
+try:
+    tasks = json.load(open("'"$(tasks_path)"'"))
+except Exception:
+    tasks = []
+for t in tasks:
+    if t.get("status") == "running":
+        print(t["id"])
+' | while IFS= read -r tid; do
+    [ -n "$tid" ] && reap_task "$tid"
+  done
+}
+
+tasks_list() {
+  local issue_filter="${1:-}"
+  reap_all_tasks
+  python3 -c '
+import json, sys
+path, issue_filter = sys.argv[1], sys.argv[2]
+try:
+    tasks = json.load(open(path))
+except Exception:
+    tasks = []
+for t in tasks:
+    if issue_filter and str(t.get("issue")) != issue_filter:
+        continue
+    print("{}  issue={}  status={}  executor={}  started={}  ended={}  log={}".format(t.get("id"), t.get("issue"), t.get("status"), t.get("executor"), t.get("started_at"), t.get("ended_at"), t.get("log_path")))
+' "$(tasks_path)" "$issue_filter"
+}
+
+gh_view_issue() {
+  local input="$1" out="$2"
+  # `gh issue view --comments` returns empty stdout when the issue has zero
+  # comments (gh quirk) - fall back to plain view (full body, no comments) so
+  # we never silently write an empty issue file.
+  gh issue view "$input" --comments > "$out" 2>/dev/null || true
+  if [ ! -s "$out" ]; then
+    gh issue view "$input" > "$out"
+  fi
+}
+
+# Derive a short readable slug from freeform --statement text (first few
+# words, lowercased, non-alnum -> "-") so the issue's .md files are
+# recognizable at a glance instead of an opaque "adhoc-<timestamp>".
+slugify_statement() {
+  local text="$1"
+  local words suffix
+  words="$(echo "$text" \
+    | awk '{for (i=1; i<=4 && i<=NF; i++) printf "%s ", $i}' \
+    | tr '[:upper:]' '[:lower:]' \
+    | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' \
+    | cut -c1-24 \
+    | sed -E 's/-+$//')"
+  suffix="$(gen_uuid | tr -d '-' | cut -c1-8)"
+  if [ -n "$words" ]; then
+    echo "${words}-${suffix}"
+  else
+    echo "$suffix"
+  fi
+}
+
+slug_from_issue() {
+  local input="$1"
+  if [[ "$input" =~ ^[0-9]+$ ]]; then
+    echo "$input"
+    return
+  fi
+  if [[ "$input" =~ /issues/([0-9]+) ]]; then
+    echo "${BASH_REMATCH[1]}"
+    return
+  fi
+  local base
+  base="$(basename "$input")"
+  base="${base#issue-}"
+  base="${base%.md}"
+  base="${base%.json}"
+  if [[ "$base" =~ ^[0-9]+$ ]]; then
+    echo "$base"
+    return
+  fi
+  # Custom (non-numeric) slugs from `--name`, e.g. `demo` or `adhoc-<timestamp>`.
+  if [[ "$base" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]]; then
+    echo "$base"
+    return
+  fi
+  if [[ "$base" =~ ([0-9]+) ]]; then
+    echo "${BASH_REMATCH[1]}"
+    return
+  fi
+  echo "unknown"
+}
+
+issue_file_path() {
+  local input="$1"
+  local n
+  n="$(slug_from_issue "$input")"
+  echo "$RUNTIME/issues/issue-$n.md"
+}
+
+fetch_issue() {
+  local input="$1"
+  local out="$2"
+  mkdir -p "$(dirname "$out")"
+
+  if [ -f "$input" ]; then
+    cp "$input" "$out"
+    log "Copied issue file: $input -> $out"
+    return
+  fi
+
+  if [[ "$input" =~ ^https?:// ]]; then
+    if command -v gh >/dev/null 2>&1; then
+      log "Fetching GitHub issue URL: $input"
+      gh_view_issue "$input" "$out"
+    else
+      cat > "$out" <<EOF2
+# Issue Source
+
+Could not fetch automatically because GitHub CLI \`gh\` is not installed.
+
+Original input: $input
+
+Paste the issue content here before planning.
+EOF2
+      log "Created placeholder issue file: $out"
+    fi
+    return
+  fi
+
+  if [[ "$input" =~ ^[0-9]+$ ]]; then
+    if command -v gh >/dev/null 2>&1; then
+      log "Fetching GitHub issue #$input"
+      gh_view_issue "$input" "$out"
+    else
+      cat > "$out" <<EOF2
+# GitHub Issue #$input
+
+Could not fetch automatically because GitHub CLI \`gh\` is not installed.
+
+Paste the issue content here before planning.
+EOF2
+      log "Created placeholder issue file: $out"
+    fi
+    return
+  fi
+
+  cat > "$out" <<EOF2
+# Issue Input
+
+Original input: $input
+
+Ogre could not identify this as a file path, GitHub issue URL, or issue number.
+Paste the issue content here before planning.
+EOF2
+  log "Created placeholder issue file: $out"
+}
+
+state_path() {
+  local issue="$1"
+  echo "$RUNTIME/state/issue-$issue.json"
+}
+
+write_state() {
+  local issue="$1" status="$2" plan="$3" planner="$4" planner_model="$5" reviewer="$6" reviewer_model="$7" executor="$8" executor_model="$9"
+  local blocker_paths_json="${10:-[]}"
+  local path job_id
+  path="$(state_path "$issue")"
+  job_id="$(new_job_id)"
+  mkdir -p "$(dirname "$path")"
+  cat > "$path" <<JSON
+{
+  "issue": "$issue",
+  "job_id": "$job_id",
+  "status": "$status",
+  "plan_path": "$plan",
+  "planner": { "provider": "$planner", "model": "$planner_model" },
+  "reviewer": { "provider": "$reviewer", "model": "$reviewer_model" },
+  "executor": { "provider": "$executor", "model": "$executor_model" },
+  "blocker_paths": $blocker_paths_json,
+  "completed_steps": [],
+  "current_step": null,
+  "total_steps": null,
+  "active_task": null,
+  "last_log": null,
+  "last_validation": null,
+  "created_at": "$(now_iso)",
+  "updated_at": "$(now_iso)"
+}
+JSON
+  log "State written: $path (job_id: $job_id)"
+}
+
+# True (exit 0) if execution appears to have already started for this issue -
+# blockers must not be added after that point since the checklist/state is
+# already in motion against the old blocker list.
+execution_started() {
+  local issue="$1"
+  local logdir="$RUNTIME/logs/issue-$issue"
+  compgen -G "$logdir/execute-*.log" >/dev/null 2>&1 && return 0
+  local spath
+  spath="$(state_path "$issue")"
+  if [ -f "$spath" ]; then
+    python3 - "$spath" <<'PY' 2>/dev/null
+import json, sys
+d = json.load(open(sys.argv[1]))
+ok = d.get('status') == 'executing' or len(d.get('completed_steps') or []) > 0 or d.get('current_step') is not None
+sys.exit(0 if ok else 1)
+PY
+    return $?
+  fi
+  return 1
+}
+
+# Codex/Claude edit the plan's markdown checklist directly, they never touch
+# state.json. Re-derive completed_steps/current_step from the plan file's
+# "## 6. Execution Order" checklist so state.json doesn't silently drift out
+# of sync with what the executor actually did.
+sync_state_from_plan() {
+  local issue="$1"
+  local spath plan
+  spath="$(state_path "$issue")"
+  [ -f "$spath" ] || return 0
+  plan="$(python3 -c "import json; print(json.load(open('$spath')).get('plan_path',''))" 2>/dev/null)"
+  [ -n "$plan" ] && [ -f "$plan" ] || return 0
+  python3 - "$spath" "$plan" "$issue" "$(tasks_path)" <<'PY' 2>/dev/null || true
+import json, re, sys, datetime, uuid
+spath, plan_path, issue, tasks_path = sys.argv[1:5]
+text = open(plan_path).read()
+m = re.search(r"##\s*6\.\s*Execution Order(.*?)(\n##\s|\Z)", text, re.S)
+section = m.group(1) if m else text
+items = re.findall(r"^\s*[-*]\s*\[( |x|X)\]\s*(.+)$", section, re.M)
+completed = [t.strip() for c, t in items if c.lower() == "x"]
+pending = [t.strip() for c, t in items if c.lower() != "x"]
+d = json.load(open(spath))
+d["completed_steps"] = completed
+d["pending_steps"] = pending
+d["current_step"] = pending[0] if pending else None
+d["total_steps"] = len(items) if items else d.get("total_steps")
+if items and not pending and d.get("status") not in ("stopped",):
+    d["status"] = "completed"
+d["updated_at"] = datetime.datetime.now().astimezone().isoformat()
+json.dump(d, open(spath, "w"), indent=2)
+
+# Seed one ledger task per checklist step (so `task-list`/`status` show every
+# step from planning onward, not just steps someone has already run
+# `ogre execute` against) and reconcile status against the plan's own
+# checkboxes - the plan file is the source of truth for "done".
+if items:
+    try:
+        tasks = json.load(open(tasks_path))
+    except Exception:
+        tasks = []
+    now = datetime.datetime.now().astimezone().isoformat()
+    issue_tasks = [t for t in tasks if t.get("issue") == issue]
+    by_text = {t.get("step"): t for t in issue_tasks if t.get("step")}
+    unlinked_passed = [t for t in issue_tasks if t.get("step") is None and t.get("status") == "passed"]
+    changed = False
+    for idx, (marker, raw_text) in enumerate(items, start=1):
+        step_text = raw_text.strip()
+        done = marker.lower() == "x"
+        t = by_text.get(step_text)
+        if t is None and done and unlinked_passed:
+            # Best-effort migration: adopt one pre-existing (legacy) passed
+            # task that predates step-tracking instead of creating a duplicate.
+            t = unlinked_passed.pop(0)
+            t["step"] = step_text
+            t["step_index"] = idx
+            t["updated_at"] = now
+            changed = True
+        elif t is None:
+            t = {
+                "id": "task-{}".format(uuid.uuid4()), "issue": issue, "type": "execute",
+                "executor": None, "model": None, "mode": None, "freshness": None,
+                "runner": None, "log_path": None,
+                "status": "passed" if done else "pending",
+                "pid": None, "exit_code": 0 if done else None, "session_id": None,
+                "step": step_text, "step_index": idx,
+                "created_at": now, "started_at": None,
+                "ended_at": now if done else None, "updated_at": now,
+            }
+            tasks.append(t)
+            changed = True
+        else:
+            if t.get("step_index") != idx:
+                t["step_index"] = idx
+                changed = True
+            if done and t.get("status") != "passed":
+                t["status"] = "passed"
+                if t.get("exit_code") is None:
+                    t["exit_code"] = 0
+                if not t.get("ended_at"):
+                    t["ended_at"] = now
+                t["updated_at"] = now
+                changed = True
+    if changed:
+        json.dump(tasks, open(tasks_path, "w"), indent=2)
+PY
+}
+
+# Human-readable job summary: id, issue, status, plan, progress ratio, and
+# only the commands that make sense for the current status.
+print_job_summary() {
+  local issue="$1"
+  local spath
+  spath="$(state_path "$issue")"
+  [ -f "$spath" ] || return 0
+  python3 - "$spath" "$(tasks_path)" "$issue" <<'PY'
+import json, os, sys
+
+def short(t, n=40):
+    t = " ".join(t.split())
+    return t if len(t) <= n else t[: n - 1].rstrip() + "…"
+
+def table(rows):
+    rows = [(k, v if v is not None else "-") for k, v in rows]
+    w1 = max(len(str(k)) for k, _ in rows)
+    w2 = max(len(str(v)) for _, v in rows)
+    sep = "+-{}-+-{}-+".format("-" * w1, "-" * w2)
+    print(sep)
+    for k, v in rows:
+        print("| {:<{w1}} | {:<{w2}} |".format(str(k), str(v), w1=w1, w2=w2))
+    print(sep)
+
+def table_cols(headers, rows):
+    widths = [len(h) for h in headers]
+    for r in rows:
+        for i, c in enumerate(r):
+            widths[i] = max(widths[i], len(str(c)))
+    sep2 = "+-" + "-+-".join("-" * w for w in widths) + "-+"
+    def fmt(r):
+        return "| " + " | ".join("{:<{w}}".format(str(c), w=w) for c, w in zip(r, widths)) + " |"
+    print(sep2)
+    print(fmt(headers))
+    print(sep2)
+    for r in rows:
+        print(fmt(r))
+    print(sep2)
+
+d = json.load(open(sys.argv[1]))
+issue = d.get("issue")
+job_id = d.get("job_id")
+status = d.get("status")
+plan_path = d.get("plan_path")
+completed = d.get("completed_steps") or []
+pending = d.get("pending_steps") or []
+total = d.get("total_steps") or 0
+plan_exists = bool(plan_path) and os.path.isfile(plan_path)
+plan_display = "{}{}".format(plan_path, "" if plan_exists else "  (not written yet)")
+
+rows = [
+    ("Job Id", job_id),
+    ("Issue", issue),
+    ("Status", status),
+    ("Plan", plan_display),
+    ("Steps Completed", len(completed)),
+    ("Steps Remaining", len(pending)),
+    ("Steps Total", total),
+    ("View status", "ogre status {}".format(issue)),
+]
+if plan_exists and status != "completed":
+    rows.append(("Review plan", "ogre review-plan {}".format(issue)))
+    rows.append(("Execute next", "ogre execute {}".format(issue)))
+if status == "completed":
+    rows.append(("Archive", "ogre stop {} --archive".format(issue)))
+    rows.append(("Delete", "ogre stop {} --delete".format(issue)))
+    rows.append(("List files", "ogre stop {} --list".format(issue)))
+elif status != "stopped":
+    rows.append(("Stop", "ogre stop {}".format(issue)))
+table(rows)
+
+try:
+    all_tasks = json.load(open(sys.argv[2]))
+except Exception:
+    all_tasks = []
+steps = sorted(
+    [t for t in all_tasks if t.get("issue") == sys.argv[3] and t.get("step_index") is not None],
+    key=lambda t: t["step_index"],
+)
+if steps:
+    print("Steps ({}):".format(len(steps)))
+    display = {"passed": "completed", "running": "running", "failed": "failed", "stopped": "stopped"}
+    step_rows = [
+        (t["step_index"], display.get(t.get("status"), "pending"), t.get("id"), short(t.get("step") or ""))
+        for t in steps
+    ]
+    table_cols(["#", "Status", "Task Id", "Step"], step_rows)
+PY
+}
+
+# Human-readable task summary: id, parent issue, status, log, and only the
+# commands that make sense (tasks have no review/execute of their own).
+print_task_summary() {
+  local tid="$1"
+  python3 - "$(tasks_path)" "$tid" "$RUNTIME" <<'PY'
+import json, sys
+
+def table(rows):
+    rows = [(k, v if v is not None else "-") for k, v in rows]
+    w1 = max(len(str(k)) for k, _ in rows)
+    w2 = max(len(str(v)) for _, v in rows)
+    sep = "+-{}-+-{}-+".format("-" * w1, "-" * w2)
+    print(sep)
+    for k, v in rows:
+        print("| {:<{w1}} | {:<{w2}} |".format(str(k), str(v), w1=w1, w2=w2))
+    print(sep)
+
+path, tid, runtime = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    tasks = json.load(open(path))
+except Exception:
+    tasks = []
+t = next((x for x in tasks if x.get("id") == tid), None)
+if not t:
+    sys.exit(0)
+
+issue = t.get("issue")
+job_id = None
+try:
+    job_id = json.load(open("{}/state/issue-{}.json".format(runtime, issue))).get("job_id")
+except Exception:
+    pass
+
+issue_tasks = [x for x in tasks if x.get("issue") == issue]
+step_indices = sorted({x.get("step_index") for x in issue_tasks if x.get("step_index") is not None})
+total_steps = len(step_indices)
+cur_step = t.get("step_index")
+
+model = t.get("model")
+rows = [
+    ("Task Id", t.get("id")),
+    ("Job Id", job_id or "(unknown)"),
+    ("Issue", issue),
+    ("Status", t.get("status")),
+    ("Step", "{} of {}".format(cur_step, total_steps) if cur_step is not None else "-"),
+    ("Executor", "{}{}".format(t.get("executor"), "  ({})".format(model) if model else "")),
+    ("Log", t.get("log_path")),
+]
+if t.get("session_id"):
+    rows.append(("Session id", t.get("session_id")))
+rows.append(("View status", "ogre status --task {}".format(tid)))
+if t.get("status") in ("pending", "running"):
+    rows.append(("Stop task", "ogre stop --task {}".format(tid)))
+table(rows)
+PY
+}
+
+# List every task under one job (all `ogre execute` attempts for that
+# issue), one row per task, newest first.
+cmd_task_list() {
+  ensure_runtime
+  local job_id="${1:-}"
+  [ -n "$job_id" ] || { err "Usage: ogre task-list <job-id>"; exit 1; }
+  local issue
+  issue="$(resolve_issue_by_job_id "$job_id")"
+  [ -n "$issue" ] || { err "No issue found with job id $job_id"; exit 1; }
+  sync_state_from_plan "$issue"
+  reap_all_tasks
+  python3 - "$(tasks_path)" "$issue" "$job_id" <<'PY'
+import json, sys
+
+def short(t, n=60):
+    t = " ".join(str(t).split())
+    return t if len(t) <= n else t[: n - 1].rstrip() + "…"
+
+def table(headers, rows):
+    widths = [len(h) for h in headers]
+    for r in rows:
+        for i, c in enumerate(r):
+            widths[i] = max(widths[i], len(str(c)))
+    sep = "+-" + "-+-".join("-" * w for w in widths) + "-+"
+    def fmt(r):
+        return "| " + " | ".join("{:<{w}}".format(str(c), w=w) for c, w in zip(r, widths)) + " |"
+    print(sep)
+    print(fmt(headers))
+    print(sep)
+    for r in rows:
+        print(fmt(r))
+    print(sep)
+
+path, issue, job_id = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    tasks = json.load(open(path))
+except Exception:
+    tasks = []
+tasks = [t for t in tasks if str(t.get("issue")) == issue]
+tasks.sort(key=lambda t: t.get("step_index") if t.get("step_index") is not None else 10**9)
+
+print("Job Id: {}   Issue: {}".format(job_id, issue))
+if not tasks:
+    print("No tasks yet for this job.")
+    sys.exit(0)
+
+rows = []
+for t in tasks:
+    model = t.get("model")
+    executor = "{}{}".format(t.get("executor") or "-", " ({})".format(model) if model else "")
+    rows.append((
+        t.get("step_index") if t.get("step_index") is not None else "-",
+        t.get("id"),
+        t.get("status"),
+        executor,
+        short(t.get("step") or ""),
+    ))
+table(["#", "Task Id", "Status", "Executor", "Step"], rows)
+print("View one:  ogre status --task <task-id>")
+PY
+}
+
+get_plan_path() {
+  local arg="$1"
+  if [ -f "$arg" ]; then
+    echo "$arg"
+    return
+  fi
+  local issue="$arg"
+  issue="${issue#issue-}"
+  issue="${issue%.md}"
+  if [ -f "$RUNTIME/plans/issue-$issue.md" ]; then
+    echo "$RUNTIME/plans/issue-$issue.md"
+  else
+    echo "$RUNTIME/plans/$arg.md"
+  fi
+}
+
+confirm_existing_plan() {
+  local plan="$1"
+  local issue="$2"
+  if [ ! -f "$plan" ]; then
+    return 0
+  fi
+
+  log "Plan already exists: $plan"
+  log "Choose:"
+  log "  1) Continue existing work"
+  log "  2) Replace plan only"
+  log "  3) Archive existing and create new"
+  log "  4) Delete all Ogre data for issue and start fresh"
+  log "  5) Cancel"
+  printf 'Selection [1]: '
+  read -r choice || true
+  choice="${choice:-1}"
+
+  case "$choice" in
+    1)
+      log "Continuing existing work."
+      return 1
+      ;;
+    2)
+      rm -f "$plan"
+      log "Removed existing plan only."
+      ;;
+    3)
+      archive_issue "$issue"
+      ;;
+    4)
+      delete_issue_data "$issue"
+      ;;
+    5)
+      log "Cancelled."
+      exit 0
+      ;;
+    *)
+      err "Invalid selection."
+      exit 1
+      ;;
+  esac
+}
+
+archive_issue() {
+  local issue="$1"
+  local ts dest
+  ts="$(date '+%Y%m%d-%H%M%S')"
+  dest="$RUNTIME/archive/issue-$issue-$ts"
+  mkdir -p "$dest"
+  [ -f "$RUNTIME/issues/issue-$issue.md" ] && mkdir -p "$dest/issues" && mv "$RUNTIME/issues/issue-$issue.md" "$dest/issues/"
+  [ -f "$RUNTIME/plans/issue-$issue.md" ] && mkdir -p "$dest/plans" && mv "$RUNTIME/plans/issue-$issue.md" "$dest/plans/"
+  [ -d "$RUNTIME/reviews/issue-$issue" ] && mkdir -p "$dest/reviews" && mv "$RUNTIME/reviews/issue-$issue" "$dest/reviews/"
+  [ -d "$RUNTIME/logs/issue-$issue" ] && mkdir -p "$dest/logs" && mv "$RUNTIME/logs/issue-$issue" "$dest/logs/"
+  [ -f "$RUNTIME/state/issue-$issue.json" ] && mkdir -p "$dest/state" && mv "$RUNTIME/state/issue-$issue.json" "$dest/state/"
+  log "Archived issue $issue to $dest"
+}
+
+list_issue_files() {
+  local issue="$1"
+  [ -f "$RUNTIME/issues/issue-$issue.md" ] && echo "$RUNTIME/issues/issue-$issue.md"
+  [ -f "$RUNTIME/plans/issue-$issue.md" ] && echo "$RUNTIME/plans/issue-$issue.md"
+  [ -d "$RUNTIME/reviews/issue-$issue" ] && echo "$RUNTIME/reviews/issue-$issue"
+  [ -d "$RUNTIME/logs/issue-$issue" ] && echo "$RUNTIME/logs/issue-$issue"
+  [ -f "$RUNTIME/state/issue-$issue.json" ] && echo "$RUNTIME/state/issue-$issue.json"
+  [ -d "$RUNTIME/tmp/issue-$issue" ] && echo "$RUNTIME/tmp/issue-$issue"
+  return 0
+}
+
+delete_issue_data() {
+  local issue="$1"
+  local pruned
+  rm -f "$RUNTIME/issues/issue-$issue.md" "$RUNTIME/plans/issue-$issue.md" "$RUNTIME/state/issue-$issue.json"
+  rm -rf "$RUNTIME/reviews/issue-$issue" "$RUNTIME/logs/issue-$issue" "$RUNTIME/tmp/issue-$issue"
+  pruned="$(prune_tasks_for_issue "$issue")"
+  log "Deleted Ogre data for issue $issue. Code changes were not reverted."
+  [ -n "$pruned" ] && log "Pruned $pruned task(s) for issue $issue from the shared ledger."
+}
+
+# Removes every ledger entry for one issue from the shared tasks.json - the
+# ledger is never pruned on its own (every checklist step gets seeded as a
+# task, see sync_state_from_plan), so without this it grows forever even
+# after the issue itself is deleted.
+prune_tasks_for_issue() {
+  local issue="$1"
+  local path
+  path="$(tasks_path)"
+  [ -f "$path" ] || return 0
+  python3 - "$path" "$issue" <<'PY'
+import json, sys
+path, issue = sys.argv[1], sys.argv[2]
+try:
+    tasks = json.load(open(path))
+except Exception:
+    tasks = []
+before = len(tasks)
+tasks = [t for t in tasks if t.get("issue") != issue]
+removed = before - len(tasks)
+if removed:
+    json.dump(tasks, open(path, "w"), indent=2)
+    print(removed)
+PY
+}
+
+cmd_init() {
+  ensure_runtime
+  log "Ogre runtime initialized at $RUNTIME"
+}
+
+cmd_feature() {
+  ensure_runtime
+  local current="" blocks="" plan_name="" planner="claude" model="sonnet-5" statement="" name=""
+  if [ $# -gt 0 ] && [[ "$1" != --* ]]; then
+    current="$1"; shift
+  fi
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --blocks) blocks="${2:-}"; shift 2 ;;
+      --plan) plan_name="${2:-}"; shift 2 ;;
+      --planner) planner="${2:-claude}"; shift 2 ;;
+      --model) model="${2:-}"; shift 2 ;;
+      --statement) statement="${2:-}"; shift 2 ;;
+      --name) name="${2:-}"; shift 2 ;;
+      *) err "Unknown option: $1"; exit 1 ;;
+    esac
+  done
+
+  [ -n "$current" ] || [ -n "$statement" ] || { err "Provide an issue number/url/path, or --statement \"free text\""; usage; exit 1; }
+
+  local issue plan issue_path runner blockers_text logdir
+  if [ -n "$statement" ]; then
+    if [ -n "$name" ]; then
+      issue="$name"
+    else
+      issue="$(slugify_statement "$statement")"
+      [ -n "$issue" ] || issue="adhoc-$(date '+%Y%m%d-%H%M%S')"
+    fi
+  else
+    issue="$(slug_from_issue "$current")"
+    [ "$issue" != "unknown" ] || { err "Could not determine issue number. Use --plan and a numeric issue if possible."; exit 1; }
+  fi
+  plan_name="${plan_name:-issue-$issue.md}"
+  plan="$RUNTIME/plans/$plan_name"
+  issue_path="$RUNTIME/issues/issue-$issue.md"
+  logdir="$RUNTIME/logs/issue-$issue"
+  mkdir -p "$logdir" "$RUNTIME/tmp/issue-$issue"
+
+  if ! confirm_existing_plan "$plan" "$issue"; then
+    log "Existing plan preserved. Use: ogre status $issue"
+    exit 0
+  fi
+
+  if [ -n "$statement" ]; then
+    mkdir -p "$(dirname "$issue_path")"
+    cat > "$issue_path" <<EOF2
+# Feature Statement (user-provided)
+
+$statement
+EOF2
+    log "Wrote feature statement: $issue_path" | tee "$logdir/feature.log"
+  else
+    fetch_issue "$current" "$issue_path" | tee "$logdir/feature.log"
+  fi
+
+  blockers_text="none"
+  local bpaths=()
+  if [ -n "$blocks" ] && [ "$blocks" != "none" ]; then
+    blockers_text=""
+    IFS=',' read -ra BLOCK_ARR <<< "$blocks"
+    for b in "${BLOCK_ARR[@]}"; do
+      b="$(echo "$b" | xargs)"
+      [ -n "$b" ] || continue
+      local bpath
+      bpath="$(issue_file_path "$b")"
+      fetch_issue "$b" "$bpath" | tee -a "$logdir/feature.log"
+      bpaths+=("$bpath")
+      blockers_text="$blockers_text* $bpath
+"
+    done
+  fi
+
+  runner="$RUNTIME/tmp/issue-$issue/plan-runner.md"
+  cat > "$runner" <<EOF2
+# Ogre Planning Runner
+
+Read and follow the planning template from:
+
+* \`.ai/.ogre/prompts/execution-blueprint-prompt.md\`
+
+## Current Issue
+
+* \`$issue_path\`
+
+## Blocking Issues
+
+$blockers_text
+
+## Repo Orientation
+
+* Use \`repo_map.md\` if available.
+
+## Output
+
+* Write the final execution plan to \`$plan\`.
+
+## Rules
+
+* Follow the planning template exactly.
+* Create planning output only.
+* Do not implement code.
+* Do not modify application files.
+* Do not keep placeholder issue numbers from the template.
+* Use real issue numbers and issue paths from this runner prompt.
+EOF2
+
+  local blocker_paths_json="[]"
+  [ ${#bpaths[@]} -gt 0 ] && blocker_paths_json="$(json_array "${bpaths[@]}")"
+  write_state "$issue" "planning" "$plan" "$planner" "$model" "claude" "sonnet-5" "codex" "gpt-5.5" "$blocker_paths_json"
+
+  log ""
+  print_job_summary "$issue"
+  log ""
+  log "Planning runner created: $runner"
+  log "Next inside Claude Code: read $runner and create the plan."
+}
+
+cmd_add_blocker() {
+  ensure_runtime
+  local issue="${1:-}"
+  [ -n "$issue" ] || { err "Missing issue for add-blocker"; usage; exit 1; }
+  shift || true
+  issue="$(slug_from_issue "$issue")"
+
+  local spath
+  spath="$(state_path "$issue")"
+  [ -f "$spath" ] || { err "No Ogre state found for issue $issue. Run 'ogre feature' first."; exit 1; }
+
+  local blocker="" statement="" name="" force="false"
+  if [ $# -gt 0 ] && [[ "$1" != --* ]]; then
+    blocker="$1"; shift
+  fi
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --statement) statement="${2:-}"; shift 2 ;;
+      --name) name="${2:-}"; shift 2 ;;
+      --force) force="true"; shift ;;
+      *) err "Unknown option: $1"; exit 1 ;;
+    esac
+  done
+  [ -n "$blocker" ] || [ -n "$statement" ] || { err "Provide a blocker issue number/url/path, or --statement \"free text\""; exit 1; }
+
+  if [ "$force" != "true" ] && execution_started "$issue"; then
+    err "Execution has already started for issue $issue. Blockers can only be added before 'ogre execute' begins."
+    err "Use 'ogre stop $issue' to pause, or pass --force to override (already-completed steps won't be retroactively revised)."
+    exit 1
+  fi
+
+  local plan issue_path logdir runner bpath bslug
+  plan="$(python3 -c "import json; print(json.load(open('$spath')).get('plan_path',''))")"
+  [ -n "$plan" ] || plan="$RUNTIME/plans/issue-$issue.md"
+  issue_path="$RUNTIME/issues/issue-$issue.md"
+  logdir="$RUNTIME/logs/issue-$issue"
+  mkdir -p "$logdir" "$RUNTIME/tmp/issue-$issue"
+
+  if [ -n "$statement" ]; then
+    bslug="${name:-blocker-$(date '+%Y%m%d-%H%M%S')}"
+    bpath="$RUNTIME/issues/issue-$bslug.md"
+    cat > "$bpath" <<EOF2
+# Blocker Statement (user-provided)
+
+$statement
+EOF2
+    log "Wrote blocker statement: $bpath"
+  else
+    bpath="$(issue_file_path "$blocker")"
+    fetch_issue "$blocker" "$bpath" | tee -a "$logdir/feature.log"
+  fi
+
+  python3 - "$spath" "$bpath" <<PY
+import json, sys, datetime
+p, bp = "$spath", "$bpath"
+d = json.load(open(p))
+bl = d.get('blocker_paths') or []
+if bp not in bl:
+    bl.append(bp)
+d['blocker_paths'] = bl
+d['status'] = 'planning'
+d['updated_at'] = datetime.datetime.now().astimezone().isoformat()
+json.dump(d, open(p, 'w'), indent=2)
+PY
+
+  local blockers_text=""
+  while IFS= read -r bp; do
+    [ -n "$bp" ] || continue
+    blockers_text="$blockers_text* \`$bp\`
+"
+  done < <(python3 -c "import json; print('\n'.join(json.load(open('$spath')).get('blocker_paths') or []))")
+  [ -n "$blockers_text" ] || blockers_text="none"
+
+  runner="$RUNTIME/tmp/issue-$issue/plan-runner.md"
+  cat > "$runner" <<EOF2
+# Ogre Planning Runner (Blocker Update)
+
+Read and follow the planning template from:
+
+* \`.ai/.ogre/prompts/execution-blueprint-prompt.md\`
+
+## Current Issue
+
+* \`$issue_path\`
+
+## Blocking Issues
+
+$blockers_text
+
+## Existing Plan (revise, do not discard)
+
+* \`$plan\`
+
+## Output
+
+* Revise the plan at \`$plan\` to account for the newly added blocker(s).
+* Re-check every existing assumption against the updated blocker list.
+* Keep sections the new blocker does not affect.
+
+## Rules
+
+* Follow the planning template exactly.
+* Revise planning output only.
+* Do not implement code.
+* Do not modify application files.
+* Use real issue numbers and issue paths from this runner prompt.
+EOF2
+
+  log ""
+  log "Blocker added: $bpath"
+  log "State status reset to 'planning' for issue $issue."
+  log "Re-planning runner created: $runner"
+  log "Next inside Claude Code: read $runner and revise the plan at $plan."
+}
+
+cmd_review_plan() {
+  ensure_runtime
+  local target="${1:-}" reviewer="claude" model="sonnet-5"
+  [ -n "$target" ] || { err "Missing issue or plan path"; usage; exit 1; }
+  shift || true
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --reviewer) reviewer="${2:-claude}"; shift 2 ;;
+      --model) model="${2:-}"; shift 2 ;;
+      *) err "Unknown option: $1"; exit 1 ;;
+    esac
+  done
+
+  local plan issue runner review_dir review_path
+  plan="$(get_plan_path "$target")"
+  [ -f "$plan" ] || { err "Plan not found: $plan"; exit 1; }
+  issue="$(slug_from_issue "$plan")"
+  review_dir="$RUNTIME/reviews/issue-$issue"
+  review_path="$review_dir/plan-review.md"
+  runner="$RUNTIME/tmp/issue-$issue/plan-review-runner.md"
+  mkdir -p "$review_dir" "$RUNTIME/tmp/issue-$issue"
+
+  cat > "$runner" <<EOF2
+# Ogre Plan Review Runner
+
+Read and follow the review template from:
+
+* \`.ai/.ogre/prompts/plan-review-prompt.md\`
+
+Review this implementation plan against the repository/codebase:
+
+* \`$plan\`
+
+Write the review to:
+
+* \`$review_path\`
+
+Rules:
+
+* Do not edit code.
+* Return only problems and suggested corrections.
+* If there are no blocking issues, say so clearly.
+EOF2
+
+  log "Plan review runner created: $runner"
+  log "Reviewer: $reviewer ${model:+($model)}"
+  log "Review output: $review_path"
+}
+
+cmd_execute() {
+  ensure_runtime
+  # iso (isolation mode) has three values:
+  #   new        - default: foreground, brand-new codex/claude session, isolated from main context
+  #   main       - run inline in the current Claude Code session (no subprocess spawned)
+  #   background - same isolation as "new" but detached/non-blocking
+  local target="" executor="codex" model="gpt-5.5" mode="next" freshness="fresh" iso="new" job_id="" task_id="" step_n="" assume_yes="false"
+  if [ $# -gt 0 ] && [[ ! "$1" =~ ^-- ]]; then
+    target="$1"; shift
+  fi
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --job) job_id="${2:-}"; shift 2 ;;
+      --task) task_id="${2:-}"; shift 2 ;;
+      --step) step_n="${2:-}"; shift 2 ;;
+      --executor) executor="${2:-codex}"; shift 2 ;;
+      --model) model="${2:-}"; shift 2 ;;
+      --all) mode="all"; shift ;;
+      --next) mode="next"; shift ;;
+      --fresh) freshness="fresh"; shift ;;
+      --resume) freshness="resume"; shift ;;
+      --run) iso="new"; shift ;;               # legacy flag, kept as a no-op alias: "new" is now the default anyway
+      --main) iso="main"; shift ;;
+      --background) iso="background"; shift ;;
+      --yes) assume_yes="true"; shift ;;
+      *) err "Unknown option: $1"; exit 1 ;;
+    esac
+  done
+  if [ -n "$job_id" ]; then
+    target="$(resolve_issue_by_job_id "$job_id")"
+    [ -n "$target" ] || { err "No issue found with job id $job_id"; exit 1; }
+  fi
+  [ -n "$target" ] || { err "Missing issue, plan path, or --job <job-id>"; usage; exit 1; }
+
+  local plan issue runner logdir logpath tid spath
+  plan="$(get_plan_path "$target")"
+  [ -f "$plan" ] || { err "Plan not found: $plan"; exit 1; }
+  issue="$(slug_from_issue "$plan")"
+  sync_state_from_plan "$issue"
+  spath="$(state_path "$issue")"
+  logdir="$RUNTIME/logs/issue-$issue"
+  mkdir -p "$logdir" "$RUNTIME/tmp/issue-$issue"
+  runner="$RUNTIME/tmp/issue-$issue/run-next.md"
+
+  # Writes the --all runner file for one chain link (tid/logpath vary per
+  # link; plan/issue/executor/model/freshness come from the enclosing
+  # cmd_execute call). Each link is told to self-assess its own context
+  # budget and hand off cleanly instead of running the whole plan into the
+  # ground - that's what lets a chain of small, fully-fresh sessions stand
+  # in for one big one without ever needing an external token count.
+  write_all_runner() {
+    local link_tid="$1" link_logpath="$2"
+    cat > "$runner" <<EOF2
+# Ogre Execution Runner
+
+Read and follow the execution handoff instructions from:
+
+* \`.ai/.ogre/prompts/execution-handoff.md\`
+
+Use this source plan:
+
+* \`$plan\`
+
+Execution mode:
+
+* Mode: \`all\` (chained)
+* Executor: \`$executor\`
+* Model: \`${model:-default}\`
+* Freshness: \`$freshness\`
+* Task id: \`$link_tid\`
+
+Task:
+
+* Execute remaining incomplete checklist items in order, one at a time.
+* Follow the handoff rules exactly for each item.
+* Update each checklist item's status in the source plan only after its own work and validation are complete.
+* Write a concise execution log to \`$link_logpath\`.
+* After finishing each item, self-assess how much of your own context window you have used so far. If you estimate more than roughly half is used, STOP right there - do not start another item, even if items remain.
+* Stopping early for context-budget reasons is normal and expected, not a failure: a fresh session will automatically continue with whatever is left. Do not report it as an error.
+* Only stop and mark failed if an item's validation genuinely fails; report which items completed and which didn't.
+* Mark the ledger task done, mandatory, last step: \`$SCRIPT_DIR/ogre task-complete $link_tid --status passed\` (covers both "finished everything" and "stopped early on purpose for context") or \`--status failed\` (only for a genuine validation failure). Use this exact path - \`ogre\` alone is not guaranteed to be on PATH.
+
+Safety:
+
+* Stop if the working tree contains unrelated changes that are not part of the plan.
+* Stop if a \`NEEDS INSPECTION\` item cannot be verified from real code.
+* Stop if blocker dependency is missing or incompatible.
+EOF2
+  }
+
+  if [ "$mode" = "all" ]; then
+    # Chained bulk path: a sequence of ad-hoc tasks, each covering as many
+    # remaining checklist items as one session's own context budget allows.
+    # Not tied to any single seeded step task.
+    tid="$(new_task_id)"
+    logpath="$logdir/execute-$(date '+%Y%m%d-%H%M%S')-${tid:5:8}.log"
+    write_all_runner "$tid" "$logpath"
+    task_create "$tid" "$issue" "execute" "$executor" "$model" "$mode" "$freshness" "$runner" "$logpath" "pending"
+  else
+    # Default: target exactly one seeded step-task. Explicit --task/--step
+    # picks it out of order; otherwise take the lowest step_index pending.
+    local pick tid blockers_msg
+    pick="$(python3 - "$(tasks_path)" "$issue" "$task_id" "$step_n" <<'PY'
+import json, sys
+path, issue, task_id, step_n = sys.argv[1:5]
+try:
+    tasks = json.load(open(path))
+except Exception:
+    tasks = []
+issue_tasks = [t for t in tasks if t.get("issue") == issue]
+target = None
+if task_id:
+    target = next((t for t in issue_tasks if t.get("id") == task_id), None)
+elif step_n:
+    try:
+        n = int(step_n)
+    except ValueError:
+        n = None
+    target = next((t for t in issue_tasks if t.get("step_index") == n), None)
+else:
+    pending = sorted(
+        [t for t in issue_tasks if t.get("status") in ("pending", "stopped")],
+        key=lambda t: t.get("step_index") if t.get("step_index") is not None else 0,
+    )
+    target = pending[0] if pending else None
+resume_flag = "stopped" if target and target.get("status") == "stopped" else ""
+blockers_msg = ""
+if target and (task_id or step_n):
+    idx = target.get("step_index")
+    if idx is not None:
+        blockers = sorted(
+            (
+                t for t in issue_tasks
+                if t.get("id") != target.get("id")
+                and t.get("step_index") is not None
+                and t.get("step_index") < idx
+                and t.get("status") != "passed"
+            ),
+            key=lambda t: t.get("step_index"),
+        )
+        if blockers:
+            names = ", ".join(
+                "step {} ({})".format(b.get("step_index"), b.get("status"))
+                for b in blockers
+            )
+            blockers_msg = "earlier {} not yet passed: {}".format(
+                "step" if len(blockers) == 1 else "steps", names
+            )
+print(target.get("id") if target else "")
+print(blockers_msg)
+print(resume_flag)
+PY
+)"
+    tid="$(printf '%s\n' "$pick" | sed -n '1p')"
+    blockers_msg="$(printf '%s\n' "$pick" | sed -n '2p')"
+    local resume_flag
+    resume_flag="$(printf '%s\n' "$pick" | sed -n '3p')"
+    if [ -z "$tid" ]; then
+      if [ -n "$task_id" ] || [ -n "$step_n" ]; then
+        err "No matching pending task for that --task/--step under issue $issue"
+      else
+        log "No pending steps left for issue $issue. Nothing to execute."
+      fi
+      exit 1
+    fi
+    local job_status=""
+    [ -f "$spath" ] && job_status="$(python3 -c "import json; print(json.load(open('$spath')).get('status') or '')" 2>/dev/null)"
+    if [ "$resume_flag" = "stopped" ] || [ "$job_status" = "stopped" ]; then
+      if [ "$resume_flag" = "stopped" ]; then
+        log "Step for task $tid was previously stopped (ogre stop). Files kept, code untouched."
+      else
+        log "Issue $issue (job) is currently marked stopped. Task $tid itself is still pending."
+      fi
+      if [ "$assume_yes" = "true" ]; then
+        log "Proceeding (--yes passed)."
+      elif [ -t 0 ]; then
+        local resume_confirm=""
+        read -r -p "Resume/proceed? [y/N] " resume_confirm
+        case "$resume_confirm" in
+          y|Y|yes|YES) ;;
+          *) log "Aborted."; exit 1 ;;
+        esac
+      else
+        err "Refusing to proceed non-interactively without confirmation. Re-run with --yes to confirm."
+        exit 1
+      fi
+    fi
+    if [ -n "$blockers_msg" ]; then
+      log "WARNING: $blockers_msg. This task may fail if it depends on their output."
+      if [ "$assume_yes" = "true" ]; then
+        log "Proceeding (--yes passed)."
+      elif [ -t 0 ]; then
+        local confirm=""
+        read -r -p "Proceed anyway? [y/N] " confirm
+        case "$confirm" in
+          y|Y|yes|YES) ;;
+          *) log "Aborted."; exit 1 ;;
+        esac
+      else
+        err "Refusing to proceed non-interactively without confirmation. Re-run with --yes to confirm."
+        exit 1
+      fi
+    fi
+    local step_text step_index
+    step_text="$(task_field "$tid" step)"
+    step_index="$(task_field "$tid" step_index)"
+    logpath="$logdir/execute-$(date '+%Y%m%d-%H%M%S')-${tid:5:8}.log"
+
+    cat > "$runner" <<EOF2
+# Ogre Execution Runner
+
+Read and follow the execution handoff instructions from:
+
+* \`.ai/.ogre/prompts/execution-handoff.md\`
+
+Use this source plan:
+
+* \`$plan\`
+
+Execution mode:
+
+* Executor: \`$executor\`
+* Model: \`${model:-default}\`
+* Freshness: \`$freshness\`
+* Task id: \`$tid\`
+
+Target checklist item (step $step_index) - implement exactly this one, nothing else:
+
+* $step_text
+
+Task:
+
+* Execute only the target checklist item above.
+* Do not execute any other checklist item, even if it looks quick.
+* Follow the handoff rules exactly.
+* Use a fresh context/session when possible.
+* Update the checklist item status in the source plan only after the work and validation are complete.
+* Write a concise execution log to \`$logpath\`.
+* Stop after reporting changed files and validation result.
+* Mark the ledger task done, mandatory, last step: \`$SCRIPT_DIR/ogre task-complete $tid --status passed\` (or \`--status failed\` if validation failed). Use this exact path - \`ogre\` alone is not guaranteed to be on PATH. Skipping this leaves the task stuck \`pending\`/\`running\` in \`ogre status\`/\`ogre task-list\` even though the work is done.
+
+Safety:
+
+* Stop if the working tree contains unrelated changes that are not part of the plan.
+* Stop if validation fails.
+* Stop if a \`NEEDS INSPECTION\` item cannot be verified from real code.
+* Stop if blocker dependency is missing or incompatible.
+EOF2
+    task_update "$tid" "executor=$executor" "model=${model:-null}" "freshness=$freshness" "runner=$runner" "log_path=$logpath"
+  fi
+  if [ -f "$spath" ]; then
+    python3 - "$spath" <<PY
+import json, datetime
+p = "$spath"
+d = json.load(open(p))
+d['active_task'] = "$tid"
+d['status'] = 'executing'
+d['last_log'] = "$logpath"
+d['updated_at'] = datetime.datetime.now().astimezone().isoformat()
+json.dump(d, open(p, 'w'), indent=2)
+PY
+  fi
+
+  # Claude lets us pick the session id up front (--session-id); Codex only
+  # reveals its own "session id: <uuid>" in its own output, so that one has
+  # to be parsed out after the process actually runs.
+  local session_id=""
+  if [ "$executor" = "claude" ]; then
+    session_id="$(gen_uuid)"
+    task_update "$tid" "session_id=$session_id"
+  fi
+
+  log "Execution runner created: $runner"
+  log "Task id: $tid"
+  [ -n "$session_id" ] && log "Session id: $session_id (resume in Claude TUI later: claude --resume $session_id)"
+  log "Executor: $executor ${model:+($model)}"
+  log "Log path: $logpath"
+
+  if [ "$iso" = "main" ]; then
+    log ""
+    log "Mode: --main. Execute the target checklist item(s) from the runner file above directly in this session (no subprocess spawned)."
+    log "Alternatively, run it in an isolated session yourself:"
+    log "  codex exec --skip-git-repo-check ${model:+-m $model} - < $runner"
+    log ""
+    log "Task $tid recorded as pending. Check with: $SCRIPT_DIR/ogre status --task $tid"
+    log "When the work is done, mark it: $SCRIPT_DIR/ogre task-complete $tid --status passed|failed"
+    return
+  fi
+
+  case "$executor" in
+    codex) command -v codex >/dev/null 2>&1 || { task_update "$tid" "status=failed"; err "codex CLI not found"; exit 1; } ;;
+    claude) command -v claude >/dev/null 2>&1 || { task_update "$tid" "status=failed"; err "claude CLI not found"; exit 1; } ;;
+    *) task_update "$tid" "status=failed"; err "Unsupported executor: $executor"; exit 1 ;;
+  esac
+
+  # Runs one subprocess link (foreground, blocking) for the given tid/runner/
+  # logpath/session id, streaming to both stdout and the log file. Echoes
+  # the exit code as the last line of stdout (caller captures it).
+  run_link_foreground() {
+    local link_tid="$1" link_runner="$2" link_logpath="$3" link_session="$4"
+    local rc
+    set +e
+    case "$executor" in
+      codex)
+        if [ -n "$model" ]; then codex exec --skip-git-repo-check -m "$model" - < "$link_runner" | tee "$link_logpath"
+        else codex exec --skip-git-repo-check - < "$link_runner" | tee "$link_logpath"
+        fi
+        ;;
+      claude)
+        if [ -n "$model" ]; then claude -p --model "$model" --session-id "$link_session" < "$link_runner" | tee "$link_logpath"
+        else claude -p --session-id "$link_session" < "$link_runner" | tee "$link_logpath"
+        fi
+        ;;
+    esac
+    rc=$?
+    set -e
+    finalize_link_status "$link_tid" "$rc"
+    if [ "$executor" = "codex" ]; then
+      local codex_sid
+      codex_sid="$(grep -m1 '^session id: ' "$link_logpath" 2>/dev/null | sed 's/^session id: //')"
+      [ -n "$codex_sid" ] && task_update "$link_tid" "session_id=$codex_sid"
+    fi
+    return "$rc"
+  }
+
+  run_link_background_body() {
+    local link_tid="$1" link_runner="$2" link_logpath="$3" link_session="$4"
+    case "$executor" in
+      codex)
+        if [ -n "$model" ]; then codex exec --skip-git-repo-check -m "$model" - < "$link_runner" > "$link_logpath" 2>&1
+        else codex exec --skip-git-repo-check - < "$link_runner" > "$link_logpath" 2>&1
+        fi
+        ;;
+      claude)
+        if [ -n "$model" ]; then claude -p --model "$model" --session-id "$link_session" < "$link_runner" > "$link_logpath" 2>&1
+        else claude -p --session-id "$link_session" < "$link_runner" > "$link_logpath" 2>&1
+        fi
+        ;;
+    esac
+    local rc=$?
+    finalize_link_status "$link_tid" "$rc"
+    if [ "$executor" = "codex" ]; then
+      local codex_sid
+      codex_sid="$(grep -m1 '^session id: ' "$link_logpath" 2>/dev/null | sed 's/^session id: //')"
+      [ -n "$codex_sid" ] && task_update "$link_tid" "session_id=$codex_sid"
+    fi
+    return "$rc"
+  }
+
+  # The subprocess (codex/claude) is expected to call
+  # `ogre task-complete <tid> --status passed|failed` itself as part of the
+  # handoff instructions - that ledger write is the real domain signal
+  # (validation passed/failed), independent of the CLI process's own exit
+  # code (which is usually 0 even on a validation failure, since the LLM
+  # just reported it rather than crashing). Only fall back to the rc-based
+  # guess if the subprocess never touched the ledger at all (crashed, or
+  # forgot the step) - otherwise respect what it already recorded.
+  finalize_link_status() {
+    local link_tid="$1" rc="$2"
+    local current_status
+    current_status="$(task_field "$link_tid" status)"
+    if [ "$current_status" = "passed" ] || [ "$current_status" = "failed" ]; then
+      task_update "$link_tid" "exit_code=$rc"
+    elif [ "$rc" -eq 0 ]; then
+      task_update "$link_tid" "status=passed" "exit_code=$rc"
+    else
+      task_update "$link_tid" "status=failed" "exit_code=$rc"
+    fi
+  }
+
+  # After a link finishes: passed + steps still pending in the plan means it
+  # deliberately handed off on its own context budget - spawn a fresh link
+  # to continue. Failed, or nothing left, ends the chain.
+  should_continue_chain() {
+    local link_tid="$1"
+    [ "$mode" = "all" ] || return 1
+    local link_status
+    link_status="$(task_field "$link_tid" status)"
+    [ "$link_status" = "passed" ] || return 1
+    local pending_left
+    pending_left="$(python3 -c "
+import json
+try:
+    d = json.load(open('$spath'))
+    print(len(d.get('pending_steps') or []))
+except Exception:
+    print(0)
+" 2>/dev/null || echo 0)"
+    [ "${pending_left:-0}" -gt 0 ] 2>/dev/null
+  }
+
+  finalize_issue_state() {
+    local rc="$1"
+    if [ -f "$spath" ]; then
+      python3 - "$spath" <<PY
+import json, datetime
+p, rc = "$spath", $rc
+d = json.load(open(p))
+d['active_task'] = None
+d['last_validation'] = 'passed' if rc == 0 else 'failed'
+d['updated_at'] = datetime.datetime.now().astimezone().isoformat()
+json.dump(d, open(p, 'w'), indent=2)
+PY
+    fi
+    sync_state_from_plan "$issue"
+  }
+
+  case "$iso" in
+  background)
+    task_update "$tid" "status=running"
+    local exitfile="$RUNTIME/tmp/issue-$issue/$tid.exit"
+    local pidfile="$RUNTIME/tmp/issue-$issue/$tid.pid"
+    (
+      local chain_tid="$tid" chain_logpath="$logpath" chain_session="$session_id"
+      local rc iterations=0 max_iterations=200
+      while :; do
+        iterations=$((iterations + 1))
+        run_link_background_body "$chain_tid" "$runner" "$chain_logpath" "$chain_session"
+        rc=$?
+        sync_state_from_plan "$issue"
+        echo "$rc" > "$exitfile"
+        if [ "$iterations" -ge "$max_iterations" ] || ! should_continue_chain "$chain_tid"; then
+          break
+        fi
+        chain_tid="$(new_task_id)"
+        chain_logpath="$logdir/execute-$(date '+%Y%m%d-%H%M%S')-${chain_tid:5:8}.log"
+        write_all_runner "$chain_tid" "$chain_logpath"
+        task_create "$chain_tid" "$issue" "execute" "$executor" "$model" "$mode" "$freshness" "$runner" "$chain_logpath" "running"
+        if [ "$executor" = "claude" ]; then
+          chain_session="$(gen_uuid)"
+          task_update "$chain_tid" "session_id=$chain_session"
+        fi
+      done
+      finalize_issue_state "$rc"
+    ) &
+    local pid=$!
+    echo "$pid" > "$pidfile"
+    disown "$pid" 2>/dev/null || true
+    task_update "$tid" "pid=$pid"
+    log "Task $tid started in background (pid $pid)."
+    [ "$mode" = "all" ] && log "Chained --all: will keep spawning fresh sessions automatically as long as each one passes and steps remain."
+    log "Check with: ogre status --task $tid"
+    [ "$executor" = "codex" ] && log "Codex session id will show up in that status once captured from its output."
+    return
+    ;;
+  esac
+
+  task_update "$tid" "status=running"
+  local rc chain_tid="$tid" chain_logpath="$logpath" chain_session="$session_id"
+  local iterations=0 max_iterations=200
+  while :; do
+    iterations=$((iterations + 1))
+    run_link_foreground "$chain_tid" "$runner" "$chain_logpath" "$chain_session"
+    rc=$?
+    sync_state_from_plan "$issue"
+    if [ "$iterations" -ge "$max_iterations" ] || ! should_continue_chain "$chain_tid"; then
+      break
+    fi
+    log ""
+    log "Task $chain_tid passed and stopped early on its own context budget; steps remain - spawning a fresh session to continue."
+    chain_tid="$(new_task_id)"
+    chain_logpath="$logdir/execute-$(date '+%Y%m%d-%H%M%S')-${chain_tid:5:8}.log"
+    write_all_runner "$chain_tid" "$chain_logpath"
+    task_create "$chain_tid" "$issue" "execute" "$executor" "$model" "$mode" "$freshness" "$runner" "$chain_logpath" "running"
+    if [ "$executor" = "claude" ]; then
+      chain_session="$(gen_uuid)"
+      task_update "$chain_tid" "session_id=$chain_session"
+    fi
+    log "Task id: $chain_tid"
+  done
+  tid="$chain_tid"
+
+  # The ledger status (written by the subprocess's own task-complete call,
+  # or by finalize_link_status as a fallback) is the real domain result -
+  # not the last subprocess's raw exit code, which is usually 0 even on a
+  # validation failure.
+  local final_status
+  final_status="$(task_field "$tid" status)"
+  [ "$final_status" = "passed" ] && rc=0 || rc=1
+
+  finalize_issue_state "$rc"
+  if [ -n "$chain_session" ]; then
+    case "$executor" in
+      claude) log "Resume in Claude TUI: claude --resume $chain_session" ;;
+      codex) log "Resume in Codex TUI: codex resume $chain_session" ;;
+    esac
+  fi
+  log "Task $tid finished: $final_status"
+  exit "$rc"
+}
+
+cmd_status() {
+  ensure_runtime
+  local target="" task_id="" list_tasks="false" job_id="" watch="false" interval="2"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --task) task_id="${2:-}"; shift 2 ;;
+      --tasks) list_tasks="true"; shift ;;
+      --job) job_id="${2:-}"; shift 2 ;;
+      --watch) watch="true"; shift ;;
+      --interval) interval="${2:-2}"; shift 2 ;;
+      --*) err "Unknown option: $1"; exit 1 ;;
+      *) target="$1"; shift ;;
+    esac
+  done
+
+  if [ "$watch" = "true" ]; then
+    trap 'exit 0' INT
+    while true; do
+      clear
+      log "Ogre status (refreshing every ${interval}s, Ctrl-C to quit) - $(date '+%Y-%m-%d %H:%M:%S')"
+      log ""
+      _status_render "$target" "$task_id" "$list_tasks" "$job_id"
+      sleep "$interval"
+    done
+    return
+  fi
+
+  _status_render "$target" "$task_id" "$list_tasks" "$job_id"
+}
+
+_status_render() {
+  local target="$1" task_id="$2" list_tasks="$3" job_id="$4"
+
+  if [ -n "$task_id" ]; then
+    reap_task "$task_id"
+    local rec
+    rec="$(task_get "$task_id")"
+    if [ "$rec" = "null" ]; then
+      err "No task found with id $task_id"
+      exit 1
+    fi
+    print_task_summary "$task_id"
+    log ""
+    log "Raw task record:"
+    printf '%s\n' "$rec"
+    return
+  fi
+
+  if [ -n "$job_id" ]; then
+    target="$(resolve_issue_by_job_id "$job_id")"
+    [ -n "$target" ] || { err "No issue found with job id $job_id"; exit 1; }
+  fi
+
+  if [ "$list_tasks" = "true" ]; then
+    local issue_filter=""
+    [ -n "$target" ] && issue_filter="$(slug_from_issue "$target")"
+    log "Tasks${issue_filter:+ for issue $issue_filter}:"
+    tasks_list "$issue_filter"
+    return
+  fi
+
+  if [ -n "$target" ]; then
+    local issue spath
+    issue="$(slug_from_issue "$target")"
+    spath="$(state_path "$issue")"
+    if [ -f "$spath" ]; then
+      sync_state_from_plan "$issue"
+      print_job_summary "$issue"
+      log ""
+      log "Raw state:"
+      cat "$spath"
+    else
+      err "No state found for issue $issue"
+      exit 1
+    fi
+  else
+    log "Ogre runtime: $RUNTIME"
+    log ""
+    local spath fissue any="false"
+    for spath in "$RUNTIME"/state/issue-*.json; do
+      [ -f "$spath" ] || continue
+      any="true"
+      fissue="$(basename "$spath")"; fissue="${fissue#issue-}"; fissue="${fissue%.json}"
+      sync_state_from_plan "$fissue"
+      print_job_summary "$fissue"
+      log ""
+    done
+    [ "$any" = "true" ] || { log "No issues yet."; log ""; }
+
+    log "Running/pending tasks:"
+    reap_all_tasks
+    local tids tid
+    tids="$(python3 -c '
+import json
+try:
+    tasks = json.load(open("'"$(tasks_path)"'"))
+except Exception:
+    tasks = []
+for t in tasks:
+    if t.get("status") in ("pending", "running"):
+        print(t.get("id"))
+')"
+    if [ -n "$tids" ]; then
+      while IFS= read -r tid; do
+        [ -n "$tid" ] || continue
+        print_task_summary "$tid"
+        log ""
+      done <<< "$tids"
+    else
+      log "None."
+    fi
+  fi
+}
+
+# Stop ALL tasks under one issue/job - used when stopping the whole feature.
+stop_tasks_for_issue() {
+  local issue="$1"
+  python3 -c '
+import json, sys
+issue = sys.argv[1]
+try:
+    tasks = json.load(open(sys.argv[2]))
+except Exception:
+    tasks = []
+for t in tasks:
+    if str(t.get("issue")) == issue and t.get("status") in ("pending", "running"):
+        print(t["id"], t.get("pid") or "")
+' "$issue" "$(tasks_path)" | while read -r tid pid; do
+    [ -n "$tid" ] || continue
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+      kill "$pid" 2>/dev/null || true
+      log "Killed running task $tid (pid $pid)"
+    fi
+    task_update "$tid" "status=stopped"
+  done
+}
+
+# Stop exactly ONE task, leaving its sibling tasks and the issue/job state
+# untouched. For killing a single misbehaving background attempt without
+# aborting the rest of the feature.
+stop_one_task() {
+  local tid="$1"
+  local issue pid status
+  issue="$(task_field "$tid" issue)"
+  [ -n "$issue" ] || { err "No task found with id $tid"; exit 1; }
+  status="$(task_field "$tid" status)"
+  if [ "$status" != "pending" ] && [ "$status" != "running" ]; then
+    log "Task $tid is already $status. Nothing to stop."
+    return
+  fi
+  pid="$(task_field "$tid" pid)"
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null || true
+    log "Killed running task $tid (pid $pid)"
+  fi
+  task_update "$tid" "status=stopped"
+  log "Task $tid marked stopped. Issue $issue and its other tasks are untouched."
+}
+
+# Mark a task's ledger record passed/failed. This is the closing move for
+# every execution path that ISN'T `ogre execute --run/--background` (those
+# call task_update themselves): a human running the printed `codex exec`
+# command by hand, a codex-plugin-cc /codex:rescue handoff, or the live
+# Claude Code session executing the checklist item directly in-place. All
+# three finish the same way now - without this, the ledger stays `pending`
+# forever even though the real work is done (see execution-handoff.md).
+cmd_task_complete() {
+  ensure_runtime
+  local tid="${1:-}" status="passed" exit_code=""
+  [ -n "$tid" ] || { err "Usage: ogre task-complete <task-id> [--status passed|failed] [--exit-code N]"; exit 1; }
+  shift || true
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --status) status="${2:-passed}"; shift 2 ;;
+      --exit-code) exit_code="${2:-}"; shift 2 ;;
+      --*) err "Unknown option: $1"; exit 1 ;;
+      *) err "Unknown argument: $1"; exit 1 ;;
+    esac
+  done
+  case "$status" in
+    passed|failed) ;;
+    *) err "Invalid --status: $status (must be passed or failed)"; exit 1 ;;
+  esac
+  local rec
+  rec="$(task_get "$tid")"
+  [ "$rec" != "null" ] || { err "No task found with id $tid"; exit 1; }
+  if [ -n "$exit_code" ]; then
+    task_update "$tid" "status=$status" "exit_code=$exit_code"
+  else
+    task_update "$tid" "status=$status"
+  fi
+  local issue
+  issue="$(task_field "$tid" issue)"
+  sync_state_from_plan "$issue"
+  log "Task $tid marked $status."
+  print_task_summary "$tid"
+}
+
+cmd_stop() {
+  ensure_runtime
+  local target="" all="false" archive="false" delete="false" list="false" task_id="" job_id=""
+  if [ $# -gt 0 ] && [[ ! "$1" =~ ^-- ]]; then
+    target="$1"; shift
+  fi
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --all) all="true"; shift ;;
+      --archive) archive="true"; shift ;;
+      --delete) delete="true"; shift ;;
+      --list) list="true"; shift ;;
+      --task) task_id="${2:-}"; shift 2 ;;
+      --job) job_id="${2:-}"; shift 2 ;;
+      --current) shift ;;
+      *) err "Unknown option: $1"; exit 1 ;;
+    esac
+  done
+
+  # Stop exactly one task, sibling tasks and the job/issue untouched.
+  if [ -n "$task_id" ]; then
+    stop_one_task "$task_id"
+    return
+  fi
+
+  # --job <job-id> is an alias for the issue it belongs to - stopping a job
+  # cascades to every task under it (see stop_tasks_for_issue below).
+  if [ -n "$job_id" ]; then
+    target="$(resolve_issue_by_job_id "$job_id")"
+    [ -n "$target" ] || { err "No issue found with job id $job_id"; exit 1; }
+  fi
+
+  if [ "$list" = "true" ]; then
+    [ -n "$target" ] || { err "Missing issue for --list"; exit 1; }
+    local list_issue
+    list_issue="$(slug_from_issue "$target")"
+    log "Ogre runtime files for issue $list_issue (nothing deleted):"
+    list_issue_files "$list_issue"
+    log ""
+    log "To delete all at once: ogre stop $list_issue --delete"
+    log "To delete one at a time: rm -rf <path> for whichever of the above the user picks"
+    return
+  fi
+
+  if [ "$all" = "true" ]; then
+    for spath in "$RUNTIME"/state/issue-*.json; do
+      [ -f "$spath" ] || continue
+      local fissue
+      fissue="$(basename "$spath")"; fissue="${fissue#issue-}"; fissue="${fissue%.json}"
+      stop_tasks_for_issue "$fissue"
+      python3 - "$spath" <<'PY' || true
+import json, sys, datetime
+p=sys.argv[1]
+d=json.load(open(p))
+d['status']='stopped'
+d['active_task']=None
+d['updated_at']=datetime.datetime.now().astimezone().isoformat()
+json.dump(d, open(p,'w'), indent=2)
+PY
+    done
+    log "Marked all Ogre issues (jobs) as stopped. Any running tasks were signaled to stop. Runtime files kept."
+    exit 0
+  fi
+
+  [ -n "$target" ] || { err "Missing issue for stop, or use --all"; exit 1; }
+  local issue
+  issue="$(slug_from_issue "$target")"
+
+  if [ "$delete" = "true" ]; then
+    printf 'Delete all Ogre data for issue %s? This will not revert code. Type yes: ' "$issue"
+    read -r ans || true
+    [ "$ans" = "yes" ] || { log "Cancelled."; exit 0; }
+    delete_issue_data "$issue"
+    exit 0
+  fi
+
+  if [ "$archive" = "true" ]; then
+    archive_issue "$issue"
+    exit 0
+  fi
+
+  local spath
+  spath="$(state_path "$issue")"
+  if [ -f "$spath" ]; then
+    stop_tasks_for_issue "$issue"
+    python3 - "$spath" <<'PY' || true
+import json, sys, datetime
+p=sys.argv[1]
+d=json.load(open(p))
+d['status']='stopped'
+d['active_task']=None
+d['updated_at']=datetime.datetime.now().astimezone().isoformat()
+json.dump(d, open(p,'w'), indent=2)
+PY
+    log "Issue (job) $issue marked as stopped. Any running task was signaled to stop. Files kept. Code changes not reverted."
+  else
+    err "No state found for issue $issue"
+    exit 1
+  fi
+}
+
+main() {
+  local cmd="${1:-}"
+  shift || true
+  case "$cmd" in
+    init) cmd_init "$@" ;;
+    feature) cmd_feature "$@" ;;
+    add-blocker) cmd_add_blocker "$@" ;;
+    review-plan) cmd_review_plan "$@" ;;
+    execute) cmd_execute "$@" ;;
+    status) cmd_status "$@" ;;
+    task-list) cmd_task_list "$@" ;;
+    task-complete) cmd_task_complete "$@" ;;
+    stop) cmd_stop "$@" ;;
+    -h|--help|help|"") usage ;;
+    *) err "Unknown command: $cmd"; usage; exit 1 ;;
+  esac
+}
+
+main "$@"

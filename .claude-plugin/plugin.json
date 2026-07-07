@@ -1,0 +1,9 @@
+{
+  "name": "ogre",
+  "version": "1.0.0",
+  "description": "Issue-to-plan-to-execution workflow helper for Claude Code + Codex with runtime state under .ai/.ogre.",
+  "author": {
+    "name": "Norlihazmey Ghazali",
+    "email": "norlihazmey.ghazali@gmail.com"
+  }
+}

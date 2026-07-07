@@ -1,0 +1,20 @@
+{
+  "name": "ogre-runner",
+  "description": "Marketplace for the Ogre plugin: issue-to-plan-to-execution workflow helper for Claude Code + Codex.",
+  "owner": {
+    "name": "Norlihazmey Ghazali",
+    "email": "norlihazmey.ghazali@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "ogre",
+      "source": "./",
+      "description": "Issue-to-plan-to-execution workflow helper for Claude Code + Codex with runtime state under .ai/.ogre.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Norlihazmey Ghazali",
+        "email": "norlihazmey.ghazali@gmail.com"
+      }
+    }
+  ]
+}

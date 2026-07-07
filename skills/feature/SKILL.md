@@ -1,0 +1,70 @@
+---
+name: feature
+description: Start an Ogre issue workflow: fetch issue/blockers into .ai/.ogre, create a planning runner prompt, and generate a compact execution plan.
+---
+
+# /ogre:feature
+
+Use this skill when the user wants to start planning for a GitHub issue, a local issue file, or a feature they describe in their own words (no issue required).
+
+## Inputs
+
+Accept any of these:
+
+- Issue number, e.g. `107`
+- GitHub issue URL
+- Local issue file path
+- Freeform feature statement (no issue) via `--statement "..."`
+
+If the user hasn't given an issue and hasn't said what to build, ask: "Do you have an issue number/URL, or do you want to just describe the feature?" Then pass whichever they give as the positional arg or as `--statement`.
+
+Optional flags:
+
+- `--blocks 101,102`
+- `--plan issue-107.md`
+- `--planner claude|codex`
+- `--model MODEL`
+- `--statement "free text description of the feature"` (use instead of an issue)
+- `--name my-feature` (slug for runtime paths when using `--statement`; default: first ~4 words of the statement + a short uuid suffix, e.g. "need to implement forgot password page" -> `need-to-implement-a1b2c3d4` — the suffix keeps it unique and ties the slug to that specific plan .md even if two features start with similar wording)
+
+## Behavior
+
+1. Run the Ogre helper from the plugin:
+   - `scripts/ogre feature <issue> [flags]`
+   - or `scripts/ogre feature --statement "..." [--name my-feature] [flags]`
+   - When `--statement` is used, the helper writes the statement verbatim into `.ai/.ogre/issues/issue-<name>.md` instead of fetching from GitHub. Everything downstream (plan runner, plan, state) works the same either way.
+2. The helper will create or update:
+   - `.ai/.ogre/issues/`
+   - `.ai/.ogre/plans/`
+   - `.ai/.ogre/logs/`
+   - `.ai/.ogre/state/`
+   - `.ai/.ogre/tmp/`
+   - `.ai/.ogre/prompts/`
+   - It also prints a **Job Summary** (Job Id, Issue, Status, Plan path, Commands) right after creation. Show this block **verbatim in a code block, one field per line** — do not paraphrase it into a sentence like "New job: \<slug\>" and do not drop fields (job_id and Plan path in particular must always be visible). At this point the plan doesn't exist yet, so Review/Execute are correctly absent from the command list; that's expected, not a bug.
+3. Read the generated planning runner:
+   - `.ai/.ogre/tmp/issue-<number>/plan-runner.md`
+4. Create the plan exactly as requested by that runner.
+   - If `--planner codex` and Codex has no repo access of its own, you may need to assemble the template + issue + repo context into one prompt and pipe it into `codex exec -` yourself. Do this **without writing the assembled prompt to disk first** — pipe it straight through, e.g. `{ cat .ai/.ogre/prompts/execution-blueprint-prompt.md; echo; cat .ai/.ogre/issues/issue-<n>.md; } | codex exec -`. Don't create extra files like `codex-plan-input.md`/`codex-raw-output.txt` under `.ai/.ogre/tmp/` — only `plan-runner.md` belongs there.
+5. Write the final plan to:
+   - `.ai/.ogre/plans/issue-<number>.md` or the custom plan path.
+6. Do not implement code.
+7. Do not modify application files.
+
+## Existing Issue Behavior
+
+If the plan already exists, the helper asks the user to choose:
+
+1. Continue existing work
+2. Replace plan only
+3. Archive existing and create new
+4. Delete all Ogre data for this issue and start fresh
+5. Cancel
+
+Default to continue existing work unless the user explicitly chooses otherwise.
+
+## Guardrails
+
+- Use `repo_map.md` only for orientation.
+- Do not invent files/classes/routes/tables/columns/methods/config keys/APIs.
+- Mark unverified symbols as `NEEDS INSPECTION`.
+- Keep the plan compact for execution handoff.

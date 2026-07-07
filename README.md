@@ -1,43 +1,43 @@
 # Ogre
 
-**A Claude Code plugin that turns "implement this feature" into a controlled, resumable, context-safe pipeline — plan it, review it, execute it one step at a time, with Claude or Codex doing the work.**
+**A Claude Code plugin that turns "implement this feature" into a controlled, resumable, context-safe pipeline: plan it, review it, execute it one step at a time, with Claude or Codex doing the work.**
 
 ## The problem
 
 Ask Claude Code to implement a non-trivial feature directly in one long chat session, and a few things tend to go wrong:
 
 - **Context rot.** A multi-file feature fills the session with diffs, tool output, and back-and-forth. By step 6, earlier decisions get lost and quality degrades as the context window fills up.
-- **No review gate.** Claude jumps straight from "I understand the issue" to editing files — hallucinated methods, invented config keys, and over-scoped changes only surface after the fact.
+- **No review gate.** Claude jumps straight from "I understand the issue" to editing files. Hallucinated methods, invented config keys, and over-scoped changes only surface after the fact.
 - **No persistent state.** If the session crashes, gets compacted, or you close the laptop mid-feature, you're reconstructing "what did we actually finish?" from `git diff` and memory.
 - **Execution and orchestration share one context.** Every file read, every failed attempt, every clarifying question from *implementing* a step pollutes the same context you need for *deciding what to do next*.
-- **Mid-flight blockers break the flow.** Three steps into a plan you realize you forgot a requirement — usually means re-explaining everything and hoping Claude doesn't restart from scratch.
+- **Mid-flight blockers break the flow.** Three steps into a plan you realize you forgot a requirement. That usually means re-explaining everything and hoping Claude doesn't restart from scratch.
 
 ## What Ogre does about it
 
 Ogre externalizes the workflow to disk (`.ai/.ogre/`) and gives you commands that map to distinct phases: **feature → review-plan → execute → status → stop**, plus **add-blocker** for the "wait, I forgot something" case.
 
-1. **`/ogre:feature`** — turns a GitHub issue, a GitLab/Bitbucket/Jira/self-hosted link, a local `.md`/`.txt`/`.docx` file, or a sentence you type (`--statement "..."`) into a written plan. No GitHub required.
-2. **`/ogre:review-plan`** — a second LLM pass reads the plan against the real repo *before any code changes*, hunting specifically for hallucinated files/APIs, missing validation, and over-scoped steps.
-3. **`/ogre:execute`** — runs **one checklist item at a time**, each in its own fresh, isolated Codex or Claude session. The main Claude Code conversation never sees the implementation noise — it spawns the session, waits, and gets back a pass/fail plus a short report.
-4. **`/ogre:status`** / **`/ogre:task-list`** — read progress straight off disk (`.ai/.ogre/state/`), so "what's done" is a file, not a memory.
-5. **`/ogre:add-blocker`** — bolts on a newly-discovered requirement mid-flight; the plan is revised in place instead of restarted.
-6. **`/ogre:stop`** — pauses, archives, or deletes the runtime data for an issue, without touching code changes already made.
+1. **`/ogre:feature`**: turns a GitHub issue, a GitLab/Bitbucket/Jira/self-hosted link, a local `.md`/`.txt`/`.docx` file, or a sentence you type (`--statement "..."`) into a written plan. No GitHub required.
+2. **`/ogre:review-plan`**: a second LLM pass reads the plan against the real repo *before any code changes*, hunting specifically for hallucinated files/APIs, missing validation, and over-scoped steps.
+3. **`/ogre:execute`**: runs **one checklist item at a time**, each in its own fresh, isolated Codex or Claude session. The main Claude Code conversation never sees the implementation noise. It spawns the session, waits, and gets back a pass/fail plus a short report.
+4. **`/ogre:status`** / **`/ogre:task-list`**: read progress straight off disk (`.ai/.ogre/state/`), so "what's done" is a file, not a memory.
+5. **`/ogre:add-blocker`**: bolts on a newly-discovered requirement mid-flight; the plan is revised in place instead of restarted.
+6. **`/ogre:stop`**: pauses, archives, or deletes the runtime data for an issue, without touching code changes already made.
 
 ## Real use case
 
-You're working solo (or with a small team) in Claude Code. There's a backlog item — "add a forgot-password page" — meaty enough to touch 3-4 files, but not complex enough to deserve a design doc. You don't want to babysit it token-by-token, and you don't want one mega-session that degrades halfway through.
+You're working solo (or with a small team) in Claude Code. There's a backlog item, "add a forgot-password page," meaty enough to touch 3-4 files but not complex enough to deserve a design doc. You don't want to babysit it token-by-token, and you don't want one mega-session that degrades halfway through.
 
 ```
 /ogre:feature --statement "need to implement forgot password page" --name forgot-password
 ```
 
-Ogre writes the statement to disk, generates a plan, and reviews it against the actual codebase — catching, say, a step that assumed a `PasswordResetToken` model that doesn't exist. You fix the plan, approve it, then:
+Ogre writes the statement to disk, generates a plan, and reviews it against the actual codebase, catching, say, a step that assumed a `PasswordResetToken` model that doesn't exist. You fix the plan, approve it, then:
 
 ```
 /ogre:execute forgot-password --executor codex
 ```
 
-This spawns a brand-new Codex session with *only* the current checklist item and the relevant repo context. It edits the files, validates its own work, reports pass/fail, and exits. Your main Claude Code session's context usage barely moved — it saw a summary, not a transcript. Run the same command again for the next step. Check `/ogre:status forgot-password` any time, from a completely fresh session if you want — it's reading files off disk, not conversation memory.
+This spawns a brand-new Codex session with *only* the current checklist item and the relevant repo context. It edits the files, validates its own work, reports pass/fail, and exits. Your main Claude Code session's context usage barely moved: it saw a summary, not a transcript. Run the same command again for the next step. Check `/ogre:status forgot-password` any time, from a completely fresh session if you want, since it's reading files off disk, not conversation memory.
 
 Halfway through, you realize you also need to invalidate old reset tokens:
 
@@ -45,15 +45,15 @@ Halfway through, you realize you also need to invalidate old reset tokens:
 /ogre:add-blocker forgot-password --statement "must also invalidate old reset tokens"
 ```
 
-The plan is revised in place — no restart.
+The plan is revised in place. No restart.
 
 ## Claude → Codex, or Claude → Claude
 
-Ogre doesn't care which LLM CLI does the planning versus the execution — `--planner`/`--reviewer`/`--executor` each independently accept `claude` or `codex`. Common splits:
+Ogre doesn't care which LLM CLI does the planning versus the execution: `--planner`/`--reviewer`/`--executor` each independently accept `claude` or `codex`. Common splits:
 
-- **Claude plans and reviews, Codex executes** (`--executor codex`) — Claude's reasoning for the plan/review gate, Codex for the actual file edits.
-- **Claude does everything** (`--executor claude`) — every step still gets a fresh, isolated Claude session, so context isolation applies even without Codex in the loop.
-- **Inline, no subprocess** (`--main`) — for a step trivial enough that spawning a new session is overkill; explicitly opt-in only, since it's the one mode that *does* spend main-session context.
+- **Claude plans and reviews, Codex executes** (`--executor codex`): Claude's reasoning for the plan/review gate, Codex for the actual file edits.
+- **Claude does everything** (`--executor claude`): every step still gets a fresh, isolated Claude session, so context isolation applies even without Codex in the loop.
+- **Inline, no subprocess** (`--main`): for a step trivial enough that spawning a new session is overkill. Explicitly opt-in only, since it's the one mode that *does* spend main-session context.
 
 Either way, every `--run`/`--background` execution records the underlying CLI's own session id, so you can drop into that exact session yourself afterward (`claude --resume <id>` / `codex resume <id>`) if you want to look closer or take over manually.
 
@@ -94,12 +94,12 @@ flowchart LR
 
 ## Why this helps
 
-- **Main session stays clean.** Implementation noise lives in a subprocess's own context, not yours — keep planning/reviewing other work in the same conversation without it degrading.
-- **Nothing lives only in a chat.** Plans, state, logs, and reviews are files under `.ai/.ogre/` — survive a crash, a `/clear`, a restart, or a different agent picking up where you left off.
-- **A review gate before code exists.** Catches hallucinated files/APIs and over-scoped work while it's still cheap to fix — a paragraph edit, not a revert.
+- **Main session stays clean.** Implementation noise lives in a subprocess's own context, not yours. Keep planning/reviewing other work in the same conversation without it degrading.
+- **Nothing lives only in a chat.** Plans, state, logs, and reviews are files under `.ai/.ogre/`: they survive a crash, a `/clear`, a restart, or a different agent picking up where you left off.
+- **A review gate before code exists.** Catches hallucinated files/APIs and over-scoped work while it's still cheap to fix: a paragraph edit, not a revert.
 - **Small, auditable diffs.** One checklist item per execution means one small, reviewable change, not a 40-file drop reviewed cold.
 - **Executor-agnostic.** Mix Claude and Codex per job, or per step, based on what each is better at for that piece of work.
-- **Works without GitHub.** Freeform `--statement`, issue links from GitLab/Bitbucket/self-hosted trackers, or local `.md`/`.txt`/`.docx` files — GitHub is one option, not a requirement.
+- **Works without GitHub.** Freeform `--statement`, issue links from GitLab/Bitbucket/self-hosted trackers, or local `.md`/`.txt`/`.docx` files. GitHub is one option, not a requirement.
 - **Resumable natively.** Every executed step records the underlying CLI's real session id, so you're never locked into Ogre's own interface if you want to go hands-on.
 
 ## Runtime Folder
@@ -153,9 +153,9 @@ Starts a new issue workflow: fetch (or write) the issue, generate the planning r
 
 | Option | Example | Description |
 | :--- | :--- | :--- |
-| `<issue>` (positional) | `ogre feature 107` | GitHub issue number (GitHub-only — resolved via `gh` + this project's git remote) |
+| `<issue>` (positional) | `ogre feature 107` | GitHub issue number (GitHub-only, resolved via `gh` + this project's git remote) |
 | `<issue>` (positional) | `ogre feature https://github.com/acme/app/issues/107` | Full GitHub issue URL |
-| `<issue>` (positional) | `ogre feature https://gitlab.com/acme/app/-/issues/9` | Any non-GitHub issue/page URL (GitLab, self-hosted GitLab, Bitbucket, Jira, etc.) — fetched generically as page text, not via an API |
+| `<issue>` (positional) | `ogre feature https://gitlab.com/acme/app/-/issues/9` | Any non-GitHub issue/page URL (GitLab, self-hosted GitLab, Bitbucket, Jira, etc.), fetched generically as page text, not via an API |
 | `<issue>` (positional) | `ogre feature ./notes/bug-report.md` | Local file path (`.md`, `.txt` copied verbatim; `.docx` text-extracted) |
 | `--statement "..."` | `ogre feature --statement "need a forgot-password page"` | Freeform feature text, no issue needed at all |
 | `--name NAME` | `ogre feature --statement "..." --name forgot-password` | Slug for runtime paths when using `--statement` (default: first ~4 words + short uuid) |
@@ -166,20 +166,20 @@ Starts a new issue workflow: fetch (or write) the issue, generate the planning r
 
 ### `ogre add-blocker`
 
-Attaches a new blocker to an issue already tracked by Ogre, and forces the plan to be revised. Refuses once execution has started (use `--force` to override — manual-risk, already-completed steps aren't retroactively revised).
+Attaches a new blocker to an issue already tracked by Ogre, and forces the plan to be revised. Refuses once execution has started (use `--force` to override; manual risk, since already-completed steps aren't retroactively revised).
 
 Accepts the same input types as `ogre feature` for the blocker itself:
 
 | Option | Example | Description |
 | :--- | :--- | :--- |
 | `<issue>` (positional, required) | `ogre add-blocker 107 ...` | The already-tracked issue to attach the blocker to |
-| `<blocker>` (positional) | `ogre add-blocker 107 108` | GitHub issue number (GitHub-only — resolved via `gh` + this project's git remote) |
+| `<blocker>` (positional) | `ogre add-blocker 107 108` | GitHub issue number (GitHub-only, resolved via `gh` + this project's git remote) |
 | `<blocker>` (positional) | `ogre add-blocker 107 https://github.com/acme/app/issues/108` | Full GitHub issue URL |
-| `<blocker>` (positional) | `ogre add-blocker 107 https://gitlab.com/acme/app/-/issues/9` | Any non-GitHub issue/page URL (GitLab, self-hosted GitLab, Bitbucket, Jira, etc.) — fetched generically as page text |
+| `<blocker>` (positional) | `ogre add-blocker 107 https://gitlab.com/acme/app/-/issues/9` | Any non-GitHub issue/page URL (GitLab, self-hosted GitLab, Bitbucket, Jira, etc.), fetched generically as page text |
 | `<blocker>` (positional) | `ogre add-blocker 107 ./notes/blocker.docx` | Local file path (`.md`, `.txt` copied verbatim; `.docx` text-extracted) |
 | `--statement "..."` | `ogre add-blocker 107 --statement "must invalidate old tokens"` | Freeform blocker text instead of an issue/URL/path |
 | `--name SLUG` | `ogre add-blocker 107 --statement "..." --name invalidate-tokens` | Slug for the blocker's file, only used with `--statement` |
-| `--force` | `ogre add-blocker 107 108 --force` | Override the "execution already started" refusal (skips retroactive revision of completed steps — surface this warning to the user, never pass silently) |
+| `--force` | `ogre add-blocker 107 108 --force` | Override the "execution already started" refusal (skips retroactive revision of completed steps; surface this warning to the user, never pass silently) |
 
 ### `ogre review-plan`
 
@@ -206,9 +206,9 @@ Executes one checklist item (or all remaining, with `--all`) from an approved pl
 | `--all` | `ogre execute 107 --all` | Chain through every remaining step, each session self-assessing context budget and handing off when ~50%+ used |
 | `--fresh` | `ogre execute 107 --fresh` | Force a brand-new context for this step (default) |
 | `--resume` | `ogre execute 107 --resume` | Resume prior context for this step instead of starting fresh |
-| `--main` | `ogre execute 107 --main` | Run inline in the current Claude Code session, no subprocess spawned — use only when explicitly requested, defeats Ogre's context-isolation purpose if habitual |
+| `--main` | `ogre execute 107 --main` | Run inline in the current Claude Code session, no subprocess spawned. Use only when explicitly requested; defeats Ogre's context-isolation purpose if habitual |
 | `--background` | `ogre execute 107 --background` | Same isolation as default (new session) but detached/non-blocking |
-| `--yes` | `ogre execute 107 --yes` | Required to proceed non-interactively when the step/job was previously `stopped`, or jumping to an out-of-order step whose earlier steps aren't `passed` — only pass after explicit user confirmation |
+| `--yes` | `ogre execute 107 --yes` | Required to proceed non-interactively when the step/job was previously `stopped`, or jumping to an out-of-order step whose earlier steps aren't `passed`. Only pass after explicit user confirmation |
 
 Default with no isolation flag: foreground, brand-new codex/claude session, targeting the lowest-numbered pending step.
 
@@ -235,7 +235,7 @@ Lists every checklist step under one job, one row per step (including steps neve
 
 ### `ogre task-complete`
 
-Manually marks a task's ledger status. Only needed when the executing agent did the work directly (not via `--run`/`--background`, which mark it automatically) — this is the mandatory last step in that case.
+Manually marks a task's ledger status. Only needed when the executing agent did the work directly (not via `--run`/`--background`, which mark it automatically); this is the mandatory last step in that case.
 
 | Option | Example | Description |
 | :--- | :--- | :--- |
@@ -251,7 +251,7 @@ Stops, archives, or deletes Ogre runtime data. Does not revert code changes.
 | :--- | :--- | :--- |
 | `[issue]` (positional, optional) | `ogre stop 107` | Stop the job: cascades to all its tasks (kills running pids, marks pending/running `stopped`) |
 | `--job JOB_ID` | `ogre stop --job job-6d7715e4-...` | Same, addressed by job id |
-| `--task TASK_ID` | `ogre stop --task task-0f32a78f-...` | Stop ONE task only — sibling tasks and job/issue state untouched |
+| `--task TASK_ID` | `ogre stop --task task-0f32a78f-...` | Stop ONE task only; sibling tasks and job/issue state untouched |
 | `--all` | `ogre stop --all` | Stop every tracked job (cascades to all their tasks) |
 | `--archive` | `ogre stop 107 --archive` | Move the issue's runtime data to `.ai/.ogre/archive/issue-<n>-<timestamp>/` |
 | `--delete` | `ogre stop 107 --delete` | Delete the issue's runtime data (after confirmation) |
@@ -295,7 +295,7 @@ If `codex` is missing, `/ogre:execute --executor codex --run` will fail, but you
 
 ## Recommended Workflow
 
-**Main use case: freeform text — no GitHub issue required.** Just describe the feature in your own words:
+**Main use case: freeform text, no GitHub issue required.** Just describe the feature in your own words:
 
 ```txt
 /ogre:feature --statement "need to implement forgot password page" --name forgot-password

@@ -1,20 +1,106 @@
-# Ogre Plugin Scaffold
+# Ogre
 
-Ogre is a Claude Code plugin scaffold for a controlled AI coding workflow:
+**A Claude Code plugin that turns "implement this feature" into a controlled, resumable, context-safe pipeline — plan it, review it, execute it one step at a time, with Claude or Codex doing the work.**
 
-1. Fetch GitHub issue(s) into `.ai/.ogre/issues/`
-2. Create an execution blueprint plan in `.ai/.ogre/plans/`
-3. Review the plan before coding
-4. Execute the plan one checklist item at a time
-5. Store progress in `.ai/.ogre/state/`
-6. Keep logs/reviews/tmp files under `.ai/.ogre/`
+## The problem
 
-This scaffold is designed for:
+Ask Claude Code to implement a non-trivial feature directly in one long chat session, and a few things tend to go wrong:
 
-- Claude Code planning
-- Codex execution via Codex CLI or `codex-plugin-cc`
-- Optional Claude execution
-- Fresh execution context per checklist item
+- **Context rot.** A multi-file feature fills the session with diffs, tool output, and back-and-forth. By step 6, earlier decisions get lost and quality degrades as the context window fills up.
+- **No review gate.** Claude jumps straight from "I understand the issue" to editing files — hallucinated methods, invented config keys, and over-scoped changes only surface after the fact.
+- **No persistent state.** If the session crashes, gets compacted, or you close the laptop mid-feature, you're reconstructing "what did we actually finish?" from `git diff` and memory.
+- **Execution and orchestration share one context.** Every file read, every failed attempt, every clarifying question from *implementing* a step pollutes the same context you need for *deciding what to do next*.
+- **Mid-flight blockers break the flow.** Three steps into a plan you realize you forgot a requirement — usually means re-explaining everything and hoping Claude doesn't restart from scratch.
+
+## What Ogre does about it
+
+Ogre externalizes the workflow to disk (`.ai/.ogre/`) and gives you commands that map to distinct phases: **feature → review-plan → execute → status → stop**, plus **add-blocker** for the "wait, I forgot something" case.
+
+1. **`/ogre:feature`** — turns a GitHub issue, a GitLab/Bitbucket/Jira/self-hosted link, a local `.md`/`.txt`/`.docx` file, or a sentence you type (`--statement "..."`) into a written plan. No GitHub required.
+2. **`/ogre:review-plan`** — a second LLM pass reads the plan against the real repo *before any code changes*, hunting specifically for hallucinated files/APIs, missing validation, and over-scoped steps.
+3. **`/ogre:execute`** — runs **one checklist item at a time**, each in its own fresh, isolated Codex or Claude session. The main Claude Code conversation never sees the implementation noise — it spawns the session, waits, and gets back a pass/fail plus a short report.
+4. **`/ogre:status`** / **`/ogre:task-list`** — read progress straight off disk (`.ai/.ogre/state/`), so "what's done" is a file, not a memory.
+5. **`/ogre:add-blocker`** — bolts on a newly-discovered requirement mid-flight; the plan is revised in place instead of restarted.
+6. **`/ogre:stop`** — pauses, archives, or deletes the runtime data for an issue, without touching code changes already made.
+
+## Real use case
+
+You're working solo (or with a small team) in Claude Code. There's a backlog item — "add a forgot-password page" — meaty enough to touch 3-4 files, but not complex enough to deserve a design doc. You don't want to babysit it token-by-token, and you don't want one mega-session that degrades halfway through.
+
+```
+/ogre:feature --statement "need to implement forgot password page" --name forgot-password
+```
+
+Ogre writes the statement to disk, generates a plan, and reviews it against the actual codebase — catching, say, a step that assumed a `PasswordResetToken` model that doesn't exist. You fix the plan, approve it, then:
+
+```
+/ogre:execute forgot-password --executor codex
+```
+
+This spawns a brand-new Codex session with *only* the current checklist item and the relevant repo context. It edits the files, validates its own work, reports pass/fail, and exits. Your main Claude Code session's context usage barely moved — it saw a summary, not a transcript. Run the same command again for the next step. Check `/ogre:status forgot-password` any time, from a completely fresh session if you want — it's reading files off disk, not conversation memory.
+
+Halfway through, you realize you also need to invalidate old reset tokens:
+
+```
+/ogre:add-blocker forgot-password --statement "must also invalidate old reset tokens"
+```
+
+The plan is revised in place — no restart.
+
+## Claude → Codex, or Claude → Claude
+
+Ogre doesn't care which LLM CLI does the planning versus the execution — `--planner`/`--reviewer`/`--executor` each independently accept `claude` or `codex`. Common splits:
+
+- **Claude plans and reviews, Codex executes** (`--executor codex`) — Claude's reasoning for the plan/review gate, Codex for the actual file edits.
+- **Claude does everything** (`--executor claude`) — every step still gets a fresh, isolated Claude session, so context isolation applies even without Codex in the loop.
+- **Inline, no subprocess** (`--main`) — for a step trivial enough that spawning a new session is overkill; explicitly opt-in only, since it's the one mode that *does* spend main-session context.
+
+Either way, every `--run`/`--background` execution records the underlying CLI's own session id, so you can drop into that exact session yourself afterward (`claude --resume <id>` / `codex resume <id>`) if you want to look closer or take over manually.
+
+## How it works
+
+```mermaid
+flowchart TD
+    A["/ogre:feature<br/>issue #, URL, .docx/.md/.txt, or --statement"] --> B["Plan written<br/>.ai/.ogre/plans/issue-N.md"]
+    B --> C["/ogre:review-plan<br/>catches hallucinated files/APIs,<br/>missing validation, over-scoping"]
+    C -->|plan needs a fix| B
+    C -->|approved| D["/ogre:execute<br/>one checklist item,<br/>fresh isolated session"]
+    D -->|passed, steps remain| D
+    D -->|blocker discovered| E["/ogre:add-blocker<br/>revises plan in place"]
+    E --> B
+    D -->|all steps passed| F["/ogre:status<br/>completed"]
+    D -->|failed| G["Fix manually, or add-blocker"]
+    F --> H["/ogre:stop --archive / --delete<br/>runtime cleanup, code untouched"]
+```
+
+The isolation boundary that makes this useful:
+
+```mermaid
+flowchart LR
+    subgraph Main["Your Claude Code session (orchestrator)"]
+        M1["/ogre:execute 107"]
+        M2["sees: pass/fail + short report"]
+    end
+    subgraph Sub["Fresh session, spawned per step (Codex or Claude)"]
+        S1["reads plan-runner.md"]
+        S2["edits files, validates"]
+        S3["ogre task-complete --status passed/failed"]
+    end
+    M1 -->|spawns, blocks until done| S1
+    S1 --> S2 --> S3
+    S3 -->|ledger written to disk| M2
+    Mon["background monitor<br/>(tails execute logs)"] -.->|live notification,<br/>no polling needed| Main
+```
+
+## Why this helps
+
+- **Main session stays clean.** Implementation noise lives in a subprocess's own context, not yours — keep planning/reviewing other work in the same conversation without it degrading.
+- **Nothing lives only in a chat.** Plans, state, logs, and reviews are files under `.ai/.ogre/` — survive a crash, a `/clear`, a restart, or a different agent picking up where you left off.
+- **A review gate before code exists.** Catches hallucinated files/APIs and over-scoped work while it's still cheap to fix — a paragraph edit, not a revert.
+- **Small, auditable diffs.** One checklist item per execution means one small, reviewable change, not a 40-file drop reviewed cold.
+- **Executor-agnostic.** Mix Claude and Codex per job, or per step, based on what each is better at for that piece of work.
+- **Works without GitHub.** Freeform `--statement`, issue links from GitLab/Bitbucket/self-hosted trackers, or local `.md`/`.txt`/`.docx` files — GitHub is one option, not a requirement.
+- **Resumable natively.** Every executed step records the underlying CLI's real session id, so you're never locked into Ogre's own interface if you want to go hands-on.
 
 ## Runtime Folder
 

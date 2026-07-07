@@ -31,7 +31,13 @@ You're working solo (or with a small team) in Claude Code. There's a backlog ite
 /ogre:feature --statement "need to implement forgot password page" --name forgot-password
 ```
 
-Ogre writes the statement to disk, generates a plan, and reviews it against the actual codebase, catching, say, a step that assumed a `PasswordResetToken` model that doesn't exist. You fix the plan, approve it, then:
+Ogre writes the statement to disk and generates a plan. Before any code gets touched, run it past a review pass:
+
+```
+/ogre:review-plan forgot-password --reviewer claude
+```
+
+This is what catches, say, a step that assumed a `PasswordResetToken` model that doesn't exist. You fix the plan, approve it, then:
 
 ```
 /ogre:execute forgot-password --executor codex

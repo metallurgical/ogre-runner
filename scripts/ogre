@@ -259,11 +259,40 @@ gh_view_issue() {
   local input="$1" out="$2"
   # `gh issue view --comments` returns empty stdout when the issue has zero
   # comments (gh quirk) - fall back to plain view (full body, no comments) so
-  # we never silently write an empty issue file.
+  # we never silently write an empty issue file. Both calls are allowed to
+  # fail (wrong host, no auth, no access, script not run inside the repo) -
+  # caller checks the return value and falls back to a placeholder instead
+  # of crashing under `set -e`.
   gh issue view "$input" --comments > "$out" 2>/dev/null || true
   if [ ! -s "$out" ]; then
-    gh issue view "$input" > "$out"
+    gh issue view "$input" > "$out" 2>/dev/null || true
   fi
+  [ -s "$out" ]
+}
+
+# Best-effort fetch for non-GitHub issue/page links (GitLab, self-hosted
+# GitLab, Bitbucket, Jira, or any other web page): no API client, just GET
+# the page and strip HTML down to readable text. Works for public pages
+# that render content server-side; private/JS-only pages will come back
+# empty and the caller falls back to a placeholder.
+fetch_generic_url_text() {
+  local url="$1" out="$2"
+  command -v curl >/dev/null 2>&1 || return 1
+  local html
+  html="$(curl -fsSL --max-time 15 "$url" 2>/dev/null)" || return 1
+  [ -n "$html" ] || return 1
+  printf '%s' "$html" | python3 -c '
+import sys, re, html as htmllib
+data = sys.stdin.read()
+data = re.sub(r"(?is)<(script|style|noscript).*?</\1>", "", data)
+data = re.sub(r"(?s)<!--.*?-->", "", data)
+text = re.sub(r"(?s)<[^>]+>", "\n", data)
+text = htmllib.unescape(text)
+lines = [ln.strip() for ln in text.splitlines()]
+lines = [ln for ln in lines if ln]
+print("\n".join(lines))
+' > "$out" 2>/dev/null || return 1
+  [ -s "$out" ]
 }
 
 # Derive a short readable slug from freeform --statement text (first few
@@ -324,30 +353,86 @@ issue_file_path() {
   echo "$RUNTIME/issues/issue-$n.md"
 }
 
+# .docx is a zip of XML, not plain text - `cp` would dump binary garbage into
+# the issue .md file. zipfile/re/html are stdlib, so no extra dependency
+# beyond the python3 this script already requires elsewhere.
+fetch_docx_text() {
+  local input="$1" out="$2"
+  python3 -c '
+import sys, zipfile, re, html
+path = sys.argv[1]
+try:
+    with zipfile.ZipFile(path) as z:
+        xml = z.read("word/document.xml").decode("utf-8", "ignore")
+except Exception:
+    sys.exit(1)
+xml = re.sub(r"</w:p>", "\n", xml)
+xml = re.sub(r"<w:tab/?>", "\t", xml)
+text = re.sub(r"<[^>]+>", "", xml)
+text = html.unescape(text)
+print("\n".join(ln.rstrip() for ln in text.splitlines()))
+' "$input" > "$out" 2>/dev/null
+  [ -s "$out" ]
+}
+
 fetch_issue() {
   local input="$1"
   local out="$2"
   mkdir -p "$(dirname "$out")"
 
   if [ -f "$input" ]; then
-    cp "$input" "$out"
-    log "Copied issue file: $input -> $out"
+    local ext
+    ext="$(printf '%s' "$input" | sed -E 's/.*\.//' | tr '[:upper:]' '[:lower:]')"
+    if [ "$ext" = "docx" ]; then
+      if fetch_docx_text "$input" "$out"; then
+        log "Extracted text from docx: $input -> $out"
+      else
+        cp "$input" "$out"
+        log "Could not parse docx (unzip/XML read failed) - fell back to raw copy, likely unusable as-is: $input -> $out"
+      fi
+    else
+      # .txt, .md, and anything else already-plain-text: copy verbatim.
+      cp "$input" "$out"
+      log "Copied issue file: $input -> $out"
+    fi
     return
   fi
 
   if [[ "$input" =~ ^https?:// ]]; then
-    if command -v gh >/dev/null 2>&1; then
+    if [[ "$input" =~ ^https?://(www\.)?github\.com/ ]] && command -v gh >/dev/null 2>&1; then
       log "Fetching GitHub issue URL: $input"
-      gh_view_issue "$input" "$out"
+      if gh_view_issue "$input" "$out"; then
+        return
+      fi
+      log "gh could not fetch $input (no access, not authenticated, or bad URL) - falling back to a generic page fetch"
+    fi
+    # Non-GitHub link (GitLab, self-hosted GitLab, Bitbucket, Jira, any other
+    # page), or GitHub link that gh couldn't fetch: no API client for these,
+    # just fetch the page and strip HTML down to text.
+    log "Fetching page content: $input"
+    if fetch_generic_url_text "$input" "$out.body"; then
+      {
+        echo "# Issue Source"
+        echo
+        echo "Original input: $input"
+        echo
+        echo "Fetched generically (non-GitHub link, or GitHub link \`gh\` could not read) - this is raw extracted page text, not a structured issue. Review for accuracy before planning."
+        echo
+        echo "---"
+        echo
+        cat "$out.body"
+      } > "$out"
+      rm -f "$out.body"
+      log "Wrote fetched page text: $out"
     else
       cat > "$out" <<EOF2
 # Issue Source
 
-Could not fetch automatically because GitHub CLI \`gh\` is not installed.
+Could not fetch automatically: $input
 
-Original input: $input
+This is either a non-GitHub link the page could not be reached (network, auth-walled/private, or JS-rendered content with nothing in the raw HTML).
 
-Paste the issue content here before planning.
+Paste the issue/problem/feature statement content here before planning.
 EOF2
       log "Created placeholder issue file: $out"
     fi
@@ -355,19 +440,26 @@ EOF2
   fi
 
   if [[ "$input" =~ ^[0-9]+$ ]]; then
+    # Bare issue numbers are GitHub-only (resolved via gh + the project's git
+    # remote) - GitLab/Bitbucket/etc have no equivalent short form here, paste
+    # the full issue URL instead for those.
     if command -v gh >/dev/null 2>&1; then
       log "Fetching GitHub issue #$input"
-      gh_view_issue "$input" "$out"
-    else
-      cat > "$out" <<EOF2
+      if gh_view_issue "$input" "$out"; then
+        return
+      fi
+      log "gh could not fetch issue #$input (not a GitHub repo here, no gh auth, or no access)"
+    fi
+    cat > "$out" <<EOF2
 # GitHub Issue #$input
 
-Could not fetch automatically because GitHub CLI \`gh\` is not installed.
+Could not fetch automatically (gh CLI missing, this directory isn't a GitHub repo, not authenticated, or no access to the issue).
+
+Bare issue numbers only work for GitHub. For GitLab/Bitbucket/self-hosted/etc, paste the full issue URL instead.
 
 Paste the issue content here before planning.
 EOF2
-      log "Created placeholder issue file: $out"
-    fi
+    log "Created placeholder issue file: $out"
     return
   fi
 

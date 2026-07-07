@@ -14,10 +14,10 @@ Ask Claude Code to implement a non-trivial feature directly in one long chat ses
 
 ## What Ogre does about it
 
-Ogre externalizes the workflow to disk (`.ai/.ogre/`) and gives you commands that map to distinct phases: **feature → review-plan → execute → status → stop**, plus **add-blocker** for the "wait, I forgot something" case.
+Ogre keeps the whole workflow on disk (`.ai/.ogre/`) instead of just in the chat, and splits it into distinct phases: **feature → review-plan → execute → status → stop**, plus **add-blocker** for when you forgot something.
 
 1. **`/ogre:feature`**: turns a GitHub issue, a GitLab/Bitbucket/Jira/self-hosted link, a local `.md`/`.txt`/`.docx` file, or a sentence you type (`--statement "..."`) into a written plan. No GitHub required.
-2. **`/ogre:review-plan`**: a second LLM pass reads the plan against the real repo *before any code changes*, hunting specifically for hallucinated files/APIs, missing validation, and over-scoped steps.
+2. **`/ogre:review-plan`**: a second LLM pass checks the plan against the real repo *before any code exists*, looking for made-up files or APIs, missing validation, and steps that have grown too big.
 3. **`/ogre:execute`**: runs **one checklist item at a time**, each in its own fresh, isolated Codex or Claude session. The main Claude Code conversation never sees the implementation noise. It spawns the session, waits, and gets back a pass/fail plus a short report.
 4. **`/ogre:status`** / **`/ogre:task-list`**: read progress straight off disk (`.ai/.ogre/state/`), so "what's done" is a file, not a memory.
 5. **`/ogre:add-blocker`**: bolts on a newly-discovered requirement mid-flight; the plan is revised in place instead of restarted.
@@ -96,11 +96,11 @@ flowchart LR
 
 - **Main session stays clean.** Implementation noise lives in a subprocess's own context, not yours. Keep planning/reviewing other work in the same conversation without it degrading.
 - **Nothing lives only in a chat.** Plans, state, logs, and reviews are files under `.ai/.ogre/`: they survive a crash, a `/clear`, a restart, or a different agent picking up where you left off.
-- **A review gate before code exists.** Catches hallucinated files/APIs and over-scoped work while it's still cheap to fix: a paragraph edit, not a revert.
-- **Small, auditable diffs.** One checklist item per execution means one small, reviewable change, not a 40-file drop reviewed cold.
+- **A review gate before code exists.** A made-up API call or a step that's grown too big gets caught while it's still a one-line fix in the plan, not a revert in the diff.
+- **Small, auditable diffs.** One checklist item per execution means one focused, reviewable change, not a 40-file drop reviewed cold.
 - **Executor-agnostic.** Mix Claude and Codex per job, or per step, based on what each is better at for that piece of work.
 - **Works without GitHub.** Freeform `--statement`, issue links from GitLab/Bitbucket/self-hosted trackers, or local `.md`/`.txt`/`.docx` files. GitHub is one option, not a requirement.
-- **Resumable natively.** Every executed step records the underlying CLI's real session id, so you're never locked into Ogre's own interface if you want to go hands-on.
+- **Resumable natively.** Want to go hands-on? Drop straight into the same Claude or Codex session in your own terminal instead of staying inside Ogre's interface.
 
 ## Runtime Folder
 

@@ -38,9 +38,11 @@ Inside each target project, Ogre creates:
 Expected Claude Code commands:
 
 ```txt
-/ogre:feature
+/ogre:feature       # accepts an issue number/URL/local file, OR a freeform --statement (no issue needed)
 /ogre:review-plan
 /ogre:execute
+/ogre:add-blocker   # attach a new blocker mid-flight (issue or freeform --statement)
+/ogre:task-list     # list every checklist step for a job, one row per step
 /ogre:stop
 /ogre:status
 ```
@@ -89,6 +91,29 @@ If `codex` is missing, `/ogre:execute --executor codex --run` will fail, but you
 
 ## Recommended Workflow
 
+**Main use case: freeform text — no GitHub issue required.** Just describe the feature in your own words:
+
+```txt
+/ogre:feature --statement "need to implement forgot password page" --name forgot-password
+# Ogre writes the statement verbatim to .ai/.ogre/issues/issue-forgot-password.md
+# and plans/executes it exactly like a real issue from here on
+
+# Review and edit .ai/.ogre/plans/issue-forgot-password.md
+
+/ogre:review-plan forgot-password --reviewer claude
+# Fix plan comments manually until approved
+
+/ogre:execute forgot-password --executor codex
+# Executes next checklist item only
+
+/ogre:execute forgot-password --executor codex
+# Next checklist item
+
+/ogre:status forgot-password
+```
+
+A GitHub issue number/URL/local file works the same way, as an alternative input:
+
 ```txt
 /ogre:feature 107 --blocks 101,102
 # Review and edit .ai/.ogre/plans/issue-107.md
@@ -105,6 +130,22 @@ If `codex` is missing, `/ogre:execute --executor codex --run` will fail, but you
 /ogre:status 107
 ```
 
+Add a blocker discovered mid-flight (freeform or issue-based, same either way):
+
+```txt
+/ogre:add-blocker forgot-password --statement "must also invalidate old reset tokens" --name invalidate-tokens
+# Plan is revised in place to account for the new blocker
+# Refuses if execution already started for this issue - use /ogre:stop first, or --force to override (manual-risk)
+```
+
+See every checklist step for a job at once:
+
+```txt
+/ogre:task-list job-<uuid>
+# One row per step: #, Task Id, Status, Executor, Step
+# Get the job id from `Job Id` in /ogre:status <issue> output
+```
+
 ## Direct CLI Usage
 
 Create runtime folders and copy templates:
@@ -117,6 +158,24 @@ Fetch issues and generate planning runner:
 
 ```bash
 scripts/ogre feature 107 --blocks 101,102
+```
+
+Or skip the issue entirely and describe the feature in your own words:
+
+```bash
+scripts/ogre feature --statement "need to implement forgot password page" --name forgot-password
+```
+
+Add a blocker to an in-flight issue (freeform or issue-based):
+
+```bash
+scripts/ogre add-blocker 107 --statement "must also invalidate old reset tokens" --name invalidate-tokens
+```
+
+List every checklist step for a job:
+
+```bash
+scripts/ogre task-list job-<uuid>
 ```
 
 Generate review runner:

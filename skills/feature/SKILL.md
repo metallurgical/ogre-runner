@@ -47,8 +47,9 @@ Optional flags:
    - If `--planner codex` and Codex has no repo access of its own, you may need to assemble the template + issue + repo context into one prompt and pipe it into `codex exec -` yourself. Do this **without writing the assembled prompt to disk first** — pipe it straight through, e.g. `{ cat .ai/.ogre/prompts/execution-blueprint-prompt.md; echo; cat .ai/.ogre/issues/issue-<n>.md; } | codex exec -`. Don't create extra files like `codex-plan-input.md`/`codex-raw-output.txt` under `.ai/.ogre/tmp/` — only `plan-runner.md` belongs there.
 5. Write the final plan to:
    - `.ai/.ogre/plans/issue-<number>.md` or the custom plan path.
-6. Do not implement code.
-7. Do not modify application files.
+6. Run `scripts/ogre status <issue>` and show that Job Summary again, same format as step 2 (verbatim code block, one field per line). The plan now exists, so this second summary will differ from the first: `Plan` drops `(not written yet)`, `Steps Completed/Remaining/Total` are populated, `Review plan`/`Execute next` rows appear, and a `Steps (N):` checklist table is printed below it. Don't skip this just because you already showed a summary in step 2 — that one was necessarily incomplete.
+7. Do not implement code.
+8. Do not modify application files.
 
 ## Existing Issue Behavior
 

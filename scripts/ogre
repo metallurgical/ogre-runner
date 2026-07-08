@@ -476,6 +476,40 @@ EOF2
   log "Created placeholder issue file: $out"
 }
 
+# Prepend a user-supplied remark to a blocker's issue file so the remark
+# (e.g. "PR merged", "under review") travels inline with the content the
+# planner reads. No-op when the remark is empty or the file is missing.
+# fetch_issue always rewrites the file fresh before this runs, so re-adding a
+# blocker can't stack duplicate remark headers.
+prepend_blocker_remark() {
+  local bpath="$1" remark="$2"
+  [ -n "$remark" ] || return 0
+  [ -f "$bpath" ] || return 0
+  local tmp
+  tmp="$(mktemp)"
+  {
+    printf '> **Blocker remark (user-provided):** %s\n\n' "$remark"
+    cat "$bpath"
+  } > "$tmp"
+  mv "$tmp" "$bpath"
+}
+
+# Emit a JSON object mapping blocker path -> remark from alternating
+# path/remark argv pairs. Paths whose remark is empty are omitted, so a
+# blocker added without --remarks leaves no key behind.
+blocker_remarks_json() {
+  python3 -c '
+import json, sys
+a = sys.argv[1:]
+d = {}
+for i in range(0, len(a) - 1, 2):
+    p, r = a[i], a[i + 1]
+    if r:
+        d[p] = r
+print(json.dumps(d))
+' "$@"
+}
+
 state_path() {
   local issue="$1"
   echo "$RUNTIME/state/issue-$issue.json"
@@ -484,6 +518,8 @@ state_path() {
 write_state() {
   local issue="$1" status="$2" plan="$3" planner="$4" planner_model="$5" reviewer="$6" reviewer_model="$7" executor="$8" executor_model="$9"
   local blocker_paths_json="${10:-[]}"
+  local blocker_remarks_json="${11:-}"
+  [ -n "$blocker_remarks_json" ] || blocker_remarks_json="{}"
   local path job_id
   path="$(state_path "$issue")"
   job_id="$(new_job_id)"
@@ -498,6 +534,7 @@ write_state() {
   "reviewer": { "provider": "$reviewer", "model": "$reviewer_model" },
   "executor": { "provider": "$executor", "model": "$executor_model" },
   "blocker_paths": $blocker_paths_json,
+  "blocker_remarks": $blocker_remarks_json,
   "completed_steps": [],
   "current_step": null,
   "total_steps": null,
@@ -736,6 +773,16 @@ if steps:
         for t in steps
     ]
     table_cols(["#", "Status", "Task Id", "Step"], step_rows)
+
+blocker_paths = d.get("blocker_paths") or []
+blocker_remarks = d.get("blocker_remarks") or {}
+if blocker_paths:
+    print("Blockers ({}):".format(len(blocker_paths)))
+    blk_rows = [
+        (os.path.basename(bp), short(blocker_remarks.get(bp) or "-", 50))
+        for bp in blocker_paths
+    ]
+    table_cols(["Blocker", "Remark"], blk_rows)
 PY
 }
 
@@ -986,14 +1033,31 @@ cmd_init() {
 
 cmd_feature() {
   ensure_runtime
-  local current="" blocks="" plan_name="" planner="claude" model="sonnet-5" statement="" name=""
+  local current="" plan_name="" planner="claude" model="sonnet-5" statement="" name=""
+  # Blockers are collected as two parallel arrays: block_refs[i] is the
+  # blocker reference, block_remarks[i] its (optional) freeform status remark.
+  # `--blocks a,b` adds refs with no remark; `--blocker REF --remarks TEXT`
+  # attaches a remark to the ref that immediately precedes it.
+  local -a block_refs=() block_remarks=()
   if [ $# -gt 0 ] && [[ "$1" != --* ]]; then
     current="$1"; shift
   fi
 
   while [ $# -gt 0 ]; do
     case "$1" in
-      --blocks) blocks="${2:-}"; shift 2 ;;
+      --blocks)
+        local _ref
+        IFS=',' read -ra _refs <<< "${2:-}"
+        for _ref in "${_refs[@]}"; do
+          _ref="$(echo "$_ref" | xargs)"
+          [ -n "$_ref" ] || continue
+          block_refs+=("$_ref"); block_remarks+=("")
+        done
+        shift 2 ;;
+      --blocker) block_refs+=("${2:-}"); block_remarks+=(""); shift 2 ;;
+      --remarks)
+        [ ${#block_refs[@]} -gt 0 ] || { err "--remarks must follow a --blocker (or --blocks) it annotates"; exit 1; }
+        block_remarks[$((${#block_remarks[@]} - 1))]="${2:-}"; shift 2 ;;
       --plan) plan_name="${2:-}"; shift 2 ;;
       --planner) planner="${2:-claude}"; shift 2 ;;
       --model) model="${2:-}"; shift 2 ;;
@@ -1044,19 +1108,26 @@ EOF2
   fi
 
   blockers_text="none"
-  local bpaths=()
-  if [ -n "$blocks" ] && [ "$blocks" != "none" ]; then
+  local bpaths=() remark_pairs=()
+  if [ ${#block_refs[@]} -gt 0 ]; then
     blockers_text=""
-    IFS=',' read -ra BLOCK_ARR <<< "$blocks"
-    for b in "${BLOCK_ARR[@]}"; do
-      b="$(echo "$b" | xargs)"
+    local _i b rem bpath
+    for _i in "${!block_refs[@]}"; do
+      b="${block_refs[$_i]}"
+      rem="${block_remarks[$_i]}"
       [ -n "$b" ] || continue
-      local bpath
       bpath="$(issue_file_path "$b")"
       fetch_issue "$b" "$bpath" | tee -a "$logdir/feature.log"
+      prepend_blocker_remark "$bpath" "$rem"
       bpaths+=("$bpath")
-      blockers_text="$blockers_text* $bpath
+      remark_pairs+=("$bpath" "$rem")
+      if [ -n "$rem" ]; then
+        blockers_text="$blockers_text* \`$bpath\` — remark: \"$rem\"
 "
+      else
+        blockers_text="$blockers_text* \`$bpath\`
+"
+      fi
     done
   fi
 
@@ -1094,9 +1165,10 @@ $blockers_text
 * Use real issue numbers and issue paths from this runner prompt.
 EOF2
 
-  local blocker_paths_json="[]"
+  local blocker_paths_json="[]" bremarks_json="{}"
   [ ${#bpaths[@]} -gt 0 ] && blocker_paths_json="$(json_array "${bpaths[@]}")"
-  write_state "$issue" "planning" "$plan" "$planner" "$model" "claude" "sonnet-5" "codex" "gpt-5.5" "$blocker_paths_json"
+  [ ${#remark_pairs[@]} -gt 0 ] && bremarks_json="$(blocker_remarks_json "${remark_pairs[@]}")"
+  write_state "$issue" "planning" "$plan" "$planner" "$model" "claude" "sonnet-5" "codex" "gpt-5.5" "$blocker_paths_json" "$bremarks_json"
 
   log ""
   print_job_summary "$issue"
@@ -1116,7 +1188,7 @@ cmd_add_blocker() {
   spath="$(state_path "$issue")"
   [ -f "$spath" ] || { err "No Ogre state found for issue $issue. Run 'ogre feature' first."; exit 1; }
 
-  local blocker="" statement="" name="" force="false"
+  local blocker="" statement="" name="" force="false" remarks=""
   if [ $# -gt 0 ] && [[ "$1" != --* ]]; then
     blocker="$1"; shift
   fi
@@ -1124,6 +1196,7 @@ cmd_add_blocker() {
     case "$1" in
       --statement) statement="${2:-}"; shift 2 ;;
       --name) name="${2:-}"; shift 2 ;;
+      --remarks) remarks="${2:-}"; shift 2 ;;
       --force) force="true"; shift ;;
       *) err "Unknown option: $1"; exit 1 ;;
     esac
@@ -1156,26 +1229,43 @@ EOF2
     bpath="$(issue_file_path "$blocker")"
     fetch_issue "$blocker" "$bpath" | tee -a "$logdir/feature.log"
   fi
+  prepend_blocker_remark "$bpath" "$remarks"
 
-  python3 - "$spath" "$bpath" <<PY
+  python3 - "$spath" "$bpath" "$remarks" <<'PY'
 import json, sys, datetime
-p, bp = "$spath", "$bpath"
+p, bp, remark = sys.argv[1], sys.argv[2], sys.argv[3]
 d = json.load(open(p))
 bl = d.get('blocker_paths') or []
 if bp not in bl:
     bl.append(bp)
 d['blocker_paths'] = bl
+rm = d.get('blocker_remarks') or {}
+if remark:
+    rm[bp] = remark
+d['blocker_remarks'] = rm
 d['status'] = 'planning'
 d['updated_at'] = datetime.datetime.now().astimezone().isoformat()
 json.dump(d, open(p, 'w'), indent=2)
 PY
 
-  local blockers_text=""
-  while IFS= read -r bp; do
+  local blockers_text="" _rem
+  while IFS=$'\t' read -r bp _rem; do
     [ -n "$bp" ] || continue
-    blockers_text="$blockers_text* \`$bp\`
+    if [ -n "$_rem" ]; then
+      blockers_text="$blockers_text* \`$bp\` — remark: \"$_rem\"
 "
-  done < <(python3 -c "import json; print('\n'.join(json.load(open('$spath')).get('blocker_paths') or []))")
+    else
+      blockers_text="$blockers_text* \`$bp\`
+"
+    fi
+  done < <(python3 - "$spath" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+rm = d.get('blocker_remarks') or {}
+for p in (d.get('blocker_paths') or []):
+    print("{}\t{}".format(p, rm.get(p) or ""))
+PY
+)
   [ -n "$blockers_text" ] || blockers_text="none"
 
   runner="$RUNTIME/tmp/issue-$issue/plan-runner.md"

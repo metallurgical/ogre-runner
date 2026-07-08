@@ -76,6 +76,43 @@ load test_helper
   [ "$(python3 -c "import json; print(len(json.load(open('.ai/.ogre/state/issue-42.json'))['blocker_paths']))")" = "2" ]
 }
 
+@test "feature --blocker with --remarks ties the remark to that blocker" {
+  run "${OGRE_BIN}" feature 42 --blocker 10 --remarks "PR under review"
+  [ "${status}" -eq 0 ]
+  # remark stored in state, keyed by the blocker's path
+  local remark
+  remark="$(python3 -c "import json; print(json.load(open('.ai/.ogre/state/issue-42.json')).get('blocker_remarks', {}).get('.ai/.ogre/issues/issue-10.md', ''))")"
+  [ "${remark}" = "PR under review" ]
+  # remark prepended to the blocker's own file
+  [[ "$(head -n1 .ai/.ogre/issues/issue-10.md)" == *"Blocker remark (user-provided): PR under review"* ]]
+  # remark shown inline next to the blocker in the planning runner
+  [[ "$(cat .ai/.ogre/tmp/issue-42/plan-runner.md)" == *'issue-10.md` — remark: "PR under review"'* ]]
+}
+
+@test "feature blockers without --remarks carry no remark" {
+  run "${OGRE_BIN}" feature 42 --blocks 10,11
+  [ "${status}" -eq 0 ]
+  # no blocker_remarks keys at all
+  [ "$(python3 -c "import json; print(len(json.load(open('.ai/.ogre/state/issue-42.json')).get('blocker_remarks', {})))")" = "0" ]
+  # blocker file is not prefixed with a remark header
+  [[ "$(head -n1 .ai/.ogre/issues/issue-10.md)" != *"Blocker remark"* ]]
+  # runner lists the blocker plainly, no "remark:" suffix
+  [[ "$(cat .ai/.ogre/tmp/issue-42/plan-runner.md)" != *"issue-10.md\` — remark"* ]]
+}
+
+@test "feature mixes remark-less --blocks with a remarked --blocker" {
+  run "${OGRE_BIN}" feature 42 --blocks 10 --blocker 11 --remarks "PR merged"
+  [ "${status}" -eq 0 ]
+  [ "$(python3 -c "import json; print(json.load(open('.ai/.ogre/state/issue-42.json'))['blocker_remarks'])")" = "{'.ai/.ogre/issues/issue-11.md': 'PR merged'}" ]
+  [ "$(python3 -c "import json; print(len(json.load(open('.ai/.ogre/state/issue-42.json'))['blocker_paths']))")" = "2" ]
+}
+
+@test "feature --remarks with no preceding --blocker errors" {
+  run "${OGRE_BIN}" feature 42 --remarks "orphan remark"
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"--remarks must follow a --blocker"* ]]
+}
+
 @test "feature on existing plan defaults to preserving it (no stdin = choice 1)" {
   "${OGRE_BIN}" feature --statement "first pass" --name dup
   mkdir -p .ai/.ogre/plans

@@ -36,6 +36,27 @@ load test_helper
   [[ "$(cat .ai/.ogre/issues/issue-7.md)" == *"Mock GitHub Issue"* ]]
 }
 
+@test "add-blocker --remarks ties the remark to that blocker" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  run "${OGRE_BIN}" add-blocker 42 7 --remarks "Have PR and Merged"
+  [ "${status}" -eq 0 ]
+  # remark stored in state, keyed by the blocker's path
+  local remark
+  remark="$(python3 -c "import json; print(json.load(open('.ai/.ogre/state/issue-42.json')).get('blocker_remarks', {}).get('.ai/.ogre/issues/issue-7.md', ''))")"
+  [ "${remark}" = "Have PR and Merged" ]
+  # remark prepended to the blocker file and shown in the runner
+  [[ "$(head -n1 .ai/.ogre/issues/issue-7.md)" == *"Blocker remark (user-provided): Have PR and Merged"* ]]
+  [[ "$(cat .ai/.ogre/tmp/issue-42/plan-runner.md)" == *'issue-7.md` — remark: "Have PR and Merged"'* ]]
+}
+
+@test "add-blocker without --remarks leaves the blocker unremarked" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  run "${OGRE_BIN}" add-blocker 42 7
+  [ "${status}" -eq 0 ]
+  [ "$(python3 -c "import json; print(len(json.load(open('.ai/.ogre/state/issue-42.json')).get('blocker_remarks', {})))")" = "0" ]
+  [[ "$(head -n1 .ai/.ogre/issues/issue-7.md)" != *"Blocker remark"* ]]
+}
+
 @test "add-blocker refuses once execution has started, unless --force" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42
   mkdir -p .ai/.ogre/logs/issue-42

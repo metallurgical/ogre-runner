@@ -165,7 +165,8 @@ Starts a new issue workflow: fetch (or write) the issue, generate the planning r
 | `<issue>` (positional) | `ogre feature ./notes/bug-report.md` | Local file path (`.md`, `.txt` copied verbatim; `.docx` text-extracted) |
 | `--statement "..."` | `ogre feature --statement "need a forgot-password page"` | Freeform feature text, no issue needed at all |
 | `--name NAME` | `ogre feature --statement "..." --name forgot-password` | Slug for runtime paths when using `--statement` (default: first ~4 words + short uuid) |
-| `--blocks 1,2,url,path` | `ogre feature 107 --blocks 101,102` | Comma-separated blockers (issue numbers/URLs/paths), fetched alongside the main issue |
+| `--blocks 1,2,url,path` | `ogre feature 107 --blocks 101,102` | Comma-separated blockers (issue numbers/URLs/paths), fetched alongside the main issue, no status remark |
+| `--blocker REF --remarks "..."` | `ogre feature 107 --blocker 101 --remarks "PR merged" --blocker 102 --remarks "under review"` | One blocker plus a freeform status remark tied to it. Repeatable; `--remarks` annotates the blocker right before it; mix freely with `--blocks`. The remark is prepended to the blocker's file and shown to the planner so it can reason about what's already landed vs still in flight |
 | `--plan NAME.md` | `ogre feature 107 --plan issue-107-v2.md` | Custom plan output filename instead of the default `issue-<n>.md` |
 | `--planner claude\|codex` | `ogre feature 107 --planner codex` | Which LLM CLI plans the feature (default: `claude`) |
 | `--model MODEL` | `ogre feature 107 --planner codex --model gpt-5.5` | Model override for the planner |
@@ -185,6 +186,7 @@ Accepts the same input types as `ogre feature` for the blocker itself:
 | `<blocker>` (positional) | `ogre add-blocker 107 ./notes/blocker.docx` | Local file path (`.md`, `.txt` copied verbatim; `.docx` text-extracted) |
 | `--statement "..."` | `ogre add-blocker 107 --statement "must invalidate old tokens"` | Freeform blocker text instead of an issue/URL/path |
 | `--name SLUG` | `ogre add-blocker 107 --statement "..." --name invalidate-tokens` | Slug for the blocker's file, only used with `--statement` |
+| `--remarks "..."` | `ogre add-blocker 107 108 --remarks "PR under review"` | Freeform status note tied to this blocker (e.g. merged / under review / blocking). Prepended to the blocker's file and shown to the planner; omit to store the blocker with no remark |
 | `--force` | `ogre add-blocker 107 108 --force` | Override the "execution already started" refusal (skips retroactive revision of completed steps; surface this warning to the user, never pass silently) |
 
 ### `ogre review-plan`

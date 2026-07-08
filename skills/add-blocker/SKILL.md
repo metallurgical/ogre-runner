@@ -16,13 +16,15 @@ Use this skill when the user wants to add a blocker to an issue Ogre is already 
   - Local file path — `.md`/`.txt` copied verbatim, `.docx` text-extracted
   - Freeform statement via `--statement "..."` (no issue/URL/file needed)
 - Optional `--name blocker-slug` (only used with `--statement`).
+- Optional `--remarks "..."` — a freeform note on this blocker's status (e.g. `"PR merged"`, `"under review"`, `"blocking, not started"`). It's tied to this specific blocker and travels with it into planning. Omit it and the blocker is stored plain, with no remark. If the user mentions a status when adding the blocker, capture it here.
 
 ## Behavior
 
-1. Run: `scripts/ogre add-blocker <issue> <blocker> [--statement "..."] [--name slug]`
+1. Run: `scripts/ogre add-blocker <issue> <blocker> [--statement "..."] [--name slug] [--remarks "status note"]`
 2. The helper:
    - Fetches/writes the blocker into `.ai/.ogre/issues/`.
    - Appends it to `blocker_paths` in `.ai/.ogre/state/issue-<issue>.json`.
+   - If `--remarks` given: stores it in `blocker_remarks` (keyed by the blocker's path), prepends it as a header to the blocker's `.md` file, and shows it inline next to the blocker in the planning runner — so the planner sees the status without you restating it.
    - Resets state status to `planning`.
    - Regenerates `.ai/.ogre/tmp/issue-<issue>/plan-runner.md` as a **revision** runner: it points at the existing plan and instructs the planner to update it for the new blocker, not start over.
 3. Read that runner and revise the plan file in place, keeping sections the new blocker doesn't affect.

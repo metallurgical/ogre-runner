@@ -20,7 +20,8 @@ If the user hasn't given an issue and hasn't said what to build, ask: "Do you ha
 
 Optional flags:
 
-- `--blocks 101,102`
+- `--blocks 101,102` — attach blockers with no status remark.
+- `--blocker 101 --remarks "PR merged"` — attach one blocker with a freeform status remark tied to it. Repeatable: `--blocker 101 --remarks "merged" --blocker 102 --remarks "under review"`. `--remarks` always annotates the `--blocker` (or `--blocks`) immediately before it; a `--remarks` with no preceding blocker is an error. Mix freely with `--blocks`. Use this form whenever the user tells you each blocker's status (merged / under review / in progress / blocking) so the planner can reason about what's already landed vs still in flight.
 - `--plan issue-107.md`
 - `--planner claude|codex`
 - `--model MODEL`

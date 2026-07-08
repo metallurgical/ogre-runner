@@ -218,6 +218,8 @@ Executes one checklist item (or all remaining, with `--all`) from an approved pl
 
 Default with no isolation flag: foreground, brand-new codex/claude session, targeting the lowest-numbered pending step.
 
+**`[BROWSER-CHECK]` steps.** A spawned codex/claude CLI subprocess (the default/`--background` isolation modes) has no real browser access - it can't visually render a page to verify layout or interactive behavior. Plan steps that genuinely need that are tagged `[BROWSER-CHECK]` by the planner. `ogre execute` detects the tag before spawning anything and refuses, telling you to rerun that step with `--main` instead, where your live session's own browser/MCP tooling can actually do the check. This applies to single-step targeting and `--all` chaining alike.
+
 ### `ogre status`
 
 Shows job/task progress from `.ai/.ogre` state.

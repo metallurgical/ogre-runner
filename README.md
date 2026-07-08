@@ -43,9 +43,11 @@ This is where a second pass catches problems like a step that assumed a `Passwor
 
 ```
 /ogre:execute forgot-password --executor codex
+# Or chain through every remaining step automatically:
+/ogre:execute forgot-password --all --executor codex
 ```
 
-This spawns a brand-new Codex session with only the current checklist item and the relevant repo context. It edits files, validates its work, reports pass/fail, and exits. Your main Claude Code session sees a short result instead of the whole implementation transcript. Run the same command again for the next step, or run `/ogre:execute forgot-password --all --executor codex` to chain through the rest. Check `/ogre:status forgot-password` from any later session because progress is stored on disk.
+This spawns a brand-new Codex session with only the current checklist item and the relevant repo context. It edits files, validates its work, reports pass/fail, and exits. Your main Claude Code session sees a short result instead of the whole implementation transcript. Run the one-step command again for the next step, or use `--all` to chain through the rest. Check `/ogre:status forgot-password` from any later session because progress is stored on disk.
 
 Halfway through, you realize you also need to invalidate old reset tokens:
 

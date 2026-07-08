@@ -118,14 +118,15 @@ print(t['id'])
   [ "$(task_json_field "${tid}" exit_code)" = "7" ]
 }
 
-@test "execute refuses a [BROWSER-CHECK] step through a spawned CLI and points at --main" {
+@test "execute auto-switches a [BROWSER-CHECK] step to --main instead of spawning a CLI" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42
   write_plan_with_steps 42 "First step" "[BROWSER-CHECK] Verify the page renders correctly"
   run "${OGRE_BIN}" execute 42 --step 2 --yes
-  [ "${status}" -eq 1 ]
+  [ "${status}" -eq 0 ]
   [[ "${output}" == *"[BROWSER-CHECK]"* ]]
-  [[ "${output}" == *"--main"* ]]
-  # Refused before spawning anything - task never left pending.
+  [[ "${output}" == *"Switching to --main"* ]]
+  [[ "${output}" == *"Mode: --main."* ]]
+  # Auto-switched before spawning anything - task recorded pending, not run.
   local tid2
   tid2="$(python3 -c "
 import json

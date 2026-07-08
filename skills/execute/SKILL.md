@@ -22,6 +22,7 @@ Optional flags:
 - `--model MODEL`
 - `--task <task-id>` — target one specific seeded step out of order
 - `--step <n>` — target step N (1-based) out of order
+- `--retry` — re-run the lowest `failed` step in a fresh session. The failed attempt's exit code and log tail are injected into the runner prompt so the new session diagnoses the failure instead of repeating the same approach blindly. Prefer this over asking the user to explain what went wrong. Not combinable with `--all`.
 - `--all` — chain through every remaining step automatically. Each session hands off to a fresh one (cleanly, via `task-complete --status passed`, not as an error) at the `--max-steps` cap or once it estimates ~50%+ of its context used, whichever comes first — so simple steps can share one session while a heavier one splits off on its own. Works with `--main`/`--background` too. If the chain stops on a `[BROWSER-CHECK]` step, see "Auto-Resolving `[BROWSER-CHECK]` Pauses" below — handle it yourself, don't just relay the error to the user.
 - `--max-steps N` — hard cap on checklist items per chained `--all` session (default: 3). Self-assessed context estimates are unreliable, so the cap is the authoritative limit.
 - `--fresh`

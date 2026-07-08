@@ -211,6 +211,7 @@ Executes one checklist item (or all remaining, with `--all`) from an approved pl
 | `--model MODEL` | `ogre execute 107 --executor claude --model sonnet-5` | Model override for the executor |
 | `--task TASK_ID` | `ogre execute 107 --task task-0f32a78f-...` | Target one specific seeded step out of order |
 | `--step N` | `ogre execute 107 --step 3` | Target step N (1-based) out of order |
+| `--retry` | `ogre execute 107 --retry` | Re-run the lowest failed step in a fresh session, with the failed attempt's exit code and log tail injected into the runner prompt - the failure becomes an input instead of a dead end to re-explain by hand. Not combinable with `--all` |
 | `--all` | `ogre execute 107 --all` | Chain through every remaining step, each session handing off to a fresh one at the `--max-steps` cap or when it estimates ~50%+ context used, whichever comes first |
 | `--max-steps N` | `ogre execute 107 --all --max-steps 5` | Hard cap on checklist items per chained session (default: 3). Self-assessed context estimates are unreliable, so the cap is the authoritative limit |
 | `--fresh` | `ogre execute 107 --fresh` | Force a brand-new context for this step (default) |

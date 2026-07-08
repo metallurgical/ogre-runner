@@ -371,3 +371,43 @@ print(next(t for t in tasks if t.get('step_index') == 1)['id'])
   [ "${status}" -eq 0 ]
   ! grep -q "Backfilled ledger warning" .ai/.ogre/tmp/issue-42/run-next.md
 }
+
+@test "execute --retry with no failed step errors" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step"
+  run "${OGRE_BIN}" execute 42 --retry
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"No failed step to retry"* ]]
+}
+
+@test "execute --retry rejects --all" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step"
+  run "${OGRE_BIN}" execute 42 --retry --all
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"can't be combined with --all"* ]]
+}
+
+@test "execute --retry re-targets the failed step and injects the failed attempt's log tail" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step" "Second step"
+  export MOCK_CODEX_STATUS=failed
+  run "${OGRE_BIN}" execute 42
+  [ "${status}" -eq 1 ]
+  unset MOCK_CODEX_STATUS
+  local tid
+  tid="$(python3 -c "
+import json
+tasks = json.load(open('.ai/.ogre/state/tasks.json'))
+print(next(t for t in tasks if t.get('step_index') == 1)['id'])
+")"
+  [ "$(task_json_field "${tid}" status)" = "failed" ]
+
+  run "${OGRE_BIN}" execute 42 --retry --main # --main: only writes the runner
+  [ "${status}" -eq 0 ]
+  grep -q "step 1" .ai/.ogre/tmp/issue-42/run-next.md
+  grep -q "First step" .ai/.ogre/tmp/issue-42/run-next.md
+  grep -q "Previous attempt for this step FAILED" .ai/.ogre/tmp/issue-42/run-next.md
+  grep -q "Log tail from the failed attempt" .ai/.ogre/tmp/issue-42/run-next.md
+  grep -q "Mock codex exec output" .ai/.ogre/tmp/issue-42/run-next.md
+}

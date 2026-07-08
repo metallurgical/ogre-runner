@@ -294,6 +294,19 @@ repo_drift_block() {
   fi
 }
 
+# backfill_warning_block <state-path> - warning block for jobs whose ledger
+# was backfilled from the plan (see ensure_state_from_plan): checkbox-derived
+# "pending" statuses are unreliable there, so the executor must verify a step
+# isn't already implemented before touching code. Prints nothing otherwise.
+backfill_warning_block() {
+  local spath="$1"
+  [ -f "$spath" ] || return 0
+  [ "$(json_field "$spath" backfilled 2>/dev/null || true)" = "True" ] || return 0
+  cat <<'EOF'
+Backfilled ledger warning: this job's state was reconstructed from the plan file (original ledger lost, or plan authored by hand), so "pending" is unreliable - the step's work may already exist in the code. FIRST check whether the target item is already implemented. If it is, validate it and mark it done (`task-complete --status passed`, with `--notes` saying it was pre-existing) WITHOUT re-implementing - re-editing finished work can damage it.
+EOF
+}
+
 # reap_task <id> - if a background task's sentinel exit file has appeared,
 # resolve it from "running" to "passed"/"failed" and record the exit code.
 # Reaching this still-"running" means the subprocess's own task-complete
@@ -691,6 +704,20 @@ ensure_state_from_plan() {
   plan="$RUNTIME/plans/issue-$issue.md"
   [ -f "$plan" ] || return 1
   write_state "$issue" "planning" "$plan" "claude" "sonnet-5" "claude" "sonnet-5" "codex" "gpt-5.5" "[]"
+  # Flag the record: a backfilled ledger only knows what the plan's checkboxes
+  # say, so its "pending" statuses are unreliable - work may already exist in
+  # the code from before the state was lost. Runner prompts read this flag and
+  # tell the executor to verify before re-implementing (re-editing finished
+  # work can damage it).
+  py_state "$spath" <<'PY'
+import sys, datetime
+p = sys.argv[1]
+_lk = lock_state(p)
+d = json.load(open(p))
+d['backfilled'] = True
+d['updated_at'] = datetime.datetime.now().astimezone().isoformat()
+dump_json(d, p)
+PY
   log "No ledger state for issue $issue but plan exists at $plan - backfilling state (plan created outside 'ogre feature'?)."
 }
 
@@ -1264,7 +1291,7 @@ $blockers_text
 
 ## Repo Orientation
 
-* Use \`repo_map.md\` if available.
+* Use \`repo_map.md\` if available - orientation only, never proof. If it is older than the latest commit, treat it as unreliable and verify against the working tree.
 
 ## Output
 
@@ -1564,6 +1591,8 @@ $(prior_notes_block "$issue")
 
 $(repo_drift_block "$plan")
 
+$(backfill_warning_block "$spath")
+
 Task:
 
 * Execute remaining incomplete checklist items in order, one at a time.
@@ -1750,6 +1779,8 @@ Target checklist item (step $step_index) - implement exactly this one, nothing e
 $(prior_notes_block "$issue")
 
 $(repo_drift_block "$plan")
+
+$(backfill_warning_block "$spath")
 
 Task:
 

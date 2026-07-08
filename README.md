@@ -238,7 +238,7 @@ Shows job/task progress from `.ai/.ogre` state.
 | `--watch` | `ogre status --watch` | Live-refresh view (run standalone in another terminal), Ctrl-C to quit |
 | `--interval N` | `ogre status --watch --interval 5` | Refresh seconds for `--watch` (default: 2) |
 
-`ogre status <issue>` and `ogre execute <issue>` both self-heal a missing `state.json`: if `.ai/.ogre/plans/issue-N.md` exists but its ledger state doesn't (a hand-authored plan, or the state file got lost), they backfill a fresh state record from the plan instead of erroring "No state found" - so the pipeline keeps working even for plans created outside `ogre feature`.
+`ogre status <issue>` and `ogre execute <issue>` both self-heal a missing `state.json`: if `.ai/.ogre/plans/issue-N.md` exists but its ledger state doesn't (a hand-authored plan, or the state file got lost), they backfill a fresh state record from the plan instead of erroring "No state found" - so the pipeline keeps working even for plans created outside `ogre feature`. Backfilled records are flagged (`"backfilled": true`), and every runner prompt for such a job warns the executor that "pending" only reflects the plan's checkboxes - it must verify a step isn't already implemented before touching code, since re-editing finished work can damage it.
 
 ### `ogre task-list`
 

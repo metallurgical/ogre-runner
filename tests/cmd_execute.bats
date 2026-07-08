@@ -355,3 +355,19 @@ print(next(t for t in tasks if t.get('step_index') == 1)['id'])
   [ "${status}" -eq 0 ]
   ! grep -q "Repo drift" .ai/.ogre/tmp/issue-42/run-next.md
 }
+
+@test "execute on a backfilled job warns the runner that pending may already be implemented" {
+  write_plan_with_steps 42 "First step"
+  run "${OGRE_BIN}" execute 42 --main
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"backfilling state"* ]]
+  grep -q "Backfilled ledger warning" .ai/.ogre/tmp/issue-42/run-next.md
+}
+
+@test "execute on a normally-created job carries no backfill warning" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step"
+  run "${OGRE_BIN}" execute 42 --main
+  [ "${status}" -eq 0 ]
+  ! grep -q "Backfilled ledger warning" .ai/.ogre/tmp/issue-42/run-next.md
+}

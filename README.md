@@ -25,21 +25,19 @@ Ogre keeps the whole workflow on disk (`.ai/.ogre/`) instead of just in the chat
 
 ## Real Use Case: As Easy As This
 
-You have a feature in your head, not a polished GitHub issue: "add a forgot-password page." It is big enough to touch routes, UI, validation, and tests, but small enough that writing a full design doc feels like overhead.
-
-With Ogre, you can turn that sentence into a reviewed execution plan, then let Codex or Claude work through it in fresh sessions. Run one checklist item at a time by default, or use `--all` when you want Ogre to chain through every remaining step automatically. Your main Claude Code chat stays clean, progress is stored on disk, and you can stop or resume without reconstructing the whole job from memory.
+Start from a sentence. No GitHub issue or setup step required:
 
 ```
 /ogre:feature --statement "need to implement forgot password page" --name forgot-password
 ```
 
-Ogre writes your statement into `.ai/.ogre/`, creates the runtime folders automatically, and generates a checklist plan. Before any code gets touched, run the plan through a review pass:
+Ogre creates `.ai/.ogre/` automatically and generates a checklist plan. Review is optional, but useful before bigger changes:
 
 ```
 /ogre:review-plan forgot-password --reviewer claude
 ```
 
-This is where a second pass catches problems like a step that assumed a `PasswordResetToken` model that does not exist. Fix the plan, approve it, then execute the first checklist item:
+Then execute one step at a time, or let Ogre chain every remaining step:
 
 ```
 /ogre:execute forgot-password --executor codex
@@ -47,15 +45,17 @@ This is where a second pass catches problems like a step that assumed a `Passwor
 /ogre:execute forgot-password --all --executor codex
 ```
 
-This spawns a brand-new Codex session with only the current checklist item and the relevant repo context. It edits files, validates its work, reports pass/fail, and exits. Your main Claude Code session sees a short result instead of the whole implementation transcript. Run the one-step command again for the next step, or use `--all` to chain through the rest. Check `/ogre:status forgot-password` from any later session because progress is stored on disk.
+Each execute run uses fresh Codex/Claude sessions, so your main Claude Code chat stays clean. Progress is stored on disk, so you can check or resume later:
 
-Halfway through, you realize you also need to invalidate old reset tokens:
+```
+/ogre:status forgot-password
+```
+
+Forgot a requirement halfway through? Add it without restarting:
 
 ```
 /ogre:add-blocker forgot-password --statement "must also invalidate old reset tokens"
 ```
-
-The plan is revised in place, keeping completed work intact.
 
 ## Claude → Codex, or Claude → Claude
 

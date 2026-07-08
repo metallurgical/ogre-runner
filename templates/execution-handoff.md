@@ -56,4 +56,6 @@ Report:
 
 Then, mandatory, run the task-id completion command given in the runner prompt (`ogre task-complete <task-id> --status passed|failed`) so the ledger reflects what actually happened. Do this even if you are the live Claude Code session doing the work directly, not just when running via a separate `codex`/`claude` CLI invocation. Skipping this step leaves the task stuck `pending` forever.
 
+Add `--notes "..."` to that command whenever you learned something the next step's fresh session must know - an actual signature/route/schema that differs from the plan, a deviation you made, a gotcha. One or two sentences. Notes are injected into every later runner prompt for this issue, so they are the only way knowledge survives past this session. Skip the flag if there is genuinely nothing.
+
 Then stop.

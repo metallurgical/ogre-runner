@@ -18,7 +18,7 @@ Usage:
   ogre add-blocker <issue> <blocker-number|url|path> [--force]
   ogre add-blocker <issue> --statement "free text blocker" [--name blocker-slug] [--force]
   ogre review-plan <issue-or-plan> [--reviewer claude|codex] [--model MODEL]
-  ogre execute <issue-or-plan> [--executor codex|claude] [--model MODEL] [--all] [--fresh|--resume] [--main|--background] [--yes]
+  ogre execute <issue-or-plan> [--executor codex|claude] [--model MODEL] [--all] [--max-steps N] [--fresh|--resume] [--main|--background] [--yes]
   ogre execute --job <job-id> [same flags as above]              (same, addressed by job id)
   ogre execute <issue-or-plan> --task <task-id>                  (target one specific seeded step out of order)
   ogre execute <issue-or-plan> --step <n>                        (target step N, 1-based, out of order)
@@ -28,8 +28,8 @@ Usage:
     --main        run inline in the current Claude Code session, no subprocess spawned
     --background  same isolation as default, detached/non-blocking
   Granularity: default targets one step; --all chains through every remaining step, each session/subprocess
-    self-assessing its own context budget and handing off to a fresh one when it estimates ~50%+ used
-    (so no single session grows unbounded - simple steps may share a session, complex ones split off).
+    capped at --max-steps items (default 3) and handing off to a fresh one at the cap or when it estimates
+    ~50%+ context used, whichever comes first (so no single session grows unbounded).
   ogre stop [issue] [--all] [--archive] [--delete] [--list]     (stop the job: cascades to all its tasks)
   ogre stop --job <job-id> [--archive] [--delete] [--list]      (same, addressed by job id)
   ogre stop --task <task-id>                                    (stop ONE task only, job/siblings untouched)
@@ -38,8 +38,9 @@ Usage:
   ogre status --tasks [issue]
   ogre status --task <task-id>
   ogre task-list <job-id>          (every task under one job, one row each)
-  ogre task-complete <task-id> [--status passed|failed] [--exit-code N]
-                                   (mark a task done when it wasn't run via --run/--background)
+  ogre task-complete <task-id> [--status passed|failed] [--exit-code N] [--notes "..."]
+                                   (mark a task done when it wasn't run via --run/--background;
+                                    --notes records findings shown to every later session on the issue)
 
 Concepts:
   job  = one feature/issue workflow (1:1 with an issue), id: job-<uuid>, lives in state/issue-<issue>.json
@@ -163,6 +164,7 @@ tasks.append({
     "id": tid, "issue": issue, "type": ttype, "executor": executor, "model": model or None,
     "mode": mode, "freshness": freshness, "runner": runner, "log_path": logpath,
     "status": status, "pid": None, "exit_code": None, "session_id": None,
+    "notes": None,
     "created_at": now, "started_at": None, "ended_at": None, "updated_at": now,
 })
 dump_json(tasks, path)
@@ -228,6 +230,34 @@ for t in tasks:
     if t.get("id") == tid:
         print(t.get(field) if t.get(field) is not None else "")
         sys.exit(0)
+PY
+}
+
+# prior_notes_block <issue> - markdown block of notes recorded by earlier
+# executor sessions for this issue (via `ogre task-complete --notes`),
+# ordered by step. Injected into every subsequent runner prompt so knowledge
+# discovered mid-step (real signatures, deviations from the plan, gotchas)
+# survives the death of the session that discovered it instead of being
+# re-derived from scratch each step. Prints nothing when no notes exist.
+prior_notes_block() {
+  local issue="$1"
+  python3 - "$(tasks_path)" "$issue" <<'PY' 2>/dev/null || true
+import json, sys
+path, issue = sys.argv[1], sys.argv[2]
+try:
+    tasks = json.load(open(path))
+except Exception:
+    tasks = []
+noted = [t for t in tasks if t.get("issue") == issue and t.get("notes")]
+noted.sort(key=lambda t: t.get("step_index") or 0)
+if not noted:
+    sys.exit(0)
+print("Notes from earlier sessions on this issue (read first - they record what previous steps actually found, so don't re-derive or contradict them):")
+print()
+for t in noted:
+    idx = t.get("step_index")
+    label = "step {}".format(idx) if idx is not None else t.get("id")
+    print("* [{} - {}] {}".format(label, t.get("status"), " ".join(str(t.get("notes")).split())))
 PY
 }
 
@@ -711,6 +741,7 @@ if items:
                 "runner": None, "log_path": None,
                 "status": "passed" if done else "pending",
                 "pid": None, "exit_code": 0 if done else None, "session_id": None,
+                "notes": None,
                 "step": step_text, "step_index": idx,
                 "created_at": now, "started_at": None,
                 "ended_at": now if done else None, "updated_at": now,
@@ -884,6 +915,8 @@ rows = [
 ]
 if t.get("session_id"):
     rows.append(("Session id", t.get("session_id")))
+if t.get("notes"):
+    rows.append(("Notes", t.get("notes")))
 rows.append(("View status", "ogre status --task {}".format(tid)))
 if t.get("status") in ("pending", "running"):
     rows.append(("Stop task", "ogre stop --task {}".format(tid)))
@@ -1415,7 +1448,7 @@ cmd_execute() {
   #   new        - default: foreground, brand-new codex/claude session, isolated from main context
   #   main       - run inline in the current Claude Code session (no subprocess spawned)
   #   background - same isolation as "new" but detached/non-blocking
-  local target="" executor="codex" model="gpt-5.5" mode="next" freshness="fresh" iso="new" job_id="" task_id="" step_n="" assume_yes="false"
+  local target="" executor="codex" model="gpt-5.5" mode="next" freshness="fresh" iso="new" job_id="" task_id="" step_n="" assume_yes="false" max_steps="3"
   if [ $# -gt 0 ] && [[ ! "$1" =~ ^-- ]]; then
     target="$1"; shift
   fi
@@ -1426,6 +1459,7 @@ cmd_execute() {
       --step) step_n="${2:-}"; shift 2 ;;
       --executor) executor="${2:-codex}"; shift 2 ;;
       --model) model="${2:-}"; shift 2 ;;
+      --max-steps) max_steps="${2:-3}"; shift 2 ;;
       --all) mode="all"; shift ;;
       --next) mode="next"; shift ;;
       --fresh) freshness="fresh"; shift ;;
@@ -1442,6 +1476,9 @@ cmd_execute() {
     [ -n "$target" ] || { err "No issue found with job id $job_id"; exit 1; }
   fi
   [ -n "$target" ] || { err "Missing issue, plan path, or --job <job-id>"; usage; exit 1; }
+  case "$max_steps" in
+    ''|*[!0-9]*|0) err "Invalid --max-steps: $max_steps (must be a positive integer)"; exit 1 ;;
+  esac
 
   local plan issue runner logdir logpath tid spath
   plan="$(get_plan_path "$target")"
@@ -1490,6 +1527,8 @@ Execution mode:
 * Freshness: \`$freshness\`
 * Task id: \`$link_tid\`
 
+$(prior_notes_block "$issue")
+
 Task:
 
 * Execute remaining incomplete checklist items in order, one at a time.
@@ -1497,10 +1536,12 @@ Task:
 * If the next item is tagged \`[BROWSER-CHECK]\`, stop before attempting it - you (a spawned CLI subprocess) have no real browser access. Do not mark it passed or failed; leave it pending and report that it needs \`--main\`.
 * Update each checklist item's status in the source plan only after its own work and validation are complete.
 * Write a concise execution log to \`$link_logpath\`.
-* After finishing each item, self-assess how much of your own context window you have used so far. If you estimate more than roughly half is used, STOP right there - do not start another item, even if items remain.
-* Stopping early for context-budget reasons is normal and expected, not a failure: a fresh session will automatically continue with whatever is left. Do not report it as an error.
+* Hard cap: complete at most $max_steps checklist items in this session, then STOP - even if items remain and your context feels fine. Self-assessed context estimates are unreliable; the cap is the authoritative limit.
+* STOP even earlier than the cap if you estimate more than roughly half of your context window is already used after finishing an item.
+* Stopping early for the cap or context-budget reasons is normal and expected, not a failure: a fresh session will automatically continue with whatever is left. Do not report it as an error.
 * Only stop and mark failed if an item's validation genuinely fails; report which items completed and which didn't.
-* Mark the ledger task done, mandatory, last step: \`$SCRIPT_DIR/ogre task-complete $link_tid --status passed\` (covers both "finished everything" and "stopped early on purpose for context") or \`--status failed\` (only for a genuine validation failure). Use this exact path - \`ogre\` alone is not guaranteed to be on PATH.
+* Mark the ledger task done, mandatory, last step: \`$SCRIPT_DIR/ogre task-complete $link_tid --status passed\` (covers both "finished everything" and "stopped early on purpose for the cap/context") or \`--status failed\` (only for a genuine validation failure). Use this exact path - \`ogre\` alone is not guaranteed to be on PATH.
+* Add \`--notes "..."\` to that command whenever you learned something the next session must know: an actual signature/route/schema that differs from the plan, a deviation you made, a gotcha. One or two sentences. Skip it if there is genuinely nothing.
 
 Safety:
 
@@ -1671,6 +1712,8 @@ Target checklist item (step $step_index) - implement exactly this one, nothing e
 
 * $step_text
 
+$(prior_notes_block "$issue")
+
 Task:
 
 * Execute only the target checklist item above.
@@ -1681,6 +1724,7 @@ Task:
 * Write a concise execution log to \`$logpath\`.
 * Stop after reporting changed files and validation result.
 * Mark the ledger task done, mandatory, last step: \`$SCRIPT_DIR/ogre task-complete $tid --status passed\` (or \`--status failed\` if validation failed). Use this exact path - \`ogre\` alone is not guaranteed to be on PATH. Skipping this leaves the task stuck \`pending\`/\`running\` in \`ogre status\`/\`ogre task-list\` even though the work is done.
+* Add \`--notes "..."\` to that command whenever you learned something the next step's fresh session must know: an actual signature/route/schema that differs from the plan, a deviation you made, a gotcha. One or two sentences. Skip it if there is genuinely nothing.
 
 Safety:
 
@@ -2113,13 +2157,14 @@ stop_one_task() {
 # forever even though the real work is done (see execution-handoff.md).
 cmd_task_complete() {
   ensure_runtime
-  local tid="${1:-}" status="passed" exit_code=""
-  [ -n "$tid" ] || { err "Usage: ogre task-complete <task-id> [--status passed|failed] [--exit-code N]"; exit 1; }
+  local tid="${1:-}" status="passed" exit_code="" notes=""
+  [ -n "$tid" ] || { err "Usage: ogre task-complete <task-id> [--status passed|failed] [--exit-code N] [--notes \"...\"]"; exit 1; }
   shift || true
   while [ $# -gt 0 ]; do
     case "$1" in
       --status) status="${2:-passed}"; shift 2 ;;
       --exit-code) exit_code="${2:-}"; shift 2 ;;
+      --notes) notes="${2:-}"; shift 2 ;;
       --*) err "Unknown option: $1"; exit 1 ;;
       *) err "Unknown argument: $1"; exit 1 ;;
     esac
@@ -2131,11 +2176,10 @@ cmd_task_complete() {
   local rec
   rec="$(task_get "$tid")"
   [ "$rec" != "null" ] || { err "No task found with id $tid"; exit 1; }
-  if [ -n "$exit_code" ]; then
-    task_update "$tid" "status=$status" "exit_code=$exit_code"
-  else
-    task_update "$tid" "status=$status"
-  fi
+  local -a updates=("status=$status")
+  [ -n "$exit_code" ] && updates+=("exit_code=$exit_code")
+  [ -n "$notes" ] && updates+=("notes=$notes")
+  task_update "$tid" "${updates[@]}"
   local issue
   issue="$(task_field "$tid" issue)"
   sync_state_from_plan "$issue"

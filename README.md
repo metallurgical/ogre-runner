@@ -211,7 +211,8 @@ Executes one checklist item (or all remaining, with `--all`) from an approved pl
 | `--model MODEL` | `ogre execute 107 --executor claude --model sonnet-5` | Model override for the executor |
 | `--task TASK_ID` | `ogre execute 107 --task task-0f32a78f-...` | Target one specific seeded step out of order |
 | `--step N` | `ogre execute 107 --step 3` | Target step N (1-based) out of order |
-| `--all` | `ogre execute 107 --all` | Chain through every remaining step, each session self-assessing context budget and handing off when ~50%+ used |
+| `--all` | `ogre execute 107 --all` | Chain through every remaining step, each session handing off to a fresh one at the `--max-steps` cap or when it estimates ~50%+ context used, whichever comes first |
+| `--max-steps N` | `ogre execute 107 --all --max-steps 5` | Hard cap on checklist items per chained session (default: 3). Self-assessed context estimates are unreliable, so the cap is the authoritative limit |
 | `--fresh` | `ogre execute 107 --fresh` | Force a brand-new context for this step (default) |
 | `--resume` | `ogre execute 107 --resume` | Resume prior context for this step instead of starting fresh |
 | `--main` | `ogre execute 107 --main` | Run inline in the current Claude Code session, no subprocess spawned. Use only when explicitly requested; defeats Ogre's context-isolation purpose if habitual |
@@ -254,6 +255,7 @@ Manually marks a task's ledger status. Only needed when the executing agent did 
 | `<task-id>` (positional, required) | `ogre task-complete task-0f32a78f-...` | The task id to mark |
 | `--status passed\|failed` | `ogre task-complete task-0f32a78f-... --status passed` | Outcome to record (default: `passed`) |
 | `--exit-code N` | `ogre task-complete task-0f32a78f-... --status failed --exit-code 1` | Optional exit code to record alongside the status |
+| `--notes "..."` | `ogre task-complete task-0f32a78f-... --notes "reset route is POST /password/email, not /forgot"` | Findings the next step's fresh session must know (real signature/route found, deviation from plan, gotcha). Injected into every later runner prompt for the issue, so mid-step knowledge survives the session that discovered it |
 
 ### `ogre stop`
 

@@ -22,7 +22,8 @@ Optional flags:
 - `--model MODEL`
 - `--task <task-id>` — target one specific seeded step out of order
 - `--step <n>` — target step N (1-based) out of order
-- `--all` — chain through every remaining step automatically. Each session is told to self-assess its own context usage after finishing an item and hand off to a fresh session once it estimates ~50%+ used (cleanly, via `task-complete --status passed`, not as an error) — so simple steps can share one session while a heavier one splits off on its own. Works with `--main`/`--background` too. If the chain stops on a `[BROWSER-CHECK]` step, see "Auto-Resolving `[BROWSER-CHECK]` Pauses" below — handle it yourself, don't just relay the error to the user.
+- `--all` — chain through every remaining step automatically. Each session hands off to a fresh one (cleanly, via `task-complete --status passed`, not as an error) at the `--max-steps` cap or once it estimates ~50%+ of its context used, whichever comes first — so simple steps can share one session while a heavier one splits off on its own. Works with `--main`/`--background` too. If the chain stops on a `[BROWSER-CHECK]` step, see "Auto-Resolving `[BROWSER-CHECK]` Pauses" below — handle it yourself, don't just relay the error to the user.
+- `--max-steps N` — hard cap on checklist items per chained `--all` session (default: 3). Self-assessed context estimates are unreliable, so the cap is the authoritative limit.
 - `--fresh`
 - `--resume`
 - `--main` — run inline in the current Claude Code session instead of spawning a new isolated codex/claude session. Use this only when the user explicitly wants the edit made in this conversation (e.g. a genuinely trivial step, or they say so directly) — it defeats the whole point of Ogre (keeping the main context clean) if used as a habit.
@@ -116,6 +117,8 @@ A step tagged `[BROWSER-CHECK]` needs a real browser to verify - a spawned codex
 ## After Execution
 
 Before reporting anything, mandatory, unless this run used `--run`/`--background` (those already do it): run `scripts/ogre task-complete <task-id> --status passed|failed` for the task id `ogre execute` printed. Do this yourself — don't ask the user to run it, don't skip it because the work is "obviously done." This is the step that keeps `ogre status`/`ogre task-list` accurate; the user should never need to know it exists.
+
+Add `--notes "..."` to that command whenever the step surfaced something the next step's fresh session must know — an actual signature/route/schema that differs from the plan, a deviation made, a gotcha. One or two sentences. Notes are injected into every later runner prompt for the issue; they are the only way mid-step knowledge survives the session that discovered it.
 
 Then report:
 

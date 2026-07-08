@@ -275,3 +275,57 @@ print(t['id'])
   [[ "${output}" == *"Proceeding (--yes passed)."* ]]
   [ "$(task_json_field "${tid}" status)" = "passed" ]
 }
+
+@test "execute injects notes recorded by earlier sessions into the runner prompt" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step" "Second step"
+  "${OGRE_BIN}" task-list "$(state_field 42 job_id)" >/dev/null
+  local tid1
+  tid1="$(python3 -c "
+import json
+tasks = json.load(open('.ai/.ogre/state/tasks.json'))
+print(next(t for t in tasks if t.get('step_index') == 1)['id'])
+")"
+  "${OGRE_BIN}" task-complete "${tid1}" --notes "users table lacks reset_token column" >/dev/null
+
+  run "${OGRE_BIN}" execute 42 --main # targets step 2; --main only writes the runner
+  [ "${status}" -eq 0 ]
+  grep -q "Notes from earlier sessions" .ai/.ogre/tmp/issue-42/run-next.md
+  grep -q "users table lacks reset_token column" .ai/.ogre/tmp/issue-42/run-next.md
+  grep -q "step 1 - passed" .ai/.ogre/tmp/issue-42/run-next.md
+}
+
+@test "execute runner has no notes section when nothing was recorded" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step"
+  run "${OGRE_BIN}" execute 42 --main
+  [ "${status}" -eq 0 ]
+  ! grep -q "Notes from earlier sessions" .ai/.ogre/tmp/issue-42/run-next.md
+}
+
+@test "execute --all runner embeds the default hard cap of 3 items per session" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step"
+  run "${OGRE_BIN}" execute 42 --all --main
+  [ "${status}" -eq 0 ]
+  grep -q "at most 3 checklist items" .ai/.ogre/tmp/issue-42/run-next.md
+}
+
+@test "execute --all --max-steps overrides the per-session cap" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step"
+  run "${OGRE_BIN}" execute 42 --all --max-steps 5 --main
+  [ "${status}" -eq 0 ]
+  grep -q "at most 5 checklist items" .ai/.ogre/tmp/issue-42/run-next.md
+}
+
+@test "execute rejects a non-positive or non-numeric --max-steps" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step"
+  run "${OGRE_BIN}" execute 42 --all --max-steps 0
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"Invalid --max-steps"* ]]
+  run "${OGRE_BIN}" execute 42 --all --max-steps lots
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"Invalid --max-steps"* ]]
+}

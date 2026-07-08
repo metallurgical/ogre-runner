@@ -37,6 +37,20 @@ load test_helper
   [ "$(task_json_field "${tid}" status)" = "passed" ]
 }
 
+@test "task-complete --notes records findings on the task and shows them in the summary" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step"
+  "${OGRE_BIN}" task-list "$(state_field 42 job_id)" >/dev/null
+  local tid
+  tid="$(python3 -c "import json; print(json.load(open('.ai/.ogre/state/tasks.json'))[0]['id'])")"
+
+  run "${OGRE_BIN}" task-complete "${tid}" --notes "reset route is POST /password/email, not /forgot"
+  [ "${status}" -eq 0 ]
+  [ "$(task_json_field "${tid}" notes)" = "reset route is POST /password/email, not /forgot" ]
+  [[ "${output}" == *"Notes"* ]]
+  [[ "${output}" == *"reset route is POST /password/email"* ]]
+}
+
 @test "concurrent task-complete calls all land (ledger writes serialize, no lost updates)" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42
   write_plan_with_steps 42 "Step 1" "Step 2" "Step 3" "Step 4" "Step 5" "Step 6" "Step 7" "Step 8"

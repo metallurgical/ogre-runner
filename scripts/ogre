@@ -95,6 +95,35 @@ gen_uuid() {
   fi
 }
 
+# Python prelude shared by every state-mutating snippet (each runs as its own
+# interpreter process, so this can't be a normal python import). Two rules it
+# enforces:
+#   - lock_state(path): one exclusive flock per state dir (state/.lock), taken
+#     BEFORE the first read, so concurrent read-modify-write cycles (e.g. a
+#     --background task finishing while the user runs task-complete) serialize
+#     instead of silently losing whichever update lands first.
+#   - dump_json(obj, path): write to a sibling .tmp then rename, so a crash
+#     mid-write can never leave a truncated/corrupt ledger behind. Readers
+#     always see the old or the new file, never a partial one.
+OGRE_PY_PRELUDE='
+import json, os, fcntl
+def lock_state(path):
+    lk = open(os.path.join(os.path.dirname(path), ".lock"), "a")
+    fcntl.flock(lk, fcntl.LOCK_EX)
+    return lk
+def dump_json(obj, path):
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(obj, f, indent=2)
+    os.replace(tmp, path)
+'
+
+# py_state [args...] <<PY - like `python3 - args <<PY` but with OGRE_PY_PRELUDE
+# prepended to the program read from stdin.
+py_state() {
+  { printf '%s\n' "$OGRE_PY_PRELUDE"; cat; } | python3 - "$@"
+}
+
 # One job per feature/issue (1:1, id lives in state/issue-<issue>.json).
 new_job_id() { echo "job-$(gen_uuid)"; }
 
@@ -121,9 +150,10 @@ for p in glob.glob(sys.argv[2]):
 
 # task_create <id> <issue> <type> <executor> <model> <mode> <freshness> <runner> <logpath> <status>
 task_create() {
-  python3 - "$(tasks_path)" "$@" <<'PY'
-import json, sys, datetime
+  py_state "$(tasks_path)" "$@" <<'PY'
+import sys, datetime
 path, tid, issue, ttype, executor, model, mode, freshness, runner, logpath, status = sys.argv[1:12]
+_lk = lock_state(path)
 try:
     tasks = json.load(open(path))
 except Exception:
@@ -135,17 +165,18 @@ tasks.append({
     "status": status, "pid": None, "exit_code": None, "session_id": None,
     "created_at": now, "started_at": None, "ended_at": None, "updated_at": now,
 })
-json.dump(tasks, open(path, "w"), indent=2)
+dump_json(tasks, path)
 PY
 }
 
 # task_update <id> <field=value> [field=value ...] - value "null" clears the field.
 task_update() {
   local tid="$1"; shift
-  python3 - "$(tasks_path)" "$tid" "$@" <<'PY'
-import json, sys, datetime
+  py_state "$(tasks_path)" "$tid" "$@" <<'PY'
+import sys, datetime
 path, tid = sys.argv[1], sys.argv[2]
 updates = dict(kv.split("=", 1) for kv in sys.argv[3:])
+_lk = lock_state(path)
 try:
     tasks = json.load(open(path))
 except Exception:
@@ -165,7 +196,7 @@ for t in tasks:
         if updates.get("status") in ("passed", "failed", "stopped") and not t.get("ended_at"):
             t["ended_at"] = now
         t["updated_at"] = now
-json.dump(tasks, open(path, "w"), indent=2)
+dump_json(tasks, path)
 PY
 }
 
@@ -223,6 +254,20 @@ reap_task() {
     fi
     rm -f "$exitfile" "$RUNTIME/tmp/issue-$issue/$tid.pid"
     sync_state_from_plan "$issue"
+    return 0
+  fi
+  # No exit sentinel. The background wrapper always writes one before exiting,
+  # so a recorded pid that is no longer alive means the process died without
+  # reporting (kill -9, reboot, crash). Fail the task instead of leaving it
+  # "running" in the ledger forever - a stuck "running" blocks re-execution
+  # and makes status lie about in-flight work.
+  local pid
+  pid="$(task_field "$tid" pid)"
+  if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
+    task_update "$tid" "status=failed"
+    rm -f "$RUNTIME/tmp/issue-$issue/$tid.pid"
+    sync_state_from_plan "$issue"
+    log "Task $tid was running but its process (pid $pid) is gone - marked failed."
   fi
 }
 
@@ -524,7 +569,7 @@ write_state() {
   path="$(state_path "$issue")"
   job_id="$(new_job_id)"
   mkdir -p "$(dirname "$path")"
-  cat > "$path" <<JSON
+  cat > "$path.tmp" <<JSON
 {
   "issue": "$issue",
   "job_id": "$job_id",
@@ -545,6 +590,7 @@ write_state() {
   "updated_at": "$(now_iso)"
 }
 JSON
+  mv "$path.tmp" "$path"
   log "State written: $path (job_id: $job_id)"
 }
 
@@ -597,9 +643,11 @@ sync_state_from_plan() {
   [ -f "$spath" ] || return 0
   plan="$(json_field "$spath" plan_path 2>/dev/null)"
   [ -n "$plan" ] && [ -f "$plan" ] || return 0
-  python3 - "$spath" "$plan" "$issue" "$(tasks_path)" <<'PY' 2>/dev/null || true
-import json, re, sys, datetime, uuid
+  py_state "$spath" "$plan" "$issue" "$(tasks_path)" <<'PY' 2>/dev/null || true
+import re, sys, datetime, uuid
 spath, plan_path, issue, tasks_path = sys.argv[1:5]
+# One lock covers both files below (same state dir).
+_lk = lock_state(spath)
 text = open(plan_path).read()
 m = re.search(r"##\s*6\.\s*Execution Order(.*?)(\n##\s|\Z)", text, re.S)
 section = m.group(1) if m else text
@@ -634,7 +682,7 @@ d["total_steps"] = len(items) if items else d.get("total_steps")
 if items and not pending and d.get("status") not in ("stopped",):
     d["status"] = "completed"
 d["updated_at"] = datetime.datetime.now().astimezone().isoformat()
-json.dump(d, open(spath, "w"), indent=2)
+dump_json(d, spath)
 
 # Seed one ledger task per checklist step (so `task-list`/`status` show every
 # step from planning onward, not just steps someone has already run
@@ -682,7 +730,7 @@ if items:
                 t["updated_at"] = now
                 changed = True
     if changed:
-        json.dump(tasks, open(tasks_path, "w"), indent=2)
+        dump_json(tasks, tasks_path)
 PY
 }
 
@@ -1010,9 +1058,10 @@ prune_tasks_for_issue() {
   local path
   path="$(tasks_path)"
   [ -f "$path" ] || return 0
-  python3 - "$path" "$issue" <<'PY'
-import json, sys
+  py_state "$path" "$issue" <<'PY'
+import sys
 path, issue = sys.argv[1], sys.argv[2]
+_lk = lock_state(path)
 try:
     tasks = json.load(open(path))
 except Exception:
@@ -1021,7 +1070,7 @@ before = len(tasks)
 tasks = [t for t in tasks if t.get("issue") != issue]
 removed = before - len(tasks)
 if removed:
-    json.dump(tasks, open(path, "w"), indent=2)
+    dump_json(tasks, path)
     print(removed)
 PY
 }
@@ -1231,9 +1280,10 @@ EOF2
   fi
   prepend_blocker_remark "$bpath" "$remarks"
 
-  python3 - "$spath" "$bpath" "$remarks" <<'PY'
-import json, sys, datetime
+  py_state "$spath" "$bpath" "$remarks" <<'PY'
+import sys, datetime
 p, bp, remark = sys.argv[1], sys.argv[2], sys.argv[3]
+_lk = lock_state(p)
 d = json.load(open(p))
 bl = d.get('blocker_paths') or []
 if bp not in bl:
@@ -1245,7 +1295,7 @@ if remark:
 d['blocker_remarks'] = rm
 d['status'] = 'planning'
 d['updated_at'] = datetime.datetime.now().astimezone().isoformat()
-json.dump(d, open(p, 'w'), indent=2)
+dump_json(d, p)
 PY
 
   local blockers_text="" _rem
@@ -1642,15 +1692,16 @@ EOF2
     task_update "$tid" "executor=$executor" "model=${model:-null}" "freshness=$freshness" "runner=$runner" "log_path=$logpath"
   fi
   if [ -f "$spath" ]; then
-    python3 - "$spath" <<PY
-import json, datetime
+    py_state <<PY
+import datetime
 p = "$spath"
+_lk = lock_state(p)
 d = json.load(open(p))
 d['active_task'] = "$tid"
 d['status'] = 'executing'
 d['last_log'] = "$logpath"
 d['updated_at'] = datetime.datetime.now().astimezone().isoformat()
-json.dump(d, open(p, 'w'), indent=2)
+dump_json(d, p)
 PY
   fi
 
@@ -1794,14 +1845,15 @@ except Exception:
   finalize_issue_state() {
     local rc="$1"
     if [ -f "$spath" ]; then
-      python3 - "$spath" <<PY
-import json, datetime
+      py_state <<PY
+import datetime
 p, rc = "$spath", $rc
+_lk = lock_state(p)
 d = json.load(open(p))
 d['active_task'] = None
 d['last_validation'] = 'passed' if rc == 0 else 'failed'
 d['updated_at'] = datetime.datetime.now().astimezone().isoformat()
-json.dump(d, open(p, 'w'), indent=2)
+dump_json(d, p)
 PY
     fi
     sync_state_from_plan "$issue"
@@ -1958,6 +2010,7 @@ _status_render() {
     ensure_state_from_plan "$issue" || true  # returns 1 when no plan to backfill; don't let set -e abort before the "No state found" branch
     spath="$(state_path "$issue")"
     if [ -f "$spath" ]; then
+      reap_all_tasks
       sync_state_from_plan "$issue"
       print_job_summary "$issue"
       log ""
@@ -2140,14 +2193,15 @@ cmd_stop() {
       local fissue
       fissue="$(basename "$spath")"; fissue="${fissue#issue-}"; fissue="${fissue%.json}"
       stop_tasks_for_issue "$fissue"
-      python3 - "$spath" <<'PY' || true
-import json, sys, datetime
+      py_state "$spath" <<'PY' || true
+import sys, datetime
 p=sys.argv[1]
+_lk = lock_state(p)
 d=json.load(open(p))
 d['status']='stopped'
 d['active_task']=None
 d['updated_at']=datetime.datetime.now().astimezone().isoformat()
-json.dump(d, open(p,'w'), indent=2)
+dump_json(d, p)
 PY
     done
     log "Marked all Ogre issues (jobs) as stopped. Any running tasks were signaled to stop. Runtime files kept."
@@ -2175,14 +2229,15 @@ PY
   spath="$(state_path "$issue")"
   if [ -f "$spath" ]; then
     stop_tasks_for_issue "$issue"
-    python3 - "$spath" <<'PY' || true
-import json, sys, datetime
+    py_state "$spath" <<'PY' || true
+import sys, datetime
 p=sys.argv[1]
+_lk = lock_state(p)
 d=json.load(open(p))
 d['status']='stopped'
 d['active_task']=None
 d['updated_at']=datetime.datetime.now().astimezone().isoformat()
-json.dump(d, open(p,'w'), indent=2)
+dump_json(d, p)
 PY
     log "Issue (job) $issue marked as stopped. Any running task was signaled to stop. Files kept. Code changes not reverted."
   else

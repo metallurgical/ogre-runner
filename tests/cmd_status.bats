@@ -86,6 +86,56 @@ load test_helper
   [ "$(state_field 42 current_step)" = "First step" ]
 }
 
+@test "status auto-fails a running task whose recorded pid is dead (no exit sentinel)" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step"
+  "${OGRE_BIN}" status 42 >/dev/null # seed ledger tasks
+  local tid
+  tid="$(python3 -c "import json; print(json.load(open('.ai/.ogre/state/tasks.json'))[0]['id'])")"
+  # Simulate a background wrapper that died without writing its exit sentinel:
+  # ledger says running, recorded pid can never be alive, no <tid>.exit file.
+  python3 - "${tid}" <<'PY'
+import json, sys
+p = ".ai/.ogre/state/tasks.json"
+tasks = json.load(open(p))
+for t in tasks:
+    if t["id"] == sys.argv[1]:
+        t["status"] = "running"
+        t["pid"] = 99999999
+json.dump(tasks, open(p, "w"), indent=2)
+PY
+
+  run "${OGRE_BIN}" status 42
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"marked failed"* ]]
+  [ "$(task_json_field "${tid}" status)" = "failed" ]
+}
+
+@test "status leaves a running task with a live pid untouched" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step"
+  "${OGRE_BIN}" status 42 >/dev/null
+  local tid live_pid
+  tid="$(python3 -c "import json; print(json.load(open('.ai/.ogre/state/tasks.json'))[0]['id'])")"
+  sleep 30 &
+  live_pid=$!
+  python3 - "${tid}" "${live_pid}" <<'PY'
+import json, sys
+p = ".ai/.ogre/state/tasks.json"
+tasks = json.load(open(p))
+for t in tasks:
+    if t["id"] == sys.argv[1]:
+        t["status"] = "running"
+        t["pid"] = int(sys.argv[2])
+json.dump(tasks, open(p, "w"), indent=2)
+PY
+
+  run "${OGRE_BIN}" status 42
+  kill "${live_pid}" 2>/dev/null || true
+  [ "${status}" -eq 0 ]
+  [ "$(task_json_field "${tid}" status)" = "running" ]
+}
+
 @test "status rejects unknown option" {
   run "${OGRE_BIN}" status --bogus
   [ "${status}" -eq 1 ]

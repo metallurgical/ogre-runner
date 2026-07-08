@@ -5,7 +5,7 @@ export OGRE_BIN # mocks/codex and mocks/claude call back into it for task-comple
 
 setup() {
   TEST_TMP="$(mktemp -d)"
-  cd "${TEST_TMP}"
+  cd "${TEST_TMP}" || return 1
   export PATH="${MOCK_BIN}:${PATH}"
   # Reset per-test mock behavior overrides.
   unset MOCK_GH_EXIT MOCK_CURL_EXIT MOCK_CODEX_EXIT MOCK_CLAUDE_EXIT \
@@ -13,7 +13,7 @@ setup() {
 }
 
 teardown() {
-  cd "${OGRE_REPO_ROOT}"
+  cd "${OGRE_REPO_ROOT}" || return 1
   rm -rf "${TEST_TMP}"
 }
 

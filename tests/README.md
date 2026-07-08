@@ -9,11 +9,38 @@ top-level dispatch (help/usage/unknown command).
 brew install bats-core
 ```
 
+## Install shellcheck (for the lint test)
+
+`tests/shellcheck.bats` lints the shell scripts (`scripts/ogre`,
+`tests/test_helper.bash`, `tests/mocks/*`) via ShellCheck. It `skip`s
+cleanly if `shellcheck` isn't on `PATH`, so it never blocks the suite.
+
+```
+brew install shellcheck
+```
+
+If `brew` tries to build ShellCheck (and GHC) from source on your macOS,
+grab the prebuilt binary instead:
+
+```
+# from https://github.com/koalaman/shellcheck/releases
+curl -fsSL -o sc.tar.xz \
+  https://github.com/koalaman/shellcheck/releases/download/v0.10.0/shellcheck-v0.10.0.darwin.x86_64.tar.xz
+tar xf sc.tar.xz && sudo cp shellcheck-v0.10.0/shellcheck /usr/local/bin/
+```
+
+Dialect (`shell=bash`) is pinned in `.shellcheckrc` at the repo root.
+Lint policy caps severity at `warning` (info/style suggestions don't fail).
+
 ## Run
 
 ```
 bats tests/                 # everything
 bats tests/cmd_status.bats  # just one command
+bats tests/shellcheck.bats  # just the shellcheck lint
+
+# lint directly, without bats:
+shellcheck --severity=warning scripts/ogre tests/test_helper.bash tests/mocks/*
 ```
 
 ## How it works

@@ -1,0 +1,3 @@
+# ShellCheck config for ogre-plugin shell scripts.
+# Files have no .sh extension / use bats mocks, so pin the dialect.
+shell=bash

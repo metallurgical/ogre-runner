@@ -23,27 +23,29 @@ Ogre keeps the whole workflow on disk (`.ai/.ogre/`) instead of just in the chat
 5. **`/ogre:add-blocker`**: bolts on a newly-discovered requirement mid-flight; the plan is revised in place instead of restarted.
 6. **`/ogre:stop`**: pauses, archives, or deletes the runtime data for an issue, without touching code changes already made.
 
-## Real use case
+## Real Use Case: As Easy As This
 
-You're working solo (or with a small team) in Claude Code. There's a backlog item, "add a forgot-password page," meaty enough to touch 3-4 files but not complex enough to deserve a design doc. You don't want to babysit it token-by-token, and you don't want one mega-session that degrades halfway through.
+You have a feature in your head, not a polished GitHub issue: "add a forgot-password page." It is big enough to touch routes, UI, validation, and tests, but small enough that writing a full design doc feels like overhead.
+
+With Ogre, you can turn that sentence into a reviewed execution plan, then let Codex or Claude work through the plan in fresh sessions one step at a time. Your main Claude Code chat stays clean, progress is stored on disk, and you can stop or resume without reconstructing the whole job from memory.
 
 ```
 /ogre:feature --statement "need to implement forgot password page" --name forgot-password
 ```
 
-Ogre writes the statement to disk and generates a plan. Before any code gets touched, run it past a review pass:
+Ogre writes your statement into `.ai/.ogre/`, creates the runtime folders automatically, and generates a checklist plan. Before any code gets touched, run the plan through a review pass:
 
 ```
 /ogre:review-plan forgot-password --reviewer claude
 ```
 
-This is what catches, say, a step that assumed a `PasswordResetToken` model that doesn't exist. You fix the plan, approve it, then:
+This is where a second pass catches problems like a step that assumed a `PasswordResetToken` model that does not exist. Fix the plan, approve it, then execute the first checklist item:
 
 ```
 /ogre:execute forgot-password --executor codex
 ```
 
-This spawns a brand-new Codex session with *only* the current checklist item and the relevant repo context. It edits the files, validates its own work, reports pass/fail, and exits. Your main Claude Code session's context usage barely moved: it saw a summary, not a transcript. Run the same command again for the next step. Check `/ogre:status forgot-password` any time, from a completely fresh session if you want, since it's reading files off disk, not conversation memory.
+This spawns a brand-new Codex session with only the current checklist item and the relevant repo context. It edits files, validates its work, reports pass/fail, and exits. Your main Claude Code session sees a short result instead of the whole implementation transcript. Run the same command again for the next step, or check `/ogre:status forgot-password` from any later session because progress is stored on disk.
 
 Halfway through, you realize you also need to invalidate old reset tokens:
 
@@ -51,7 +53,7 @@ Halfway through, you realize you also need to invalidate old reset tokens:
 /ogre:add-blocker forgot-password --statement "must also invalidate old reset tokens"
 ```
 
-The plan is revised in place. No restart.
+The plan is revised in place, keeping completed work intact.
 
 ## Claude → Codex, or Claude → Claude
 
@@ -151,25 +153,31 @@ All commands run as `scripts/ogre <command> ...` or via the matching `/ogre:<com
 
 ### `ogre init`
 
-Creates the runtime folders and copies templates. No options.
+Optional. Creates the runtime folders and copies templates up front. Other Ogre commands do this automatically when needed, so you can skip `init` unless you want to verify setup before starting.
 
 ### `ogre feature`
 
-Starts a new issue workflow: fetch (or write) the issue, generate the planning runner.
+Starts a new workflow and generates the planning runner. It also creates the `.ai/.ogre/` runtime folders/templates automatically if they do not exist, so you do not need to run `ogre init` first. The main path is freeform text:
+
+```bash
+ogre feature --statement "need a forgot-password page" --name forgot-password
+```
+
+Use a positional issue number, URL, or local file when you already have one.
 
 | Option | Example | Description |
 | :--- | :--- | :--- |
+| `--statement "..."` | `ogre feature --statement "need a forgot-password page"` | Freeform feature text, no issue needed at all |
+| `--name NAME` | `ogre feature --statement "..." --name forgot-password` | Slug for runtime paths when using `--statement` (default: first ~4 words + short uuid) |
 | `<issue>` (positional) | `ogre feature 107` | GitHub issue number (GitHub-only, resolved via `gh` + this project's git remote) |
 | `<issue>` (positional) | `ogre feature https://github.com/acme/app/issues/107` | Full GitHub issue URL |
 | `<issue>` (positional) | `ogre feature https://gitlab.com/acme/app/-/issues/9` | Any non-GitHub issue/page URL (GitLab, self-hosted GitLab, Bitbucket, Jira, etc.), fetched generically as page text, not via an API |
 | `<issue>` (positional) | `ogre feature ./notes/bug-report.md` | Local file path (`.md`, `.txt` copied verbatim; `.docx` text-extracted) |
-| `--statement "..."` | `ogre feature --statement "need a forgot-password page"` | Freeform feature text, no issue needed at all |
-| `--name NAME` | `ogre feature --statement "..." --name forgot-password` | Slug for runtime paths when using `--statement` (default: first ~4 words + short uuid) |
-| `--blocks 1,2,url,path` | `ogre feature 107 --blocks 101,102` | Comma-separated blockers (issue numbers/URLs/paths), fetched alongside the main issue, no status remark |
-| `--blocker REF --remarks "..."` | `ogre feature 107 --blocker 101 --remarks "PR merged" --blocker 102 --remarks "under review"` | One blocker plus a freeform status remark tied to it. Repeatable; `--remarks` annotates the blocker right before it; mix freely with `--blocks`. The remark is prepended to the blocker's file and shown to the planner so it can reason about what's already landed vs still in flight |
-| `--plan NAME.md` | `ogre feature 107 --plan issue-107-v2.md` | Custom plan output filename instead of the default `issue-<n>.md` |
-| `--planner claude\|codex` | `ogre feature 107 --planner codex` | Which LLM CLI plans the feature (default: `claude`) |
-| `--model MODEL` | `ogre feature 107 --planner codex --model gpt-5.5` | Model override for the planner |
+| `--blocks ref,ref` | `ogre feature --statement "..." --name forgot-password --blocks ./notes/auth-debt.md` | Comma-separated blockers (issue numbers/URLs/paths), fetched alongside the main input, no status remark |
+| `--blocker REF --remarks "..."` | `ogre feature --statement "..." --name forgot-password --blocker ./notes/auth-debt.md --remarks "PR merged"` | One blocker plus a freeform status remark tied to it. Repeatable; `--remarks` annotates the blocker right before it; mix freely with `--blocks`. The remark is prepended to the blocker's file and shown to the planner so it can reason about what's already landed vs still in flight |
+| `--plan NAME.md` | `ogre feature --statement "..." --name forgot-password --plan forgot-password-v2.md` | Custom plan output filename instead of the default issue-derived or statement-derived plan name |
+| `--planner claude\|codex` | `ogre feature --statement "..." --name forgot-password --planner codex` | Which LLM CLI plans the feature (default: `claude`) |
+| `--model MODEL` | `ogre feature --statement "..." --name forgot-password --planner codex --model gpt-5.5` | Model override for the planner |
 
 ### `ogre add-blocker`
 
@@ -309,7 +317,7 @@ Then open your project in Claude Code and try:
 /ogre:feature --statement "need to implement forgot password page" --name forgot-password
 ```
 
-The helper script can also be run directly from a project root:
+The helper script can also be run directly from a project root. `init` is optional; `feature` creates the runtime folders/templates automatically when needed.
 
 ```bash
 /path/to/ogre-plugin/scripts/ogre init
@@ -390,13 +398,13 @@ See every checklist step for a job at once:
 
 ## Direct CLI Usage
 
-Create runtime folders and copy templates:
+Optionally pre-create runtime folders and copy templates:
 
 ```bash
 scripts/ogre init
 ```
 
-Fetch issues and generate planning runner:
+Most users can start directly with `feature`; it creates the runtime folders/templates automatically when needed:
 
 ```bash
 scripts/ogre feature 107 --blocks 101,102

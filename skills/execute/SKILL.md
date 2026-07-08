@@ -22,7 +22,7 @@ Optional flags:
 - `--model MODEL`
 - `--task <task-id>` — target one specific seeded step out of order
 - `--step <n>` — target step N (1-based) out of order
-- `--all` — chain through every remaining step automatically. Each session is told to self-assess its own context usage after finishing an item and hand off to a fresh session once it estimates ~50%+ used (cleanly, via `task-complete --status passed`, not as an error) — so simple steps can share one session while a heavier one splits off on its own. Works with `--main`/`--background` too.
+- `--all` — chain through every remaining step automatically. Each session is told to self-assess its own context usage after finishing an item and hand off to a fresh session once it estimates ~50%+ used (cleanly, via `task-complete --status passed`, not as an error) — so simple steps can share one session while a heavier one splits off on its own. Works with `--main`/`--background` too. If the chain stops on a `[BROWSER-CHECK]` step, see "Auto-Resolving `[BROWSER-CHECK]` Pauses" below — handle it yourself, don't just relay the error to the user.
 - `--fresh`
 - `--resume`
 - `--main` — run inline in the current Claude Code session instead of spawning a new isolated codex/claude session. Use this only when the user explicitly wants the edit made in this conversation (e.g. a genuinely trivial step, or they say so directly) — it defeats the whole point of Ogre (keeping the main context clean) if used as a habit.
@@ -66,11 +66,26 @@ Every `--run`/`--background` task also records the underlying CLI's own session 
 
 Always report `session_id` and the exact resume command back to the user after a task finishes (execute output shows it; `ogre status --task <id>` shows it too, once captured). For background codex tasks, it may be `null` until the process finishes — check status again after.
 
+## Auto-Resolving `[BROWSER-CHECK]` Pauses
+
+A step tagged `[BROWSER-CHECK]` needs a real browser to verify - a spawned codex/claude CLI subprocess doesn't have one, only this live session does (Playwright/browser MCP tools). This is a mechanical continuation, not a judgment call: never just relay the pause to the user and stop. Resolve it yourself:
+
+1. **Single-step / `--main`**: nothing to do - `ogre execute` already auto-switches to `--main` for you when it detects the tag on the target step. Just do the check as instructed.
+2. **`--all`, running synchronously in this turn (no `--background`)**: when the command exits because the next step is `[BROWSER-CHECK]`, immediately, in the same turn, without asking the user first:
+   - Run `scripts/ogre execute <issue> --main` and do that one step's real browser check yourself (screenshot/snapshot with your own tools).
+   - Run `scripts/ogre task-complete <task-id> --status passed|failed` for it.
+   - Re-run `scripts/ogre execute <issue> --all` (same executor/model flags as the original call) to resume the chain.
+   - Repeat this loop if it pauses again on another `[BROWSER-CHECK]` step (each one is detected one at a time, not batched) - loop until the chain reports `completed`, `failed` for a real reason, or nothing left, then report the final result once.
+3. **`--all --background`**: the detached subprocess has no browser tools and cannot pause-and-call-back into this session while it's running unattended - there's no way around that. But before you next report anything to the user for this issue (including if they just say hi, or ask something unrelated, after having kicked off a `--background --all` run earlier in the conversation), proactively run `scripts/ogre status <issue>` first. If `current_step` contains `[BROWSER-CHECK]` and the job isn't `completed`/`stopped`, resolve it exactly like step 2 above, then resume with `scripts/ogre execute <issue> --all --background` (preserve `--background` since that's what the user asked for) and don't block waiting on it again. Do this silently as part of picking the conversation back up - the user shouldn't have to ask "is it done yet" or manually re-run anything themselves.
+
+The one hard limit: this can't happen while you have zero active turns (e.g. mid-toilet-break with no message sent). It resolves itself the moment you're back in the loop for any reason, not literally while the user is away with no interaction at all.
+
 ## Behavior
 
 1. Run:
    - `scripts/ogre execute <issue-or-plan> [flags]`
-   - **If this exits non-zero or prints `ERROR: Refusing to proceed non-interactively without confirmation...`**: STOP HERE. Do not read the runner file, do not edit any files, even if a runner file already exists from a prior attempt (it may be stale). Relay the exact warning to the user (e.g. "step/job was previously stopped, may depend on unfinished earlier steps") and ask whether to proceed. Only re-run with `--yes` after the user explicitly confirms.
+   - **If this exits non-zero because the next step is `[BROWSER-CHECK]`** (only possible with `--all`, see "Auto-Resolving `[BROWSER-CHECK]` Pauses" above): that's a mechanical continuation, not a confirmation case - handle it per that section, do not stop and ask the user.
+   - **If it exits non-zero for any other reason, or prints `ERROR: Refusing to proceed non-interactively without confirmation...`**: STOP HERE. Do not read the runner file, do not edit any files, even if a runner file already exists from a prior attempt (it may be stale). Relay the exact warning to the user (e.g. "step/job was previously stopped, may depend on unfinished earlier steps") and ask whether to proceed. Only re-run with `--yes` after the user explicitly confirms.
    - **Without `--main`, this call blocks and actually runs codex/claude in a new isolated session** — wait for it to finish; don't do the edit yourself in parallel.
 2. Read the generated runner (mainly relevant when `--main` was used, or to review what the isolated session was told to do):
    - `.ai/.ogre/tmp/issue-<number>/run-next.md`

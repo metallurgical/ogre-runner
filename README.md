@@ -218,7 +218,7 @@ Executes one checklist item (or all remaining, with `--all`) from an approved pl
 
 Default with no isolation flag: foreground, brand-new codex/claude session, targeting the lowest-numbered pending step.
 
-**`[BROWSER-CHECK]` steps.** A spawned codex/claude CLI subprocess (the default/`--background` isolation modes) has no real browser access - it can't visually render a page to verify layout or interactive behavior. Plan steps that genuinely need that are tagged `[BROWSER-CHECK]` by the planner. For single-step targeting, `ogre execute` detects the tag before spawning anything and auto-switches to `--main` itself, so it runs inline in your live session (where real browser/MCP tooling exists) without you having to retype the command. For `--all` chaining, it instead stops the chain and tells you to finish that one step with `--main` before resuming - unattended multi-step runs shouldn't silently pause for inline work without saying so.
+**`[BROWSER-CHECK]` steps.** A spawned codex/claude CLI subprocess (the default/`--background` isolation modes) has no real browser access - it can't visually render a page to verify layout or interactive behavior. Plan steps that genuinely need that are tagged `[BROWSER-CHECK]` by the planner. For single-step targeting, `ogre execute` detects the tag before spawning anything and auto-switches to `--main` itself, so it runs inline in your live session (where real browser/MCP tooling exists) without you having to retype the command. For `--all` chaining in the foreground, it instead stops the chain and tells you to finish that one step with `--main` before resuming - unattended multi-step runs shouldn't silently pause for inline work without saying so. For `--all --background`, if any remaining step in the plan is tagged `[BROWSER-CHECK]`, Claude launches a supervising fork alongside the detached run: it polls `ogre status`, resolves each `[BROWSER-CHECK]` step inline with real browser tooling the moment the chain reaches it, then resumes the background run - so an unattended chain with browser steps in it still completes without you having to notice the pause yourself.
 
 ### `ogre status`
 
@@ -232,6 +232,8 @@ Shows job/task progress from `.ai/.ogre` state.
 | `--task TASK_ID` | `ogre status --task task-0f32a78f-...` | Show one task's full record |
 | `--watch` | `ogre status --watch` | Live-refresh view (run standalone in another terminal), Ctrl-C to quit |
 | `--interval N` | `ogre status --watch --interval 5` | Refresh seconds for `--watch` (default: 2) |
+
+`ogre status <issue>` and `ogre execute <issue>` both self-heal a missing `state.json`: if `.ai/.ogre/plans/issue-N.md` exists but its ledger state doesn't (a hand-authored plan, or the state file got lost), they backfill a fresh state record from the plan instead of erroring "No state found" - so the pipeline keeps working even for plans created outside `ogre feature`.
 
 ### `ogre task-list`
 

@@ -84,7 +84,7 @@ The isolation boundary that makes this useful:
 ```mermaid
 flowchart LR
     subgraph Main["Your Claude Code session (orchestrator)"]
-        M1["/ogre:execute 107"]
+        M1["/ogre:execute forgot-password"]
         M2["sees: pass/fail + short report"]
     end
     subgraph Sub["Fresh session, spawned per step (Codex or Claude)"]
@@ -306,14 +306,14 @@ claude --plugin-dir /path/to/ogre-plugin
 Then open your project in Claude Code and try:
 
 ```txt
-/ogre:feature 107 --blocks 101,102
+/ogre:feature --statement "need to implement forgot password page" --name forgot-password
 ```
 
 The helper script can also be run directly from a project root:
 
 ```bash
 /path/to/ogre-plugin/scripts/ogre init
-/path/to/ogre-plugin/scripts/ogre feature 107 --blocks 101,102
+/path/to/ogre-plugin/scripts/ogre feature --statement "need to implement forgot password page" --name forgot-password
 /path/to/ogre-plugin/scripts/ogre status
 ```
 
@@ -467,7 +467,7 @@ scripts/ogre stop 107 --delete
 - Ogre does not revert code changes.
 - Ogre runtime state is file-based, so Claude and Codex can resume by reading `.ai/.ogre/state/` and `.ai/.ogre/plans/`.
 - Default execution is one checklist item at a time.
-- `--all` is reserved for future improvement; use one-step execution until the workflow is proven.
+- Use `--all` only when you deliberately want Ogre to chain through every remaining step automatically.
 
 ## Suggested `.gitignore`
 

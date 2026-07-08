@@ -18,6 +18,19 @@ load test_helper
   [[ "${output}" == *"Plan not found:"* ]]
 }
 
+@test "execute backfills state when a plan exists but state.json doesn't (ad-hoc plan, not created via ogre feature)" {
+  write_plan_with_steps 42 "First step"
+  [ ! -f ".ai/.ogre/state/issue-42.json" ]
+
+  run "${OGRE_BIN}" execute 42
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"backfilling state"* ]]
+  [[ "${output}" == *"Task"*"finished: passed"* ]]
+  [ -f ".ai/.ogre/state/issue-42.json" ]
+  # single-step plan: the one step passes, so the job rolls straight to completed
+  [ "$(state_field 42 status)" = "completed" ]
+}
+
 @test "execute --job with unknown job id errors" {
   run "${OGRE_BIN}" execute --job job-does-not-exist
   [ "${status}" -eq 1 ]

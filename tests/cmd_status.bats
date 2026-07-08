@@ -73,6 +73,19 @@ load test_helper
   [[ "${output}" == *"\"id\": \"${tid}\""* ]]
 }
 
+@test "status backfills state when a plan exists but state.json doesn't (ad-hoc plan, not created via ogre feature)" {
+  write_plan_with_steps 42 "First step" "Second step"
+  [ ! -f ".ai/.ogre/state/issue-42.json" ]
+
+  run "${OGRE_BIN}" status 42
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"backfilling state"* ]]
+  [[ "${output}" == *"Job Id"* ]]
+  [ -f ".ai/.ogre/state/issue-42.json" ]
+  [ "$(state_field 42 status)" = "planning" ]
+  [ "$(state_field 42 current_step)" = "First step" ]
+}
+
 @test "status rejects unknown option" {
   run "${OGRE_BIN}" status --bogus
   [ "${status}" -eq 1 ]

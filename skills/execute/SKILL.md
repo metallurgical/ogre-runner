@@ -76,9 +76,16 @@ A step tagged `[BROWSER-CHECK]` needs a real browser to verify - a spawned codex
    - Run `scripts/ogre task-complete <task-id> --status passed|failed` for it.
    - Re-run `scripts/ogre execute <issue> --all` (same executor/model flags as the original call) to resume the chain.
    - Repeat this loop if it pauses again on another `[BROWSER-CHECK]` step (each one is detected one at a time, not batched) - loop until the chain reports `completed`, `failed` for a real reason, or nothing left, then report the final result once.
-3. **`--all --background`**: the detached subprocess has no browser tools and cannot pause-and-call-back into this session while it's running unattended - there's no way around that. But before you next report anything to the user for this issue (including if they just say hi, or ask something unrelated, after having kicked off a `--background --all` run earlier in the conversation), proactively run `scripts/ogre status <issue>` first. If `current_step` contains `[BROWSER-CHECK]` and the job isn't `completed`/`stopped`, resolve it exactly like step 2 above, then resume with `scripts/ogre execute <issue> --all --background` (preserve `--background` since that's what the user asked for) and don't block waiting on it again. Do this silently as part of picking the conversation back up - the user shouldn't have to ask "is it done yet" or manually re-run anything themselves.
+3. **`--all --background`**: first check whether a fork is even needed - grep the plan's remaining (unchecked) checklist items for `[BROWSER-CHECK]`. If none of the remaining steps are tagged, just kick off `--background` normally and stop there; nothing will pause mid-chain, the ledger updates itself when it finishes, and there's nothing for a fork to supervise. Do not launch a fork for a chain that has no browser-check steps in it.
 
-The one hard limit: this can't happen while you have zero active turns (e.g. mid-toilet-break with no message sent). It resolves itself the moment you're back in the loop for any reason, not literally while the user is away with no interaction at all.
+   Only if at least one remaining step is tagged `[BROWSER-CHECK]`: the detached subprocess has no browser tools and cannot pause-and-call-back into this session while it's running unattended - there's no way around that, and waiting for your own next turn to check isn't reliable (you might not get one for hours). So the moment you kick off the `--background --all` run, launch a fork to supervise it: `Agent` tool, `subagent_type: "fork"`. Tell the fork to:
+   - Poll `scripts/ogre status <issue>` on a plain `sleep`-based loop (e.g. every 20-30s via bash - not `ScheduleWakeup`, the fork's own turns are cheap to spend waiting since they don't touch your context).
+   - Whenever `current_step` contains `[BROWSER-CHECK]` and the job isn't `completed`/`stopped`, resolve it itself exactly like step 2 above (`--main`, do the real check with its own browser tools, `task-complete`, then resume with `scripts/ogre execute <issue> --all --background`, preserving `--background`).
+   - Keep looping until the job reaches `completed`, `stopped`, or `failed` for a real (non-browser-check) reason, then return one final summary.
+
+   The fork's completion generates a `task-notification`, which reliably wakes a fresh turn in this session when it's done - so nothing is missed even with zero other interaction in between. Report that summary to the user when it arrives.
+
+   Do **not** use a fork for cases 1-2 above - those already resolve synchronously within the same turn, so forking would only inherit the whole conversation for no benefit.
 
 ## Behavior
 

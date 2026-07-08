@@ -329,3 +329,29 @@ print(next(t for t in tasks if t.get('step_index') == 1)['id'])
   [ "${status}" -eq 1 ]
   [[ "${output}" == *"Invalid --max-steps"* ]]
 }
+
+@test "execute injects repo drift (new commits + dirty tree) into the runner prompt" {
+  git init -q .
+  git -c user.email=t@t.t -c user.name=t commit -q --allow-empty -m "baseline"
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step"
+  sleep 1 # drift window anchors on the plan's mtime; keep the commit clearly after it
+  echo x > drifted.txt
+  git add drifted.txt
+  git -c user.email=t@t.t -c user.name=t commit -q -m "landed after plan"
+  echo y > dirty.txt
+
+  run "${OGRE_BIN}" execute 42 --main
+  [ "${status}" -eq 0 ]
+  grep -q "Repo drift since the plan was written" .ai/.ogre/tmp/issue-42/run-next.md
+  grep -q "landed after plan" .ai/.ogre/tmp/issue-42/run-next.md
+  grep -q "dirty.txt" .ai/.ogre/tmp/issue-42/run-next.md
+}
+
+@test "execute runner has no drift section outside a git repo" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step"
+  run "${OGRE_BIN}" execute 42 --main
+  [ "${status}" -eq 0 ]
+  ! grep -q "Repo drift" .ai/.ogre/tmp/issue-42/run-next.md
+}

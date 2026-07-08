@@ -221,6 +221,8 @@ Executes one checklist item (or all remaining, with `--all`) from an approved pl
 
 Default with no isolation flag: foreground, brand-new codex/claude session, targeting the lowest-numbered pending step.
 
+Every generated runner prompt also carries two context blocks so a fresh session doesn't start blind: notes recorded by earlier sessions on the issue (`task-complete --notes`), and repo drift — commits landed and uncommitted changes made since the plan file was last written — so a late step trusts the current code over the plan's stale memory of it.
+
 **`[BROWSER-CHECK]` steps.** A spawned codex/claude CLI subprocess (the default/`--background` isolation modes) has no real browser access - it can't visually render a page to verify layout or interactive behavior. Plan steps that genuinely need that are tagged `[BROWSER-CHECK]` by the planner. For single-step targeting, `ogre execute` detects the tag before spawning anything and auto-switches to `--main` itself, so it runs inline in your live session (where real browser/MCP tooling exists) without you having to retype the command. For `--all` chaining in the foreground, it instead stops the chain and tells you to finish that one step with `--main` before resuming - unattended multi-step runs shouldn't silently pause for inline work without saying so. For `--all --background`, if any remaining step in the plan is tagged `[BROWSER-CHECK]`, Claude launches a supervising fork alongside the detached run: it polls `ogre status`, resolves each `[BROWSER-CHECK]` step inline with real browser tooling the moment the chain reaches it, then resumes the background run - so an unattended chain with browser steps in it still completes without you having to notice the pause yourself.
 
 ### `ogre status`

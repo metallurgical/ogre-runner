@@ -1362,10 +1362,14 @@ cmd_add_blocker() {
   done
   [ -n "$blocker" ] || [ -n "$statement" ] || { err "Provide a blocker issue number/url/path, or --statement \"free text\""; exit 1; }
 
-  if [ "$force" != "true" ] && execution_started "$issue"; then
-    err "Execution has already started for issue $issue. Blockers can only be added before 'ogre execute' begins."
-    err "Use 'ogre stop $issue' to pause, or pass --force to override (already-completed steps won't be retroactively revised)."
-    exit 1
+  local forced_after_start="false"
+  if execution_started "$issue"; then
+    if [ "$force" != "true" ]; then
+      err "Execution has already started for issue $issue. Blockers can only be added before 'ogre execute' begins."
+      err "Use 'ogre stop $issue' to pause, or pass --force to override (already-completed steps won't be retroactively revised)."
+      exit 1
+    fi
+    forced_after_start="true"
   fi
 
   local plan issue_path logdir runner bpath bslug
@@ -1428,6 +1432,43 @@ PY
 )
   [ -n "$blockers_text" ] || blockers_text="none"
 
+  # When forcing a blocker in after execution started, steps that already
+  # passed are NOT retroactively re-planned. Surface them so the user and the
+  # planner both know the new blocker might contradict finished work. Reconcile
+  # first so ledger statuses reflect the plan's checkboxes.
+  local passed_text="" passed_section=""
+  if [ "$forced_after_start" = "true" ]; then
+    sync_state_from_plan "$issue"
+    while IFS=$'\t' read -r sidx stext; do
+      [ -n "$stext" ] || continue
+      passed_text="$passed_text* step $sidx: $stext
+"
+    done < <(python3 - "$(tasks_path)" "$issue" <<'PY'
+import json, sys
+path, issue = sys.argv[1], sys.argv[2]
+try:
+    tasks = json.load(open(path))
+except Exception:
+    tasks = []
+passed = [t for t in tasks if t.get("issue") == issue and t.get("status") == "passed"]
+passed.sort(key=lambda t: t.get("step_index") if t.get("step_index") is not None else 0)
+for t in passed:
+    print("{}\t{}".format(t.get("step_index"), " ".join(str(t.get("step") or "").split())))
+PY
+)
+    if [ -n "$passed_text" ]; then
+      log ""
+      log "WARNING: these steps already passed and were NOT retroactively revised for the new blocker:"
+      printf '%s' "$passed_text" | while IFS= read -r line; do [ -n "$line" ] && log "  $line"; done
+      log "Review them manually if the blocker conflicts with what they did."
+      passed_section="## Already-Completed Steps (not retroactively revised)
+
+These steps already ran and passed before this blocker was added. If the new blocker's requirements conflict with what they did, call that conflict out explicitly in the revised plan (append a note or a new remediation step) - do not silently leave the contradiction in place.
+
+$passed_text"
+    fi
+  fi
+
   runner="$RUNTIME/tmp/issue-$issue/plan-runner.md"
   cat > "$runner" <<EOF2
 # Ogre Planning Runner (Blocker Update)
@@ -1447,6 +1488,8 @@ $blockers_text
 ## Existing Plan (revise, do not discard)
 
 * \`$plan\`
+
+$passed_section
 
 ## Output
 

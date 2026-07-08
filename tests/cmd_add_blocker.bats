@@ -70,3 +70,38 @@ load test_helper
   [ "${status}" -eq 0 ]
   [ "$(state_field 42 status)" = "planning" ]
 }
+
+@test "add-blocker --force after a step passed flags it to the user and the planner" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "Add reset column" "Wire up controller"
+  # Run the first step to a passing state via the mock executor flow.
+  "${OGRE_BIN}" execute 42 >/dev/null
+  local tid
+  tid="$(python3 -c "
+import json
+tasks = json.load(open('.ai/.ogre/state/tasks.json'))
+print(next(t for t in tasks if t.get('step_index') == 1)['id'])
+")"
+  [ "$(task_json_field "${tid}" status)" = "passed" ]
+
+  run "${OGRE_BIN}" add-blocker 42 --statement "must invalidate old tokens" --name invtok --force
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"NOT retroactively revised"* ]]
+  [[ "${output}" == *"Add reset column"* ]]
+  # And the same reaches the re-planning runner prompt.
+  grep -q "Already-Completed Steps (not retroactively revised)" .ai/.ogre/tmp/issue-42/plan-runner.md
+  grep -q "Add reset column" .ai/.ogre/tmp/issue-42/plan-runner.md
+}
+
+@test "add-blocker --force with no passed steps yet shows no stale-step warning" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step"
+  # Execution "started" only via a stray log file - no task has passed.
+  mkdir -p .ai/.ogre/logs/issue-42
+  touch .ai/.ogre/logs/issue-42/execute-20260101-000000-abcdef12.log
+
+  run "${OGRE_BIN}" add-blocker 42 --statement "late blocker" --name late --force
+  [ "${status}" -eq 0 ]
+  [[ "${output}" != *"NOT retroactively revised"* ]]
+  ! grep -q "Already-Completed Steps" .ai/.ogre/tmp/issue-42/plan-runner.md
+}

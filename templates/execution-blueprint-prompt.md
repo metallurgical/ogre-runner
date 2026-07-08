@@ -41,6 +41,13 @@ You must:
   * `NEW` if the plan requires creating it.
   * `NEEDS INSPECTION` if not verified.
 
+## Step Granularity
+
+* Each execution step runs in its own fresh session (cold start + repo re-inspection), so a step whose real work is smaller than that overhead should be merged with an adjacent one.
+* Merge adjacent steps into one ONLY when all of them are trivially small (a single line-level change, no new logic, no new file) AND touch the same file or a tightly coupled pair (e.g. bump a constant and update its one call site).
+* Never merge steps that touch unrelated files, carry a `NEEDS INSPECTION` marker, are tagged `[BROWSER-CHECK]`, or would produce a diff too large to validate or revert as one unit.
+* When unsure, keep them separate - small, auditable diffs matter more than saving a session.
+
 ## Output Rules
 
 * No code blocks.

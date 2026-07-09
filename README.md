@@ -31,6 +31,7 @@ Then execute one step at a time, or run every remaining step in one go with `--a
 
 ```
 /ogre:execute forgot-password --executor codex
+# --executor default is claude; codex shown here as the alternative
 # Or chain through every remaining step automatically:
 /ogre:execute forgot-password --all --executor codex
 ```

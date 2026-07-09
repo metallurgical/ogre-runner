@@ -125,6 +125,26 @@ print(t['id'])
   [[ "${output}" == *"Steps Completed"* ]]
 }
 
+@test "execute foreground with --executor claude passes --permission-mode bypassPermissions (headless -p has no TTY to prompt)" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "Only step"
+  local args_file="${TEST_TMP}/claude-args.log"
+  MOCK_CLAUDE_ARGS_FILE="${args_file}" run "${OGRE_BIN}" execute 42
+  [ "${status}" -eq 0 ]
+  [ -f "${args_file}" ]
+  [[ "$(cat "${args_file}")" == *"--permission-mode bypassPermissions"* ]]
+}
+
+@test "execute --background with --executor claude passes --permission-mode bypassPermissions" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "Only step"
+  local args_file="${TEST_TMP}/claude-args.log"
+  MOCK_CLAUDE_ARGS_FILE="${args_file}" run "${OGRE_BIN}" execute 42 --background
+  [ "${status}" -eq 0 ]
+  [ -f "${args_file}" ]
+  [[ "$(cat "${args_file}")" == *"--permission-mode bypassPermissions"* ]]
+}
+
 @test "execute foreground with --executor codex runs the lowest pending step and marks it passed" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42
   write_plan_with_steps 42 "First step" "Second step"
@@ -142,6 +162,26 @@ print(t['id'])
   [ "$(task_json_field "${tid}" status)" = "passed" ]
   [ "$(task_json_field "${tid}" session_id)" = "mock-codex-session-1234" ]
   [ "$(state_field 42 status)" = "executing" ]
+}
+
+@test "execute foreground with --executor codex passes --sandbox workspace-write (default sandbox is read-only, silently no-ops writes)" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "Only step"
+  local args_file="${TEST_TMP}/codex-args.log"
+  MOCK_CODEX_ARGS_FILE="${args_file}" run "${OGRE_BIN}" execute 42 --executor codex
+  [ "${status}" -eq 0 ]
+  [ -f "${args_file}" ]
+  [[ "$(cat "${args_file}")" == *"--sandbox workspace-write"* ]]
+}
+
+@test "execute --background with --executor codex passes --sandbox workspace-write" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "Only step"
+  local args_file="${TEST_TMP}/codex-args.log"
+  MOCK_CODEX_ARGS_FILE="${args_file}" run "${OGRE_BIN}" execute 42 --executor codex --background
+  [ "${status}" -eq 0 ]
+  [ -f "${args_file}" ]
+  [[ "$(cat "${args_file}")" == *"--sandbox workspace-write"* ]]
 }
 
 @test "execute foreground fails closed when codex exits 0 but never calls task-complete" {

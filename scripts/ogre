@@ -2093,7 +2093,7 @@ PY
     log ""
     log "Mode: --main. Execute the target checklist item(s) from the runner file above directly in this session (no subprocess spawned)."
     log "Alternatively, run it in an isolated session yourself:"
-    log "  codex exec --skip-git-repo-check ${model:+-m $model} - < $runner"
+    log "  codex exec --skip-git-repo-check --sandbox workspace-write ${model:+-m $model} - < $runner"
     log ""
     log "Task $tid recorded as pending. Check with: $SCRIPT_DIR/ogre status --task $tid"
     log "When the work is done, mark it: $SCRIPT_DIR/ogre task-complete $tid --status passed|failed"
@@ -2115,13 +2115,13 @@ PY
     set +e
     case "$executor" in
       codex)
-        if [ -n "$model" ]; then codex exec --skip-git-repo-check -m "$model" - < "$link_runner" | tee "$link_logpath"
-        else codex exec --skip-git-repo-check - < "$link_runner" | tee "$link_logpath"
+        if [ -n "$model" ]; then codex exec --skip-git-repo-check --sandbox workspace-write -m "$model" - < "$link_runner" | tee "$link_logpath"
+        else codex exec --skip-git-repo-check --sandbox workspace-write - < "$link_runner" | tee "$link_logpath"
         fi
         ;;
       claude)
-        if [ -n "$model" ]; then claude -p --model "$model" --session-id "$link_session" < "$link_runner" | tee "$link_logpath"
-        else claude -p --session-id "$link_session" < "$link_runner" | tee "$link_logpath"
+        if [ -n "$model" ]; then claude -p --model "$model" --permission-mode bypassPermissions --session-id "$link_session" < "$link_runner" | tee "$link_logpath"
+        else claude -p --permission-mode bypassPermissions --session-id "$link_session" < "$link_runner" | tee "$link_logpath"
         fi
         ;;
     esac
@@ -2140,13 +2140,13 @@ PY
     local link_tid="$1" link_runner="$2" link_logpath="$3" link_session="$4"
     case "$executor" in
       codex)
-        if [ -n "$model" ]; then codex exec --skip-git-repo-check -m "$model" - < "$link_runner" > "$link_logpath" 2>&1
-        else codex exec --skip-git-repo-check - < "$link_runner" > "$link_logpath" 2>&1
+        if [ -n "$model" ]; then codex exec --skip-git-repo-check --sandbox workspace-write -m "$model" - < "$link_runner" > "$link_logpath" 2>&1
+        else codex exec --skip-git-repo-check --sandbox workspace-write - < "$link_runner" > "$link_logpath" 2>&1
         fi
         ;;
       claude)
-        if [ -n "$model" ]; then claude -p --model "$model" --session-id "$link_session" < "$link_runner" > "$link_logpath" 2>&1
-        else claude -p --session-id "$link_session" < "$link_runner" > "$link_logpath" 2>&1
+        if [ -n "$model" ]; then claude -p --model "$model" --permission-mode bypassPermissions --session-id "$link_session" < "$link_runner" > "$link_logpath" 2>&1
+        else claude -p --permission-mode bypassPermissions --session-id "$link_session" < "$link_runner" > "$link_logpath" 2>&1
         fi
         ;;
     esac

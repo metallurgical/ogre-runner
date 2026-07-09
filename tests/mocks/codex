@@ -10,7 +10,11 @@
 #   MOCK_CODEX_STATUS (default passed) - status passed to `ogre task-complete`
 #   MOCK_CODEX_SKIP_COMPLETE=1        - simulate a subprocess that exits 0 but
 #                                        forgot to call task-complete anyway
+#   MOCK_CODEX_ARGS_FILE               - if set, the invocation's argv is
+#                                         appended there (one line), so tests
+#                                         can assert on flags ogre passed us.
 set -euo pipefail
+[ -n "${MOCK_CODEX_ARGS_FILE:-}" ] && printf '%s\n' "$*" >> "${MOCK_CODEX_ARGS_FILE}"
 runner="$(cat)" # capture stdin (the runner file) instead of draining it
 tid="$(printf '%s\n' "$runner" | sed -n 's/.*Task id: `\(task-[^`]*\)`.*/\1/p' | head -n1)"
 echo "session id: mock-codex-session-1234"

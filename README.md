@@ -26,7 +26,7 @@ Ogre creates `.ai/.ogre/` automatically and writes a checklist plan to `.ai/.ogr
 /ogre:review-plan forgot-password --reviewer claude
 ```
 
-Then execute one step at a time, or let Ogre chain every remaining step:
+Then execute one step at a time, or run every remaining step in one go with `--all`:
 
 ```
 /ogre:execute forgot-password --executor codex

@@ -1181,6 +1181,61 @@ confirm_existing_plan() {
   esac
 }
 
+# issue_plan_file <issue> - the plan file's real path for this issue, honoring
+# a custom `--plan NAME.md` recorded in state (plan_path) rather than assuming
+# the default plans/issue-<n>.md, so archive/delete/list don't orphan a
+# custom-named plan. Only returns it when it lives under $RUNTIME (never a
+# user-supplied external path) and exists.
+issue_plan_file() {
+  local issue="$1" spath plan
+  spath="$(state_path "$issue")"
+  if [ -f "$spath" ]; then
+    plan="$(json_field "$spath" plan_path 2>/dev/null || true)"
+  fi
+  [ -n "${plan:-}" ] || plan="$RUNTIME/plans/issue-$issue.md"
+  case "$plan" in
+    "$RUNTIME"/*) [ -f "$plan" ] && echo "$plan" ;;
+  esac
+  return 0
+}
+
+# runtime_blocker_files <issue> - blocker files this issue pulled INTO the
+# runtime (from state's blocker_paths), one per line. Skips user-supplied
+# external paths (anything not under $RUNTIME - e.g. ./notes/x.md) so we never
+# delete a file we didn't create, and skips any blocker still referenced by a
+# different issue's state so a shared fetched blocker isn't yanked out from
+# under another live job.
+runtime_blocker_files() {
+  local issue="$1" spath
+  spath="$(state_path "$issue")"
+  [ -f "$spath" ] || return 0
+  python3 - "$spath" "$issue" "$RUNTIME" "$(dirname "$(state_path "$issue")")" <<'PY'
+import json, sys, glob, os
+spath, issue, runtime, statedir = sys.argv[1:5]
+try:
+    mine = json.load(open(spath))
+except Exception:
+    sys.exit(0)
+paths = [p for p in (mine.get("blocker_paths") or []) if p.startswith(runtime + "/")]
+# Which blocker paths does any OTHER issue still reference?
+referenced = set()
+for other in glob.glob(os.path.join(statedir, "issue-*.json")):
+    if os.path.abspath(other) == os.path.abspath(spath):
+        continue
+    if other.endswith("-knowledge.md"):
+        continue
+    try:
+        d = json.load(open(other))
+    except Exception:
+        continue
+    for p in (d.get("blocker_paths") or []):
+        referenced.add(p)
+for p in paths:
+    if p not in referenced and os.path.exists(p):
+        print(p)
+PY
+}
+
 archive_issue() {
   local issue="$1"
   local ts dest
@@ -1188,28 +1243,45 @@ archive_issue() {
   dest="$RUNTIME/archive/issue-$issue-$ts"
   mkdir -p "$dest"
   [ -f "$RUNTIME/issues/issue-$issue.md" ] && mkdir -p "$dest/issues" && mv "$RUNTIME/issues/issue-$issue.md" "$dest/issues/"
-  [ -f "$RUNTIME/plans/issue-$issue.md" ] && mkdir -p "$dest/plans" && mv "$RUNTIME/plans/issue-$issue.md" "$dest/plans/"
+  local _plan _blk
+  _plan="$(issue_plan_file "$issue")"
+  [ -n "$_plan" ] && mkdir -p "$dest/plans" && mv "$_plan" "$dest/plans/"
+  while IFS= read -r _blk; do
+    [ -n "$_blk" ] || continue
+    mkdir -p "$dest/issues" && mv "$_blk" "$dest/issues/"
+  done < <(runtime_blocker_files "$issue")
   [ -d "$RUNTIME/reviews/issue-$issue" ] && mkdir -p "$dest/reviews" && mv "$RUNTIME/reviews/issue-$issue" "$dest/reviews/"
   [ -d "$RUNTIME/logs/issue-$issue" ] && mkdir -p "$dest/logs" && mv "$RUNTIME/logs/issue-$issue" "$dest/logs/"
   [ -f "$RUNTIME/state/issue-$issue.json" ] && mkdir -p "$dest/state" && mv "$RUNTIME/state/issue-$issue.json" "$dest/state/"
+  [ -f "$(knowledge_path "$issue")" ] && mkdir -p "$dest/state" && mv "$(knowledge_path "$issue")" "$dest/state/"
   log "Archived issue $issue to $dest"
 }
 
 list_issue_files() {
-  local issue="$1"
+  local issue="$1" _plan _blk
   [ -f "$RUNTIME/issues/issue-$issue.md" ] && echo "$RUNTIME/issues/issue-$issue.md"
-  [ -f "$RUNTIME/plans/issue-$issue.md" ] && echo "$RUNTIME/plans/issue-$issue.md"
+  while IFS= read -r _blk; do [ -n "$_blk" ] && echo "$_blk"; done < <(runtime_blocker_files "$issue")
+  _plan="$(issue_plan_file "$issue")"
+  [ -n "$_plan" ] && echo "$_plan"
+  [ -f "$RUNTIME/plans/issue-$issue.md" ] && [ "$_plan" != "$RUNTIME/plans/issue-$issue.md" ] && echo "$RUNTIME/plans/issue-$issue.md"
   [ -d "$RUNTIME/reviews/issue-$issue" ] && echo "$RUNTIME/reviews/issue-$issue"
   [ -d "$RUNTIME/logs/issue-$issue" ] && echo "$RUNTIME/logs/issue-$issue"
   [ -f "$RUNTIME/state/issue-$issue.json" ] && echo "$RUNTIME/state/issue-$issue.json"
+  [ -f "$(knowledge_path "$issue")" ] && echo "$(knowledge_path "$issue")"
   [ -d "$RUNTIME/tmp/issue-$issue" ] && echo "$RUNTIME/tmp/issue-$issue"
   return 0
 }
 
 delete_issue_data() {
   local issue="$1"
-  local pruned
-  rm -f "$RUNTIME/issues/issue-$issue.md" "$RUNTIME/plans/issue-$issue.md" "$RUNTIME/state/issue-$issue.json"
+  local pruned _plan _blk
+  # Resolve plan + blocker files from state BEFORE the state json is removed.
+  _plan="$(issue_plan_file "$issue")"
+  local -a blk_files=()
+  while IFS= read -r _blk; do [ -n "$_blk" ] && blk_files+=("$_blk"); done < <(runtime_blocker_files "$issue")
+  rm -f "$RUNTIME/issues/issue-$issue.md" "$RUNTIME/plans/issue-$issue.md" "$RUNTIME/state/issue-$issue.json" "$(knowledge_path "$issue")"
+  [ -n "$_plan" ] && rm -f "$_plan"
+  [ ${#blk_files[@]} -gt 0 ] && rm -f "${blk_files[@]}"
   rm -rf "$RUNTIME/reviews/issue-$issue" "$RUNTIME/logs/issue-$issue" "$RUNTIME/tmp/issue-$issue"
   pruned="$(prune_tasks_for_issue "$issue")"
   log "Deleted Ogre data for issue $issue. Code changes were not reverted."

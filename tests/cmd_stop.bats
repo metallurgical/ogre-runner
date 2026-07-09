@@ -41,7 +41,9 @@ load test_helper
   run "${OGRE_BIN}" stop 42 --list
   [ "${status}" -eq 0 ]
   [[ "${output}" == *"issue-42.md"* ]]
+  [[ "${output}" == *"issue-42-knowledge.md"* ]]
   [ -f ".ai/.ogre/issues/issue-42.md" ]
+  [ -f ".ai/.ogre/state/issue-42-knowledge.md" ]
 }
 
 @test "stop --list without a target errors" {
@@ -56,6 +58,9 @@ load test_helper
   [ "${status}" -eq 0 ]
   [ ! -f ".ai/.ogre/issues/issue-42.md" ]
   [ -n "$(find .ai/.ogre/archive -name 'issue-42.md' 2>/dev/null)" ]
+  # Knowledge base moves with it - nothing orphaned in state/.
+  [ ! -f ".ai/.ogre/state/issue-42-knowledge.md" ]
+  [ -n "$(find .ai/.ogre/archive -name 'issue-42-knowledge.md' 2>/dev/null)" ]
 }
 
 @test "stop --delete cancels without typing yes" {
@@ -72,6 +77,46 @@ load test_helper
   [ "${status}" -eq 0 ]
   [ ! -f ".ai/.ogre/issues/issue-42.md" ]
   [ ! -f ".ai/.ogre/state/issue-42.json" ]
+  # Knowledge base is deleted too - nothing left to bloat state/.
+  [ ! -f ".ai/.ogre/state/issue-42-knowledge.md" ]
+}
+
+@test "stop --delete also removes attached blocker files and a custom-named plan" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --plan cp-42.md
+  "${OGRE_BIN}" add-blocker 42 --statement "blk" --name myblocker
+  # The custom plan is referenced in state (plan_path) but only written later; create it.
+  echo "plan body" > .ai/.ogre/plans/cp-42.md
+  [ -f ".ai/.ogre/issues/issue-myblocker.md" ]
+
+  run bash -c "printf 'yes\n' | '${OGRE_BIN}' stop 42 --delete"
+  [ "${status}" -eq 0 ]
+  [ ! -f ".ai/.ogre/issues/issue-myblocker.md" ]   # blocker file gone
+  [ ! -f ".ai/.ogre/plans/cp-42.md" ]              # custom-named plan gone
+  # Absolutely nothing for issue 42 left behind anywhere under the runtime.
+  [ -z "$(find .ai/.ogre -path '*archive*' -prune -o -name '*42*' -print 2>/dev/null)" ]
+}
+
+@test "stop --delete keeps a shared blocker still referenced by another issue" {
+  "${OGRE_BIN}" feature --statement "first" --name 42
+  "${OGRE_BIN}" feature --statement "second" --name 99
+  "${OGRE_BIN}" add-blocker 42 7
+  "${OGRE_BIN}" add-blocker 99 7   # same fetched blocker file, two issues
+  [ -f ".ai/.ogre/issues/issue-7.md" ]
+
+  run bash -c "printf 'yes\n' | '${OGRE_BIN}' stop 42 --delete"
+  [ "${status}" -eq 0 ]
+  # issue 99 still references it, so it must survive deleting issue 42.
+  [ -f ".ai/.ogre/issues/issue-7.md" ]
+}
+
+@test "stop --delete leaves a user-external blocker source untouched" {
+  mkdir -p notes && echo "external blocker" > notes/ext.md
+  "${OGRE_BIN}" feature --statement "base" --name 42
+  "${OGRE_BIN}" add-blocker 42 ./notes/ext.md
+  run bash -c "printf 'yes\n' | '${OGRE_BIN}' stop 42 --delete"
+  [ "${status}" -eq 0 ]
+  # The runtime copy is gone, but the user's original file outside .ai/ stays.
+  [ -f "notes/ext.md" ]
 }
 
 @test "stop --all marks every issue stopped" {

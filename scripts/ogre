@@ -72,7 +72,7 @@ ensure_runtime() {
   "defaults": {
     "planner": { "provider": "claude", "model": "sonnet-5" },
     "plan_reviewer": { "provider": "claude", "model": "sonnet-5" },
-    "executor": { "provider": "codex", "model": "gpt-5.5" },
+    "executor": { "provider": "claude", "model": "sonnet-5" },
     "diff_reviewer": { "provider": "codex", "model": "gpt-5.5" }
   }
 }
@@ -1492,7 +1492,7 @@ EOF2
   local blocker_paths_json="[]" bremarks_json="{}"
   [ ${#bpaths[@]} -gt 0 ] && blocker_paths_json="$(json_array "${bpaths[@]}")"
   [ ${#remark_pairs[@]} -gt 0 ] && bremarks_json="$(blocker_remarks_json "${remark_pairs[@]}")"
-  write_state "$issue" "planning" "$plan" "$planner" "$model" "claude" "sonnet-5" "codex" "gpt-5.5" "$blocker_paths_json" "$bremarks_json"
+  write_state "$issue" "planning" "$plan" "$planner" "$model" "claude" "sonnet-5" "claude" "sonnet-5" "$blocker_paths_json" "$bremarks_json"
 
   log ""
   print_job_summary "$issue"
@@ -1734,7 +1734,7 @@ cmd_execute() {
   #   new        - default: foreground, brand-new codex/claude session, isolated from main context
   #   main       - run inline in the current Claude Code session (no subprocess spawned)
   #   background - same isolation as "new" but detached/non-blocking
-  local target="" executor="codex" model="gpt-5.5" mode="next" freshness="fresh" iso="new" job_id="" task_id="" step_n="" assume_yes="false" max_steps="3" retry="false"
+  local target="" executor="claude" model="" mode="next" freshness="fresh" iso="new" job_id="" task_id="" step_n="" assume_yes="false" max_steps="3" retry="false"
   if [ $# -gt 0 ] && [[ ! "$1" =~ ^-- ]]; then
     target="$1"; shift
   fi
@@ -1743,7 +1743,7 @@ cmd_execute() {
       --job) job_id="${2:-}"; shift 2 ;;
       --task) task_id="${2:-}"; shift 2 ;;
       --step) step_n="${2:-}"; shift 2 ;;
-      --executor) executor="${2:-codex}"; shift 2 ;;
+      --executor) executor="${2:-claude}"; shift 2 ;;
       --model) model="${2:-}"; shift 2 ;;
       --max-steps) max_steps="${2:-3}"; shift 2 ;;
       --retry) retry="true"; shift ;;
@@ -1758,6 +1758,12 @@ cmd_execute() {
       *) err "Unknown option: $1"; exit 1 ;;
     esac
   done
+  if [ -z "$model" ]; then
+    case "$executor" in
+      codex) model="gpt-5.5" ;;
+      *) model="sonnet-5" ;;
+    esac
+  fi
   if [ -n "$job_id" ]; then
     target="$(resolve_issue_by_job_id "$job_id")"
     [ -n "$target" ] || { err "No issue found with job id $job_id"; exit 1; }
@@ -2259,7 +2265,9 @@ PY
     log "Task $tid started in background (pid $pid)."
     [ "$mode" = "all" ] && log "Chained --all: will keep spawning fresh sessions automatically as long as each one passes and steps remain."
     log "Check with: ogre status --task $tid"
-    [ "$executor" = "codex" ] && log "Codex session id will show up in that status once captured from its output."
+    if [ "$executor" = "codex" ]; then
+      log "Codex session id will show up in that status once captured from its output."
+    fi
     return
     ;;
   esac

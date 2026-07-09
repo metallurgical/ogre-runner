@@ -9,7 +9,7 @@ load test_helper
   done
   [ -f ".ai/.ogre/config.json" ]
   [ "$(cat .ai/.ogre/state/tasks.json)" = "[]" ]
-  [ "$(python3 -c "import json; print(json.load(open('.ai/.ogre/config.json'))['defaults']['executor']['provider'])")" = "codex" ]
+  [ "$(python3 -c "import json; print(json.load(open('.ai/.ogre/config.json'))['defaults']['executor']['provider'])")" = "claude" ]
 }
 
 @test "init copies prompt templates into runtime" {

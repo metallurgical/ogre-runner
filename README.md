@@ -102,15 +102,7 @@ Inside each target project, Ogre creates:
 
 ## Command Reference
 
-Invoke as `/ogre:<command> ...` inside Claude Code (or `scripts/ogre <command> ...` directly, same flags either way). Positional input always comes first, flags after, in any order. `init` and `task-complete` have no skill wrapper — run those via `scripts/ogre`.
-
-### `ogre init`
-
-Optional. Creates the runtime folders and copies templates up front. Other Ogre commands do this automatically when needed, so you can skip `init` unless you want to verify setup before starting.
-
-```bash
-scripts/ogre init
-```
+Invoke as `/ogre:<command> ...` inside Claude Code (or `scripts/ogre <command> ...` directly, same flags either way). Positional input always comes first, flags after, in any order. `task-complete` has no skill wrapper — run it via `scripts/ogre`. `ogre init` is optional too — other commands create the runtime folders automatically when needed.
 
 ### `/ogre:feature`
 
@@ -184,7 +176,7 @@ Executes one checklist item (or all remaining, with `--all`) from an approved pl
 | :--- | :--- | :--- |
 | `<issue-or-plan>` (positional) | `/ogre:execute 107` | Issue number, plan name, or plan path |
 | `--job JOB_ID` | `/ogre:execute --job job-6d7715e4-...` | Target by job id instead of issue/plan |
-| `--executor codex\|claude` | `/ogre:execute 107 --executor claude` | Which LLM CLI executes the step (default: `codex`) |
+| `--executor codex\|claude` | `/ogre:execute 107 --executor codex` | Which LLM CLI executes the step (default: `claude` — always present since it's the host; use `codex` if installed) |
 | `--model MODEL` | `/ogre:execute 107 --executor claude --model sonnet-5` | Model override for the executor |
 | `--task TASK_ID` | `/ogre:execute 107 --task task-0f32a78f-...` | Target one specific seeded step out of order |
 | `--step N` | `/ogre:execute 107 --step 3` | Target step N (1-based) out of order |
@@ -238,7 +230,7 @@ Lists every checklist step under one job, one row per step (including steps neve
 
 ### `ogre task-complete`
 
-Manually marks a task's ledger status. Only needed when the executing agent did the work directly (not via `--run`/`--background`, which mark it automatically); this is the mandatory last step in that case.
+Internal — marks a task's ledger status. `--run`/`--background` executions call this automatically; you only need it yourself if you did the step's work directly instead of through `execute`.
 
 ```bash
 scripts/ogre task-complete task-0f32a78f-... --status passed
@@ -290,28 +282,6 @@ To update later:
 /plugin marketplace update ogre-runner
 ```
 
-## Install / Test Locally (development)
-
-Testing a local checkout without going through the marketplace:
-
-```bash
-claude --plugin-dir /path/to/ogre-plugin
-```
-
-Then open your project in Claude Code and try:
-
-```txt
-/ogre:feature --statement "need to implement forgot password page" --name forgot-password
-```
-
-The helper script can also be run directly from a project root. `init` is optional; `feature` creates the runtime folders/templates automatically when needed.
-
-```bash
-/path/to/ogre-plugin/scripts/ogre init
-/path/to/ogre-plugin/scripts/ogre feature --statement "need to implement forgot password page" --name forgot-password
-/path/to/ogre-plugin/scripts/ogre status
-```
-
 ## Required Tools
 
 Optional but recommended:
@@ -322,7 +292,7 @@ codex --version
 claude --version
 ```
 
-If `gh` is missing, Ogre creates placeholder issue files so you can paste issue content manually.
+If an issue can't be fetched automatically (`gh` missing, not a GitHub repo, not authenticated, no access, or an unreachable URL), Ogre creates a placeholder issue file so you can paste the content manually.
 
 If `codex` is missing, `/ogre:execute --executor codex --run` will fail, but you can still generate runner prompts and pass them manually.
 

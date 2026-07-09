@@ -45,11 +45,20 @@ load test_helper
   [[ "${output}" == *"Unsupported executor: bogus"* ]]
 }
 
-@test "execute errors when the codex CLI is missing" {
+@test "execute errors when the claude CLI is missing (default executor)" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42
   write_plan_with_steps 42 "First step"
   # Real PATH minus the mocks dir - codex/claude mocks are the only ones on PATH we control.
   run env PATH="/usr/bin:/bin" "${OGRE_BIN}" execute 42
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"claude CLI not found"* ]]
+}
+
+@test "execute errors when the codex CLI is missing" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step"
+  # Real PATH minus the mocks dir - codex/claude mocks are the only ones on PATH we control.
+  run env PATH="/usr/bin:/bin" "${OGRE_BIN}" execute 42 --executor codex
   [ "${status}" -eq 1 ]
   [[ "${output}" == *"codex CLI not found"* ]]
 }
@@ -66,10 +75,29 @@ load test_helper
   [ "$(task_json_field "${tid}" status)" = "pending" ]
 }
 
-@test "execute foreground default (codex) runs the lowest pending step and marks it passed" {
+@test "execute foreground default (claude) runs the lowest pending step and marks it passed" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42
   write_plan_with_steps 42 "First step" "Second step"
   run "${OGRE_BIN}" execute 42
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Executor: claude"* ]]
+  [[ "${output}" == *"Task"*"finished: passed"* ]]
+  local tid
+  tid="$(python3 -c "
+import json
+tasks = json.load(open('.ai/.ogre/state/tasks.json'))
+t = next(t for t in tasks if t.get('step_index') == 1)
+print(t['id'])
+")"
+  [ "$(task_json_field "${tid}" status)" = "passed" ]
+  [ -n "$(task_json_field "${tid}" session_id)" ]
+  [ "$(state_field 42 status)" = "executing" ]
+}
+
+@test "execute foreground with --executor codex runs the lowest pending step and marks it passed" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step" "Second step"
+  run "${OGRE_BIN}" execute 42 --executor codex
   [ "${status}" -eq 0 ]
   [[ "${output}" == *"Executor: codex"* ]]
   [[ "${output}" == *"Task"*"finished: passed"* ]]
@@ -89,7 +117,7 @@ print(t['id'])
   "${OGRE_BIN}" feature --statement "base feature" --name 42
   write_plan_with_steps 42 "First step"
   export MOCK_CODEX_SKIP_COMPLETE=1
-  run "${OGRE_BIN}" execute 42
+  run "${OGRE_BIN}" execute 42 --executor codex
   # rc==0 alone never proves the domain task passed - if the subprocess
   # never wrote its own status, finalize_link_status must fail closed
   # instead of guessing "passed" from the bare exit code.
@@ -119,7 +147,7 @@ print(t['id'])
   "${OGRE_BIN}" feature --statement "base feature" --name 42
   write_plan_with_steps 42 "First step"
   export MOCK_CODEX_EXIT=7
-  run "${OGRE_BIN}" execute 42
+  run "${OGRE_BIN}" execute 42 --executor codex
   # `set -e` aborts cmd_execute the instant run_link_foreground returns
   # non-zero, so the script's own exit code is the mock's raw exit code
   # (not massaged to 1), and the "Task ... finished: ..." summary line
@@ -386,7 +414,7 @@ print(next(t for t in tasks if t.get('step_index') == 1)['id'])
   "${OGRE_BIN}" feature --statement "base feature" --name 42
   write_plan_with_steps 42 "First step" "Second step"
   export MOCK_CODEX_STATUS=failed
-  run "${OGRE_BIN}" execute 42
+  run "${OGRE_BIN}" execute 42 --executor codex
   [ "${status}" -eq 1 ]
   unset MOCK_CODEX_STATUS
   local tid

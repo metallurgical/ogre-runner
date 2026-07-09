@@ -123,7 +123,8 @@ Inside each target project, Ogre creates:
   plans/
   reviews/
   logs/
-  state/
+  state/                          # per-issue state.json, shared tasks.json ledger,
+                                  # and issue-<n>-knowledge.md living knowledge bases
   tmp/
   archive/
   prompts/
@@ -232,7 +233,9 @@ Executes one checklist item (or all remaining, with `--all`) from an approved pl
 
 Default with no isolation flag: foreground, brand-new codex/claude session, targeting the lowest-numbered pending step.
 
-Every generated runner prompt also carries two context blocks so a fresh session doesn't start blind: notes recorded by earlier sessions on the issue (`task-complete --notes`), and repo drift — commits landed and uncommitted changes made since the plan file was last written — so a late step trusts the current code over the plan's stale memory of it.
+Every generated runner prompt also carries context blocks so a fresh session doesn't start blind: the issue's **living knowledge base** (see below), and repo drift — commits landed and uncommitted changes made since the plan file was last written — so a late step trusts the current code over the plan's stale memory of it.
+
+**Living knowledge base.** Each issue gets `.ai/.ogre/state/issue-<n>-knowledge.md`, seeded from `templates/knowledge-base.md` when the job is created (and lazily on first `execute`/`status` for older jobs). Every step reads it first — it records what earlier steps already learned: stack and conventions, project structure, real verified signatures/routes/columns, the validation commands that actually work here, gotchas, and a one-line-per-step log of what each step did. So a fresh session starts oriented instead of re-grepping facts a previous step already knew. As its mandatory closing move (alongside `task-complete`), each step updates the file **in place** — revising the durable sections and appending one Step Log line — under fixed per-section caps and a rolling Step Log window, so it stays small enough to never rot the next session's context (a soft size warning fires in `execute`/`status` if it grows past ~200 lines). It's a head-start, not a cage: the executor still reads real code when needed, and real code always wins over a stale line in the file. `task-complete --notes "..."` still exists but now only records a per-task marker in the ledger (visible in `ogre status`); cross-step knowledge travels through the knowledge base.
 
 **`[BROWSER-CHECK]` steps.** A spawned codex/claude CLI subprocess (the default/`--background` isolation modes) has no real browser access - it can't visually render a page to verify layout or interactive behavior. Plan steps that genuinely need that are tagged `[BROWSER-CHECK]` by the planner. For single-step targeting, `ogre execute` detects the tag before spawning anything and auto-switches to `--main` itself, so it runs inline in your live session (where real browser/MCP tooling exists) without you having to retype the command. For `--all` chaining in the foreground, it instead stops the chain and tells you to finish that one step with `--main` before resuming - unattended multi-step runs shouldn't silently pause for inline work without saying so. For `--all --background`, if any remaining step in the plan is tagged `[BROWSER-CHECK]`, Claude launches a supervising fork alongside the detached run: it polls `ogre status`, resolves each `[BROWSER-CHECK]` step inline with real browser tooling the moment the chain reaches it, then resumes the background run - so an unattended chain with browser steps in it still completes without you having to notice the pause yourself.
 

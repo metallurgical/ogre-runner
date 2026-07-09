@@ -136,6 +136,24 @@ PY
   [ "$(task_json_field "${tid}" status)" = "running" ]
 }
 
+@test "status shows a knowledge-base line and warns when it is bloated" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step"
+
+  run "${OGRE_BIN}" status 42
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Knowledge:"* ]]
+  [[ "${output}" == *"issue-42-knowledge.md"* ]]
+  # A fresh skeleton is under the soft cap: no warning.
+  [[ "${output}" != *"over the ~200 soft cap"* ]]
+
+  # Bloat it past the soft cap and confirm the warning fires.
+  python3 -c "open('.ai/.ogre/state/issue-42-knowledge.md','a').write('\n'.join('- x %d' % i for i in range(250)))"
+  run "${OGRE_BIN}" status 42
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"over the ~200 soft cap"* ]]
+}
+
 @test "status rejects unknown option" {
   run "${OGRE_BIN}" status --bogus
   [ "${status}" -eq 1 ]

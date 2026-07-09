@@ -234,34 +234,6 @@ for t in tasks:
 PY
 }
 
-# prior_notes_block <issue> - markdown block of notes recorded by earlier
-# executor sessions for this issue (via `ogre task-complete --notes`),
-# ordered by step. Injected into every subsequent runner prompt so knowledge
-# discovered mid-step (real signatures, deviations from the plan, gotchas)
-# survives the death of the session that discovered it instead of being
-# re-derived from scratch each step. Prints nothing when no notes exist.
-prior_notes_block() {
-  local issue="$1"
-  python3 - "$(tasks_path)" "$issue" <<'PY' 2>/dev/null || true
-import json, sys
-path, issue = sys.argv[1], sys.argv[2]
-try:
-    tasks = json.load(open(path))
-except Exception:
-    tasks = []
-noted = [t for t in tasks if t.get("issue") == issue and t.get("notes")]
-noted.sort(key=lambda t: t.get("step_index") or 0)
-if not noted:
-    sys.exit(0)
-print("Notes from earlier sessions on this issue (read first - they record what previous steps actually found, so don't re-derive or contradict them):")
-print()
-for t in noted:
-    idx = t.get("step_index")
-    label = "step {}".format(idx) if idx is not None else t.get("id")
-    print("* [{} - {}] {}".format(label, t.get("status"), " ".join(str(t.get("notes")).split())))
-PY
-}
-
 # repo_drift_block <plan-path> - markdown block of commits landed since the
 # plan file was last written, plus any uncommitted working-tree changes.
 # Injected into runner prompts so each executor session sees how the repo has
@@ -653,6 +625,91 @@ state_path() {
   echo "$RUNTIME/state/issue-$issue.json"
 }
 
+# Living knowledge base for one issue: a markdown file every execute step
+# reads first (instant orientation) and updates last (findings survive the
+# session that found them). Persistent on disk like the rest of state/.
+knowledge_path() {
+  local issue="$1"
+  echo "$RUNTIME/state/issue-$issue-knowledge.md"
+}
+
+# Soft cap: over this many lines, the file is warned about (never blocked) so
+# the next step distils it before it rots context.
+KNOWLEDGE_SOFT_LINE_CAP=200
+
+# Create the knowledge file from the template skeleton if it doesn't exist
+# yet. Copied verbatim except the `# Knowledge — <issue>` heading gets the
+# real issue. No-op if already present (never clobber accumulated knowledge)
+# or if the template is missing (older checkout).
+seed_knowledge() {
+  local issue="$1"
+  local kpath tmpl
+  kpath="$(knowledge_path "$issue")"
+  [ -f "$kpath" ] && return 0
+  tmpl="$RUNTIME/prompts/knowledge-base.md"
+  [ -f "$tmpl" ] || tmpl="$TEMPLATE_DIR/knowledge-base.md"
+  [ -f "$tmpl" ] || return 0
+  mkdir -p "$(dirname "$kpath")"
+  sed "s/# Knowledge — <issue>/# Knowledge — $issue/" "$tmpl" > "$kpath.tmp" && mv "$kpath.tmp" "$kpath"
+}
+
+# True if the knowledge file has any real content - i.e. at least one line
+# that isn't an HTML comment, a heading, the placeholder "(none recorded
+# yet)", or blank. A freshly-seeded, all-placeholder file counts as empty, so
+# knowledge_block stays silent until a step has actually written something.
+knowledge_has_content() {
+  local issue="$1" kpath
+  kpath="$(knowledge_path "$issue")"
+  [ -f "$kpath" ] || return 1
+  python3 - "$kpath" <<'PY'
+import sys
+path = sys.argv[1]
+in_comment = False
+for raw in open(path):
+    line = raw.strip()
+    if not line:
+        continue
+    if in_comment:
+        if "-->" in line:
+            in_comment = False
+        continue
+    if line.startswith("<!--"):
+        if "-->" not in line:
+            in_comment = True
+        continue
+    if line.startswith("#") or line.startswith("<!"):
+        continue
+    if line == "- (none recorded yet)" or line == "(none recorded yet)":
+        continue
+    sys.exit(0)  # found real content
+sys.exit(1)
+PY
+}
+
+# knowledge_block <issue> - the knowledge file's contents wrapped in a lead-in,
+# for injection into a runner prompt. Prints nothing until a step has recorded
+# something real, so early runners aren't padded with an empty skeleton.
+knowledge_block() {
+  local issue="$1" kpath
+  kpath="$(knowledge_path "$issue")"
+  knowledge_has_content "$issue" || return 0
+  echo "Knowledge from earlier steps on this issue - read this before touching code. It records what previous steps already learned (conventions, verified signatures, validation commands, gotchas, and what each step did), so you don't have to re-derive it. It's a head-start, not a cage: still read real code when the task needs it, and if anything here disagrees with the actual code, the code wins - fix the stale line as you go."
+  echo
+  cat "$kpath"
+}
+
+# Warn (never fail) when a knowledge file has grown past the soft cap, so
+# unbounded growth is visible and the next step knows to distil it.
+warn_if_knowledge_bloated() {
+  local issue="$1" kpath lines
+  kpath="$(knowledge_path "$issue")"
+  [ -f "$kpath" ] || return 0
+  lines="$(wc -l < "$kpath" | tr -d ' ')"
+  if [ "${lines:-0}" -gt "$KNOWLEDGE_SOFT_LINE_CAP" ]; then
+    log "WARNING: knowledge base for issue $issue is $lines lines - over the ~$KNOWLEDGE_SOFT_LINE_CAP soft cap. The next step should distil it (fold Step Log facts up into the durable sections, drop stale lines) before it rots context."
+  fi
+}
+
 write_state() {
   local issue="$1" status="$2" plan="$3" planner="$4" planner_model="$5" reviewer="$6" reviewer_model="$7" executor="$8" executor_model="$9"
   local blocker_paths_json="${10:-[]}"
@@ -684,6 +741,7 @@ write_state() {
 }
 JSON
   mv "$path.tmp" "$path"
+  seed_knowledge "$issue"
   log "State written: $path (job_id: $job_id)"
 }
 
@@ -1610,6 +1668,7 @@ cmd_execute() {
   [ -f "$plan" ] || { err "Plan not found: $plan"; exit 1; }
   issue="$(slug_from_issue "$plan")"
   sync_state_from_plan "$issue"
+  seed_knowledge "$issue"  # lazily seed for jobs created before knowledge bases existed
   spath="$(state_path "$issue")"
   logdir="$RUNTIME/logs/issue-$issue"
   mkdir -p "$logdir" "$RUNTIME/tmp/issue-$issue"
@@ -1652,7 +1711,7 @@ Execution mode:
 * Freshness: \`$freshness\`
 * Task id: \`$link_tid\`
 
-$(prior_notes_block "$issue")
+$(knowledge_block "$issue")
 
 $(repo_drift_block "$plan")
 
@@ -1669,8 +1728,9 @@ Task:
 * STOP even earlier than the cap if you estimate more than roughly half of your context window is already used after finishing an item.
 * Stopping early for the cap or context-budget reasons is normal and expected, not a failure: a fresh session will automatically continue with whatever is left. Do not report it as an error.
 * Only stop and mark failed if an item's validation genuinely fails; report which items completed and which didn't.
+* Mandatory before finishing: UPDATE the knowledge base at \`$RUNTIME/state/issue-$issue-knowledge.md\` following the rules inside that file - revise the durable sections in place if you confirmed something structural (stack, conventions, structure, a real signature/route/column, a validation command, a gotcha), and append exactly ONE line to its Step Log saying what each item did + the single most useful thing learned. Revise in place, respect the caps, don't append duplicates. Do this even if the step FAILED - a failure's "why" is the most valuable gotcha for the next attempt. If this is the first step, seed the durable sections from what you learned so later steps start informed.
 * Mark the ledger task done, mandatory, last step: \`$SCRIPT_DIR/ogre task-complete $link_tid --status passed\` (covers both "finished everything" and "stopped early on purpose for the cap/context") or \`--status failed\` (only for a genuine validation failure). Use this exact path - \`ogre\` alone is not guaranteed to be on PATH.
-* Add \`--notes "..."\` to that command whenever you learned something the next session must know: an actual signature/route/schema that differs from the plan, a deviation you made, a gotcha. One or two sentences. Skip it if there is genuinely nothing.
+* Optional: \`--notes "..."\` on that command records a one-liner in the task ledger (visible in \`ogre status\`) - handy for a per-attempt marker, but the knowledge base above is what carries knowledge to the next step, so prefer updating that.
 
 Safety:
 
@@ -1856,7 +1916,7 @@ Target checklist item (step $step_index) - implement exactly this one, nothing e
 
 * $step_text
 
-$(prior_notes_block "$issue")
+$(knowledge_block "$issue")
 
 $(repo_drift_block "$plan")
 
@@ -1873,8 +1933,9 @@ Task:
 * Update the checklist item status in the source plan only after the work and validation are complete.
 * Write a concise execution log to \`$logpath\`.
 * Stop after reporting changed files and validation result.
+* Mandatory before finishing: UPDATE the knowledge base at \`$RUNTIME/state/issue-$issue-knowledge.md\` following the rules inside that file - revise the durable sections in place if you confirmed something structural (stack, conventions, structure, a real signature/route/column, a validation command, a gotcha), and append exactly ONE line to its Step Log saying what this step did + the single most useful thing learned. Revise in place, respect the caps, don't append duplicates. Do this even if the step FAILED - a failure's "why" is the most valuable gotcha for the next attempt. If this is the first step, seed the durable sections from what you learned so later steps start informed.
 * Mark the ledger task done, mandatory, last step: \`$SCRIPT_DIR/ogre task-complete $tid --status passed\` (or \`--status failed\` if validation failed). Use this exact path - \`ogre\` alone is not guaranteed to be on PATH. Skipping this leaves the task stuck \`pending\`/\`running\` in \`ogre status\`/\`ogre task-list\` even though the work is done.
-* Add \`--notes "..."\` to that command whenever you learned something the next step's fresh session must know: an actual signature/route/schema that differs from the plan, a deviation you made, a gotcha. One or two sentences. Skip it if there is genuinely nothing.
+* Optional: \`--notes "..."\` on that command records a one-liner in the task ledger (visible in \`ogre status\`) - handy for a per-attempt marker, but the knowledge base above is what carries knowledge to the next step, so prefer updating that.
 
 Safety:
 
@@ -2051,6 +2112,7 @@ dump_json(d, p)
 PY
     fi
     sync_state_from_plan "$issue"
+    warn_if_knowledge_bloated "$issue"
   }
 
   case "$iso" in
@@ -2206,7 +2268,14 @@ _status_render() {
     if [ -f "$spath" ]; then
       reap_all_tasks
       sync_state_from_plan "$issue"
+      seed_knowledge "$issue"
       print_job_summary "$issue"
+      local kpath
+      kpath="$(knowledge_path "$issue")"
+      if [ -f "$kpath" ]; then
+        log "Knowledge: $(wc -l < "$kpath" | tr -d ' ') lines  $kpath"
+        warn_if_knowledge_bloated "$issue"
+      fi
       log ""
       log "Raw state:"
       cat "$spath"

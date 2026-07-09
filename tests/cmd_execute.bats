@@ -276,7 +276,9 @@ print(t['id'])
   [ "$(task_json_field "${tid}" status)" = "passed" ]
 }
 
-@test "execute injects notes recorded by earlier sessions into the runner prompt" {
+@test "task-complete --notes records to the ledger but no longer injects into the runner" {
+  # Cross-step knowledge now travels through the per-issue knowledge base, not
+  # the ledger note. --notes stays a per-task ledger marker only.
   "${OGRE_BIN}" feature --statement "base feature" --name 42
   write_plan_with_steps 42 "First step" "Second step"
   "${OGRE_BIN}" task-list "$(state_field 42 job_id)" >/dev/null
@@ -287,20 +289,12 @@ tasks = json.load(open('.ai/.ogre/state/tasks.json'))
 print(next(t for t in tasks if t.get('step_index') == 1)['id'])
 ")"
   "${OGRE_BIN}" task-complete "${tid1}" --notes "users table lacks reset_token column" >/dev/null
+  [ "$(task_json_field "${tid1}" notes)" = "users table lacks reset_token column" ]
 
   run "${OGRE_BIN}" execute 42 --main # targets step 2; --main only writes the runner
   [ "${status}" -eq 0 ]
-  grep -q "Notes from earlier sessions" .ai/.ogre/tmp/issue-42/run-next.md
-  grep -q "users table lacks reset_token column" .ai/.ogre/tmp/issue-42/run-next.md
-  grep -q "step 1 - passed" .ai/.ogre/tmp/issue-42/run-next.md
-}
-
-@test "execute runner has no notes section when nothing was recorded" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
-  write_plan_with_steps 42 "First step"
-  run "${OGRE_BIN}" execute 42 --main
-  [ "${status}" -eq 0 ]
   ! grep -q "Notes from earlier sessions" .ai/.ogre/tmp/issue-42/run-next.md
+  ! grep -q "users table lacks reset_token column" .ai/.ogre/tmp/issue-42/run-next.md
 }
 
 @test "execute --all runner embeds the default hard cap of 3 items per session" {
@@ -410,4 +404,49 @@ print(next(t for t in tasks if t.get('step_index') == 1)['id'])
   grep -q "Previous attempt for this step FAILED" .ai/.ogre/tmp/issue-42/run-next.md
   grep -q "Log tail from the failed attempt" .ai/.ogre/tmp/issue-42/run-next.md
   grep -q "Mock codex exec output" .ai/.ogre/tmp/issue-42/run-next.md
+}
+
+@test "execute lazily seeds a knowledge base for a job created before it existed" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  rm -f .ai/.ogre/state/issue-42-knowledge.md # simulate a pre-knowledge job
+  write_plan_with_steps 42 "First step"
+  run "${OGRE_BIN}" execute 42 --main
+  [ "${status}" -eq 0 ]
+  [ -f ".ai/.ogre/state/issue-42-knowledge.md" ]
+}
+
+@test "execute injects the knowledge base into the runner once it has real content" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step"
+  # Record a real verified contract in the knowledge base.
+  python3 - <<'PY'
+p = ".ai/.ogre/state/issue-42-knowledge.md"
+s = open(p).read().replace(
+    "## Verified Contracts\n",
+    "## Verified Contracts\n- App\\Models\\User: uuid PK (app/Models/User.php)\n",
+    1,
+)
+open(p, "w").write(s)
+PY
+  run "${OGRE_BIN}" execute 42 --main
+  [ "${status}" -eq 0 ]
+  grep -q "Knowledge from earlier steps" .ai/.ogre/tmp/issue-42/run-next.md
+  grep -q "uuid PK (app/Models/User.php)" .ai/.ogre/tmp/issue-42/run-next.md
+}
+
+@test "execute does not inject an all-placeholder knowledge base" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step"
+  run "${OGRE_BIN}" execute 42 --main
+  [ "${status}" -eq 0 ]
+  ! grep -q "Knowledge from earlier steps" .ai/.ogre/tmp/issue-42/run-next.md
+}
+
+@test "execute runner instructs the executor to update the knowledge base" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step"
+  run "${OGRE_BIN}" execute 42 --main
+  [ "${status}" -eq 0 ]
+  grep -q "UPDATE the knowledge base" .ai/.ogre/tmp/issue-42/run-next.md
+  grep -q "issue-42-knowledge.md" .ai/.ogre/tmp/issue-42/run-next.md
 }

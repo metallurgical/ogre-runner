@@ -25,6 +25,16 @@ load test_helper
   [[ "$(cat .ai/.ogre/tmp/issue-darkmode/plan-runner.md)" == *"issue-darkmode.md"* ]]
 }
 
+@test "feature seeds a per-issue knowledge base from the template" {
+  run "${OGRE_BIN}" feature --statement "add dark mode toggle" --name darkmode
+  [ "${status}" -eq 0 ]
+  [ -f ".ai/.ogre/state/issue-darkmode-knowledge.md" ]
+  # Heading carries the real issue slug, and the fixed sections are present.
+  grep -q "^# Knowledge — darkmode" .ai/.ogre/state/issue-darkmode-knowledge.md
+  grep -q "^## Verified Contracts" .ai/.ogre/state/issue-darkmode-knowledge.md
+  grep -q "^## Step Log" .ai/.ogre/state/issue-darkmode-knowledge.md
+}
+
 @test "feature --statement without --name derives a slug" {
   run "${OGRE_BIN}" feature --statement "Fix login bug on retry"
   [ "${status}" -eq 0 ]

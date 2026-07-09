@@ -70,9 +70,9 @@ ensure_runtime() {
     cat > "$RUNTIME/config.json" <<'JSON'
 {
   "defaults": {
-    "planner": { "provider": "claude", "model": "sonnet-5" },
-    "plan_reviewer": { "provider": "claude", "model": "sonnet-5" },
-    "executor": { "provider": "claude", "model": "sonnet-5" },
+    "planner": { "provider": "claude", "model": "claude-sonnet-5" },
+    "plan_reviewer": { "provider": "claude", "model": "claude-sonnet-5" },
+    "executor": { "provider": "claude", "model": "claude-sonnet-5" },
     "diff_reviewer": { "provider": "codex", "model": "gpt-5.5" }
   }
 }
@@ -805,7 +805,7 @@ ensure_state_from_plan() {
   [ -f "$spath" ] && return 0
   plan="$RUNTIME/plans/issue-$issue.md"
   [ -f "$plan" ] || return 1
-  write_state "$issue" "planning" "$plan" "claude" "sonnet-5" "claude" "sonnet-5" "codex" "gpt-5.5" "[]"
+  write_state "$issue" "planning" "$plan" "claude" "claude-sonnet-5" "claude" "claude-sonnet-5" "codex" "gpt-5.5" "[]"
   # Flag the record: a backfilled ledger only knows what the plan's checkboxes
   # say, so its "pending" statuses are unreliable - work may already exist in
   # the code from before the state was lost. Runner prompts read this flag and
@@ -1349,7 +1349,7 @@ cmd_init() {
 
 cmd_feature() {
   ensure_runtime
-  local current="" plan_name="" planner="claude" model="sonnet-5" statement="" name=""
+  local current="" plan_name="" planner="claude" model="claude-sonnet-5" statement="" name=""
   # Blockers are collected as two parallel arrays: block_refs[i] is the
   # blocker reference, block_remarks[i] its (optional) freeform status remark.
   # `--blocks a,b` adds refs with no remark; `--blocker REF --remarks TEXT`
@@ -1492,7 +1492,7 @@ EOF2
   local blocker_paths_json="[]" bremarks_json="{}"
   [ ${#bpaths[@]} -gt 0 ] && blocker_paths_json="$(json_array "${bpaths[@]}")"
   [ ${#remark_pairs[@]} -gt 0 ] && bremarks_json="$(blocker_remarks_json "${remark_pairs[@]}")"
-  write_state "$issue" "planning" "$plan" "$planner" "$model" "claude" "sonnet-5" "claude" "sonnet-5" "$blocker_paths_json" "$bremarks_json"
+  write_state "$issue" "planning" "$plan" "$planner" "$model" "claude" "claude-sonnet-5" "claude" "claude-sonnet-5" "$blocker_paths_json" "$bremarks_json"
 
   log ""
   print_job_summary "$issue"
@@ -1681,7 +1681,7 @@ EOF2
 
 cmd_review_plan() {
   ensure_runtime
-  local target="${1:-}" reviewer="claude" model="sonnet-5"
+  local target="${1:-}" reviewer="claude" model="claude-sonnet-5"
   [ -n "$target" ] || { err "Missing issue or plan path"; usage; exit 1; }
   shift || true
   while [ $# -gt 0 ]; do
@@ -1761,7 +1761,7 @@ cmd_execute() {
   if [ -z "$model" ]; then
     case "$executor" in
       codex) model="gpt-5.5" ;;
-      *) model="sonnet-5" ;;
+      *) model="claude-sonnet-5" ;;
     esac
   fi
   if [ -n "$job_id" ]; then

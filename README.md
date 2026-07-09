@@ -91,6 +91,23 @@ flowchart TD
 - **[Codex CLI](https://developers.openai.com/codex/cli)** — optional. Default is `claude` for planner/reviewer/executor; pass `--planner`/`--reviewer`/`--executor codex` to use Codex instead. Verified with `0.143.0`. Missing it fails `--executor codex` (runner prompts can still be generated and run manually).
 - **Windows** — `scripts/ogre` is a bash script requiring `python3` on PATH. No native cmd.exe/PowerShell support. Works under **WSL**. Untested under Git Bash (should work if `python3`/`gh`/`codex`/`claude` are all reachable from it).
 
+### Valid `--model` IDs
+
+`--model` is passed straight through to the underlying CLI, unvalidated. A wrong id doesn't fail loudly at plan/review time — it kills the run at launch. Use one of these:
+
+**`claude` provider** (aliases resolve to the latest of that tier; full ids pin a specific release):
+
+| Alias | Full id |
+| :--- | :--- |
+| `sonnet` | `claude-sonnet-5` |
+| `opus` | `claude-opus-4-8` |
+| `fable` | `claude-fable-5` |
+| — | `claude-haiku-4-5-20251001` (no alias) |
+
+**`codex` provider** — no fixed enum, OpenAI adds models over time; check `codex --help` or the [Codex CLI docs](https://developers.openai.com/codex/cli) for what your installed version accepts. Known-working at time of writing: `gpt-5.5` (Ogre's `diff_reviewer` default).
+
+Omit `--model` to use Ogre's per-role default in `.ai/.ogre/config.json` (`claude-sonnet-5` for planner/reviewer/executor, `gpt-5.5` for the codex diff reviewer).
+
 ## Installation
 
 Ogre is distributed through its own marketplace. From inside Claude Code, in any project:
@@ -246,7 +263,7 @@ Executes one checklist item (or all remaining, with `--all`) from an approved pl
 | `<issue-or-plan>` (positional) | `/ogre:execute 107` | Issue number, plan name, or plan path |
 | `--job JOB_ID` | `/ogre:execute --job job-6d7715e4-...` | Target by job id instead of issue/plan |
 | `--executor codex\|claude` | `/ogre:execute 107 --executor codex` | Which LLM CLI executes the step (default: `claude` — always present since it's the host; use `codex` if installed) |
-| `--model MODEL` | `/ogre:execute 107 --executor claude --model sonnet-5` | Model override for the executor |
+| `--model MODEL` | `/ogre:execute 107 --executor claude --model claude-sonnet-5` | Model override for the executor |
 | `--task TASK_ID` | `/ogre:execute 107 --task task-0f32a78f-...` | Target one specific seeded step out of order |
 | `--step N` | `/ogre:execute 107 --step 3` | Target step N (1-based) out of order |
 | `--retry` | `/ogre:execute 107 --retry` | Re-run the lowest failed step in a fresh session, with the failed attempt's exit code and log tail injected into the runner prompt - the failure becomes an input instead of a dead end to re-explain by hand. Not combinable with `--all` |

@@ -6,22 +6,11 @@
 
 Ask Claude Code to implement a non-trivial feature directly in one long chat session, and a few things tend to go wrong:
 
-- **Context rot.** Big features fill the chat with diffs, tool output, and back-and-forth. A few steps in, Claude starts losing track of earlier decisions and the answers get worse.
-- **No review gate.** Claude tends to start editing before it's really checked the plan. You only find the made-up method name or the missing file after it's already in the code.
-- **No persistent state.** Crash the session, get compacted, or close the laptop mid-feature, and you're stuck piecing together what actually got done from `git diff` and memory.
-- **One context doing two jobs.** The same conversation that should be deciding what's next also has to sit through every file read and failed attempt from actually doing the work. That's a lot of noise crammed into one thread.
-- **Blockers break the flow.** Realize you forgot a requirement three steps into a plan, and normally that means re-explaining the whole thing and hoping Claude doesn't just start over.
-
-## What Ogre does about it
-
-Ogre keeps the whole workflow on disk (`.ai/.ogre/`) instead of just in the chat, and splits it into distinct phases: **feature → review-plan → execute → status → stop**, plus **add-blocker** for when you forgot something.
-
-1. **`/ogre:feature`**: turns a GitHub issue, a GitLab/Bitbucket/Jira/self-hosted link, a local `.md`/`.txt`/`.docx` file, or a sentence you type (`--statement "..."`) into a written plan. No GitHub required.
-2. **`/ogre:review-plan`**: a second LLM pass checks the plan against the real repo *before any code exists*, looking for made-up files or APIs, missing validation, and steps that have grown too big.
-3. **`/ogre:execute`**: runs **one checklist item at a time**, each in its own fresh, isolated Codex or Claude session. The main Claude Code conversation never sees the implementation noise. It spawns the session, waits, and gets back a pass/fail plus a short report.
-4. **`/ogre:status`** / **`/ogre:task-list`**: read progress straight off disk (`.ai/.ogre/state/`), so "what's done" is a file, not a memory.
-5. **`/ogre:add-blocker`**: bolts on a newly-discovered requirement mid-flight; the plan is revised in place instead of restarted.
-6. **`/ogre:stop`**: pauses, archives, or deletes the runtime data for an issue, without touching code changes already made.
+- **Context rot.** The chat becomes too full of code changes, tool outputs, and discussions. After a while, Claude may start forgetting earlier decisions, and the quality of the answers can get worse.
+- **No review gate.** Claude may start editing the code before the plan is properly checked. Because of that, mistakes like wrong method names, missing files, or incorrect assumptions may only be found after the code has already been changed.
+- **No persistent state.** If the session crashes, gets compacted, or you close your laptop, it can be hard to know what was already completed. You may need to check Git diffs and rely on memory to continue.
+- **One context doing two jobs.** The same chat is used for planning, reading files, writing code, fixing errors, and deciding the next step. This creates too much noise in one conversation.
+- **Blockers break the flow.** If you remember a missing requirement halfway through, you usually need to explain everything again. Sometimes Claude may lose the original direction or start over instead of continuing smoothly.
 
 ## Real Use Case: As Easy As This
 
@@ -235,9 +224,9 @@ Default with no isolation flag: foreground, brand-new codex/claude session, targ
 
 Every generated runner prompt also carries context blocks so a fresh session doesn't start blind: the issue's **living knowledge base** (see below), and repo drift — commits landed and uncommitted changes made since the plan file was last written — so a late step trusts the current code over the plan's stale memory of it.
 
-**Living knowledge base.** Each issue gets `.ai/.ogre/state/issue-<n>-knowledge.md`, seeded from `templates/knowledge-base.md` when the job is created (and lazily on first `execute`/`status` for older jobs). Every step reads it first — it records what earlier steps already learned: stack and conventions, project structure, real verified signatures/routes/columns, the validation commands that actually work here, gotchas, and a one-line-per-step log of what each step did. So a fresh session starts oriented instead of re-grepping facts a previous step already knew. As its mandatory closing move (alongside `task-complete`), each step updates the file **in place** — revising the durable sections and appending one Step Log line — under fixed per-section caps and a rolling Step Log window, so it stays small enough to never rot the next session's context (a soft size warning fires in `execute`/`status` if it grows past ~200 lines). It's a head-start, not a cage: the executor still reads real code when needed, and real code always wins over a stale line in the file. `task-complete --notes "..."` still exists but now only records a per-task marker in the ledger (visible in `ogre status`); cross-step knowledge travels through the knowledge base.
+**Living knowledge base.** Each issue keeps `.ai/.ogre/state/issue-<n>-knowledge.md`, updated in place by every step and read by the next, so fresh sessions start oriented instead of re-discovering facts.
 
-**`[BROWSER-CHECK]` steps.** A spawned codex/claude CLI subprocess (the default/`--background` isolation modes) has no real browser access - it can't visually render a page to verify layout or interactive behavior. Plan steps that genuinely need that are tagged `[BROWSER-CHECK]` by the planner. For single-step targeting, `ogre execute` detects the tag before spawning anything and auto-switches to `--main` itself, so it runs inline in your live session (where real browser/MCP tooling exists) without you having to retype the command. For `--all` chaining in the foreground, it instead stops the chain and tells you to finish that one step with `--main` before resuming - unattended multi-step runs shouldn't silently pause for inline work without saying so. For `--all --background`, if any remaining step in the plan is tagged `[BROWSER-CHECK]`, Claude launches a supervising fork alongside the detached run: it polls `ogre status`, resolves each `[BROWSER-CHECK]` step inline with real browser tooling the moment the chain reaches it, then resumes the background run - so an unattended chain with browser steps in it still completes without you having to notice the pause yourself.
+**`[BROWSER-CHECK]` steps.** Steps needing real browser rendering are tagged and auto-run inline (`--main`) instead of in an isolated subprocess.
 
 ### `ogre status`
 
@@ -252,7 +241,7 @@ Shows job/task progress from `.ai/.ogre` state.
 | `--watch` | `ogre status --watch` | Live-refresh view (run standalone in another terminal), Ctrl-C to quit |
 | `--interval N` | `ogre status --watch --interval 5` | Refresh seconds for `--watch` (default: 2) |
 
-`ogre status <issue>` and `ogre execute <issue>` both self-heal a missing `state.json`: if `.ai/.ogre/plans/issue-N.md` exists but its ledger state doesn't (a hand-authored plan, or the state file got lost), they backfill a fresh state record from the plan instead of erroring "No state found" - so the pipeline keeps working even for plans created outside `ogre feature`. Backfilled records are flagged (`"backfilled": true`), and every runner prompt for such a job warns the executor that "pending" only reflects the plan's checkboxes - it must verify a step isn't already implemented before touching code, since re-editing finished work can damage it.
+`ogre status`/`ogre execute` self-heal a missing `state.json` by backfilling it from the plan file, so hand-authored plans still work.
 
 ### `ogre task-list`
 
@@ -399,80 +388,6 @@ See every checklist step for a job at once:
 /ogre:task-list job-<uuid>
 # One row per step: #, Task Id, Status, Executor, Step
 # Get the job id from `Job Id` in /ogre:status <issue> output
-```
-
-## Direct CLI Usage
-
-Optionally pre-create runtime folders and copy templates:
-
-```bash
-scripts/ogre init
-```
-
-Most users can start directly with `feature`; it creates the runtime folders/templates automatically when needed:
-
-```bash
-scripts/ogre feature 107 --blocks 101,102
-```
-
-Or skip the issue entirely and describe the feature in your own words:
-
-```bash
-scripts/ogre feature --statement "need to implement forgot password page" --name forgot-password
-```
-
-Add a blocker to an in-flight issue (freeform or issue-based):
-
-```bash
-scripts/ogre add-blocker 107 --statement "must also invalidate old reset tokens" --name invalidate-tokens
-```
-
-List every checklist step for a job:
-
-```bash
-scripts/ogre task-list job-<uuid>
-```
-
-Generate review runner:
-
-```bash
-scripts/ogre review-plan 107 --reviewer claude
-```
-
-Generate execution runner:
-
-```bash
-scripts/ogre execute 107 --executor codex
-```
-
-Run Codex directly:
-
-```bash
-scripts/ogre execute 107 --executor codex --model gpt-5.5 --run
-```
-
-Run Claude directly:
-
-```bash
-scripts/ogre execute 107 --executor claude --model sonnet-5 --run
-```
-
-Stop/pause issue:
-
-```bash
-scripts/ogre stop 107
-```
-
-Archive issue runtime data:
-
-```bash
-scripts/ogre stop 107 --archive
-```
-
-Delete issue runtime data:
-
-```bash
-scripts/ogre stop 107 --delete
 ```
 
 ## Notes

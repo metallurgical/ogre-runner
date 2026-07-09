@@ -103,6 +103,26 @@ print(t['id'])
   [[ "${output}" == *"Steps Completed"* ]]
   [[ "${output}" == *"Steps Remaining"* ]]
   [[ "${output}" == *"Second step"* ]]
+  [[ "${output}" != *"Boom!"* ]]
+}
+
+@test "execute prints a Boom line only once the whole job is completed" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "Only step"
+  run "${OGRE_BIN}" execute 42
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Boom! Issue 42 has been resolved."* ]]
+}
+
+@test "execute --background prints the finish summary and Boom line once the job completes" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "Only step"
+  run "${OGRE_BIN}" execute 42 --background
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"started in background"* ]]
+  [[ "${output}" == *"Task"*"finished: passed"* ]]
+  [[ "${output}" == *"Boom! Issue 42 has been resolved."* ]]
+  [[ "${output}" == *"Steps Completed"* ]]
 }
 
 @test "execute foreground with --executor codex runs the lowest pending step and marks it passed" {

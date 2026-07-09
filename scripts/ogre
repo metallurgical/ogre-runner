@@ -2257,6 +2257,16 @@ PY
         fi
       done
       finalize_issue_state "$rc"
+      local final_status
+      final_status="$(task_field "$chain_tid" status)"
+      log ""
+      log "Task $chain_tid finished: $final_status"
+      if [ "$rc" -eq 0 ] && [ "$(json_field "$spath" status 2>/dev/null)" = "completed" ]; then
+        log ""
+        log "Boom! Issue $issue has been resolved."
+      fi
+      log ""
+      print_job_summary "$issue"
     ) &
     local pid=$!
     echo "$pid" > "$pidfile"
@@ -2313,6 +2323,10 @@ PY
     esac
   fi
   log "Task $tid finished: $final_status"
+  if [ "$rc" -eq 0 ] && [ "$(json_field "$spath" status 2>/dev/null)" = "completed" ]; then
+    log ""
+    log "Boom! Issue $issue has been resolved."
+  fi
   log ""
   print_job_summary "$issue"
   exit "$rc"

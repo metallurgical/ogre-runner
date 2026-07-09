@@ -23,7 +23,8 @@ Start from a sentence. No GitHub issue or setup step required:
 Ogre creates `.ai/.ogre/` automatically and writes a checklist plan to `.ai/.ogre/plans/issue-forgot-password.md`. Open it and edit by hand if you want, or run a second LLM pass over it — optional, but useful before bigger changes:
 
 ```
-/ogre:review-plan forgot-password --reviewer claude
+/ogre:review-plan forgot-password --reviewer codex
+# --reviewer default is claude; codex shown here as the alternative
 ```
 
 Then execute one step at a time, or run every remaining step in one go with `--all`:

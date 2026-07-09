@@ -105,3 +105,11 @@ print(next(t for t in tasks if t.get('step_index') == 1)['id'])
   [[ "${output}" != *"NOT retroactively revised"* ]]
   ! grep -q "Already-Completed Steps" .ai/.ogre/tmp/issue-42/plan-runner.md
 }
+
+@test "add-blocker rejects a --name containing path traversal or shell metacharacters" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  run "${OGRE_BIN}" add-blocker 42 --statement "blk" --name "../../evil"
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"Invalid --name"* ]]
+  [ ! -d ".ai/.ogre/issues/../../evil" ]
+}

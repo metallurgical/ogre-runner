@@ -428,6 +428,23 @@ slugify_statement() {
   fi
 }
 
+# validate_slug <value> <flag-name-for-error> - a user-supplied --name value
+# (issue slug or blocker slug) becomes part of MANY file paths across the
+# runtime (state/, issues/, plans/, logs/, tmp/, archive/) and is embedded
+# directly into generated JSON and a couple of python heredocs. An
+# unrestricted value could path-traverse outside .ai/.ogre/ (e.g.
+# `--name ../../../etc/cron.d/evil`), corrupt state.json (a `"` breaks the
+# hand-written JSON heredoc in write_state), or - for the two `<<PY`
+# (unquoted) heredocs that splice a state path directly into python source -
+# break out of the string literal into arbitrary python. Restricting to a
+# plain slug charset closes all three at the source. Exits 1 on failure.
+validate_slug() {
+  local value="$1" flag="$2"
+  [[ "$value" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]] && return 0
+  err "Invalid $flag: '$value' - must start with a letter/digit and contain only letters, digits, '-', '_' (no slashes, dots, quotes, or spaces)."
+  exit 1
+}
+
 slug_from_issue() {
   local input="$1"
   if [[ "$input" =~ ^[0-9]+$ ]]; then
@@ -719,28 +736,38 @@ write_state() {
   path="$(state_path "$issue")"
   job_id="$(new_job_id)"
   mkdir -p "$(dirname "$path")"
-  cat > "$path.tmp" <<JSON
-{
-  "issue": "$issue",
-  "job_id": "$job_id",
-  "status": "$status",
-  "plan_path": "$plan",
-  "planner": { "provider": "$planner", "model": "$planner_model" },
-  "reviewer": { "provider": "$reviewer", "model": "$reviewer_model" },
-  "executor": { "provider": "$executor", "model": "$executor_model" },
-  "blocker_paths": $blocker_paths_json,
-  "blocker_remarks": $blocker_remarks_json,
-  "completed_steps": [],
-  "current_step": null,
-  "total_steps": null,
-  "active_task": null,
-  "last_log": null,
-  "last_validation": null,
-  "created_at": "$(now_iso)",
-  "updated_at": "$(now_iso)"
+  # Built via json.dumps (argv-passed, never string-interpolated into JSON
+  # text) rather than a hand-rolled heredoc, so a quote/backslash in any
+  # user-supplied field (--model, --plan, --planner, --executor) can never
+  # corrupt the file - the json module escapes it correctly no matter what.
+  py_state "$path" "$issue" "$job_id" "$status" "$plan" "$planner" "$planner_model" \
+    "$reviewer" "$reviewer_model" "$executor" "$executor_model" \
+    "$blocker_paths_json" "$blocker_remarks_json" "$(now_iso)" <<'PY'
+import sys
+(path, issue, job_id, status, plan, planner, planner_model,
+ reviewer, reviewer_model, executor, executor_model,
+ blocker_paths_json, blocker_remarks_json, created_at) = sys.argv[1:15]
+d = {
+    "issue": issue,
+    "job_id": job_id,
+    "status": status,
+    "plan_path": plan,
+    "planner": {"provider": planner, "model": planner_model},
+    "reviewer": {"provider": reviewer, "model": reviewer_model},
+    "executor": {"provider": executor, "model": executor_model},
+    "blocker_paths": json.loads(blocker_paths_json),
+    "blocker_remarks": json.loads(blocker_remarks_json),
+    "completed_steps": [],
+    "current_step": None,
+    "total_steps": None,
+    "active_task": None,
+    "last_log": None,
+    "last_validation": None,
+    "created_at": created_at,
+    "updated_at": created_at,
 }
-JSON
-  mv "$path.tmp" "$path"
+dump_json(d, path)
+PY
   seed_knowledge "$issue"
   log "State written: $path (job_id: $job_id)"
 }
@@ -1361,6 +1388,7 @@ cmd_feature() {
   local issue plan issue_path runner blockers_text logdir
   if [ -n "$statement" ]; then
     if [ -n "$name" ]; then
+      validate_slug "$name" "--name"
       issue="$name"
     else
       issue="$(slugify_statement "$statement")"
@@ -1369,6 +1397,13 @@ cmd_feature() {
   else
     issue="$(slug_from_issue "$current")"
     [ "$issue" != "unknown" ] || { err "Could not determine issue number. Use --plan and a numeric issue if possible."; exit 1; }
+  fi
+  if [ -n "$plan_name" ]; then
+    # Plain filename only - no directory components. Otherwise "--plan
+    # ../../../../tmp/evil.md" would write outside .ai/.ogre/plans entirely.
+    case "$plan_name" in
+      */*|*..*) err "Invalid --plan: '$plan_name' - must be a plain filename (no '/', no '..'), e.g. issue-107-v2.md"; exit 1 ;;
+    esac
   fi
   plan_name="${plan_name:-issue-$issue.md}"
   plan="$RUNTIME/plans/$plan_name"
@@ -1491,6 +1526,7 @@ cmd_add_blocker() {
     esac
   done
   [ -n "$blocker" ] || [ -n "$statement" ] || { err "Provide a blocker issue number/url/path, or --statement \"free text\""; exit 1; }
+  [ -n "$name" ] && validate_slug "$name" "--name"
 
   local forced_after_start="false"
   if execution_started "$issue"; then
@@ -2019,14 +2055,14 @@ EOF2
     task_update "$tid" "executor=$executor" "model=${model:-null}" "freshness=$freshness" "runner=$runner" "log_path=$logpath"
   fi
   if [ -f "$spath" ]; then
-    py_state <<PY
-import datetime
-p = "$spath"
+    py_state "$spath" "$tid" "$logpath" <<'PY'
+import datetime, sys
+p, tid, logpath = sys.argv[1:4]
 _lk = lock_state(p)
 d = json.load(open(p))
-d['active_task'] = "$tid"
+d['active_task'] = tid
 d['status'] = 'executing'
-d['last_log'] = "$logpath"
+d['last_log'] = logpath
 d['updated_at'] = datetime.datetime.now().astimezone().isoformat()
 dump_json(d, p)
 PY
@@ -2172,9 +2208,10 @@ except Exception:
   finalize_issue_state() {
     local rc="$1"
     if [ -f "$spath" ]; then
-      py_state <<PY
-import datetime
-p, rc = "$spath", $rc
+      py_state "$spath" "$rc" <<'PY'
+import datetime, sys
+p = sys.argv[1]
+rc = int(sys.argv[2])
 _lk = lock_state(p)
 d = json.load(open(p))
 d['active_task'] = None

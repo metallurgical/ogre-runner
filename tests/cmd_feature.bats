@@ -161,3 +161,54 @@ load test_helper
   [[ "${output}" == *"Cancelled."* ]]
   [ "$(cat .ai/.ogre/plans/issue-dup5.md)" = "# existing plan" ]
 }
+
+@test "feature rejects a --name containing path traversal or shell metacharacters" {
+  run "${OGRE_BIN}" feature --statement "x" --name "../../../../tmp/evilslug"
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"Invalid --name"* ]]
+  [ ! -d "/tmp/evilslug" ]
+
+  run "${OGRE_BIN}" feature --statement "x" --name 'x"; touch /tmp/PWNED_test; x="'
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"Invalid --name"* ]]
+  [ ! -f "/tmp/PWNED_test" ]
+}
+
+@test "feature accepts a plain alnum/dash/underscore --name" {
+  run "${OGRE_BIN}" feature --statement "x" --name "valid_name-42"
+  [ "${status}" -eq 0 ]
+  [ -f ".ai/.ogre/state/issue-valid_name-42.json" ]
+}
+
+@test "feature rejects a --plan value with a directory component or .." {
+  run "${OGRE_BIN}" feature --statement "x" --name 42 --plan "../../../../tmp/evil.md"
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"Invalid --plan"* ]]
+  [ ! -f "/tmp/evil.md" ]
+
+  run "${OGRE_BIN}" feature --statement "x" --name 43 --plan "sub/dir/evil.md"
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"Invalid --plan"* ]]
+}
+
+@test "feature accepts a plain custom --plan filename" {
+  run "${OGRE_BIN}" feature --statement "x" --name 44 --plan "custom-plan.md"
+  [ "${status}" -eq 0 ]
+  [ "$(state_field 44 plan_path)" = ".ai/.ogre/plans/custom-plan.md" ]
+}
+
+@test "state.json stays valid JSON even when --model contains quotes" {
+  run "${OGRE_BIN}" feature --statement "x" --name 45 --planner claude --model 'sonnet", "injected": "1'
+  [ "${status}" -eq 0 ]
+  # Must parse as JSON, the literal quote must be escaped data not broken syntax,
+  # and no extra top-level key must have been injected.
+  run python3 -c "
+import json
+d = json.load(open('.ai/.ogre/state/issue-45.json'))
+assert 'injected' not in d, 'JSON injection succeeded'
+assert d['planner']['model'] == 'sonnet\", \"injected\": \"1'
+print('ok')
+"
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == "ok" ]]
+}

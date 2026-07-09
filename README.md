@@ -82,6 +82,98 @@ flowchart TD
 - **Works without GitHub.** Freeform `--statement`, issue links from GitLab/Bitbucket/self-hosted trackers, or local `.md`/`.txt`/`.docx` files. GitHub is one option, not a requirement.
 - **Resumable natively.** Want to go hands-on? Drop straight into the same Claude or Codex session in your own terminal instead of staying inside Ogre's interface.
 
+## Requirements
+
+Optional but recommended:
+
+```bash
+gh --version
+codex --version
+claude --version
+```
+
+If an issue can't be fetched automatically (`gh` missing, not a GitHub repo, not authenticated, no access, or an unreachable URL), Ogre creates a placeholder issue file so you can paste the content manually.
+
+If `codex` is missing, `/ogre:execute --executor codex --run` will fail, but you can still generate runner prompts and pass them manually.
+
+## Installation
+
+Ogre is distributed through its own marketplace. From inside Claude Code, in any project:
+
+```
+/plugin marketplace add metallurgical/ogre-runner
+/plugin install ogre@ogre-runner
+```
+
+Then `/reload-plugins` if the session was already running. Try it:
+
+```
+/ogre:feature --statement "need to implement forgot password page" --name forgot-password
+```
+
+To update later:
+
+```
+/plugin marketplace update ogre-runner
+```
+
+## Recommended Workflow
+
+**Main use case: freeform text, no GitHub issue required.** Just describe the feature in your own words:
+
+```txt
+/ogre:feature --statement "need to implement forgot password page" --name forgot-password
+# Ogre writes the statement verbatim to .ai/.ogre/issues/issue-forgot-password.md
+# and plans/executes it exactly like a real issue from here on
+
+# Review and edit .ai/.ogre/plans/issue-forgot-password.md
+
+/ogre:review-plan forgot-password --reviewer claude
+# Fix plan comments manually until approved
+
+/ogre:execute forgot-password --executor codex
+# Executes next checklist item only
+
+/ogre:execute forgot-password --executor codex
+# Next checklist item
+
+/ogre:status forgot-password
+```
+
+A GitHub issue number/URL/local file works the same way, as an alternative input:
+
+```txt
+/ogre:feature 107 --blocks 101,102
+# Review and edit .ai/.ogre/plans/issue-107.md
+
+/ogre:review-plan 107 --reviewer claude
+# Fix plan comments manually until approved
+
+/ogre:execute 107 --executor codex
+# Executes/generates runner for next checklist item only
+
+/ogre:execute 107 --executor codex
+# Next checklist item
+
+/ogre:status 107
+```
+
+Add a blocker discovered mid-flight (freeform or issue-based, same either way):
+
+```txt
+/ogre:add-blocker forgot-password --statement "must also invalidate old reset tokens" --name invalidate-tokens
+# Plan is revised in place to account for the new blocker
+# Refuses if execution already started for this issue - use /ogre:stop first, or --force to override (manual-risk)
+```
+
+See every checklist step for a job at once:
+
+```txt
+/ogre:task-list job-<uuid>
+# One row per step: #, Task Id, Status, Executor, Step
+# Get the job id from `Job Id` in /ogre:status <issue> output
+```
+
 ## Runtime Folder
 
 Inside each target project, Ogre creates:
@@ -260,98 +352,6 @@ Stops, archives, or deletes Ogre runtime data. Does not revert code changes.
 | `--archive` | `/ogre:stop 107 --archive` | Move the issue's runtime data to `.ai/.ogre/archive/issue-<n>-<timestamp>/` |
 | `--delete` | `/ogre:stop 107 --delete` | Delete the issue's runtime data (after confirmation) |
 | `--list` | `/ogre:stop 107 --list` | Print every runtime file/dir path for the issue without deleting, so the user can pick individually |
-
-## Installation
-
-Ogre is distributed through its own marketplace. From inside Claude Code, in any project:
-
-```
-/plugin marketplace add metallurgical/ogre-runner
-/plugin install ogre@ogre-runner
-```
-
-Then `/reload-plugins` if the session was already running. Try it:
-
-```
-/ogre:feature --statement "need to implement forgot password page" --name forgot-password
-```
-
-To update later:
-
-```
-/plugin marketplace update ogre-runner
-```
-
-## Required Tools
-
-Optional but recommended:
-
-```bash
-gh --version
-codex --version
-claude --version
-```
-
-If an issue can't be fetched automatically (`gh` missing, not a GitHub repo, not authenticated, no access, or an unreachable URL), Ogre creates a placeholder issue file so you can paste the content manually.
-
-If `codex` is missing, `/ogre:execute --executor codex --run` will fail, but you can still generate runner prompts and pass them manually.
-
-## Recommended Workflow
-
-**Main use case: freeform text, no GitHub issue required.** Just describe the feature in your own words:
-
-```txt
-/ogre:feature --statement "need to implement forgot password page" --name forgot-password
-# Ogre writes the statement verbatim to .ai/.ogre/issues/issue-forgot-password.md
-# and plans/executes it exactly like a real issue from here on
-
-# Review and edit .ai/.ogre/plans/issue-forgot-password.md
-
-/ogre:review-plan forgot-password --reviewer claude
-# Fix plan comments manually until approved
-
-/ogre:execute forgot-password --executor codex
-# Executes next checklist item only
-
-/ogre:execute forgot-password --executor codex
-# Next checklist item
-
-/ogre:status forgot-password
-```
-
-A GitHub issue number/URL/local file works the same way, as an alternative input:
-
-```txt
-/ogre:feature 107 --blocks 101,102
-# Review and edit .ai/.ogre/plans/issue-107.md
-
-/ogre:review-plan 107 --reviewer claude
-# Fix plan comments manually until approved
-
-/ogre:execute 107 --executor codex
-# Executes/generates runner for next checklist item only
-
-/ogre:execute 107 --executor codex
-# Next checklist item
-
-/ogre:status 107
-```
-
-Add a blocker discovered mid-flight (freeform or issue-based, same either way):
-
-```txt
-/ogre:add-blocker forgot-password --statement "must also invalidate old reset tokens" --name invalidate-tokens
-# Plan is revised in place to account for the new blocker
-# Refuses if execution already started for this issue - use /ogre:stop first, or --force to override (manual-risk)
-```
-
-See every checklist step for a job at once:
-
-```txt
-/ogre:task-list job-<uuid>
-# One row per step: #, Task Id, Status, Executor, Step
-# Get the job id from `Job Id` in /ogre:status <issue> output
-```
 
 ## Notes
 

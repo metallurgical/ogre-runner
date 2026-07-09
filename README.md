@@ -72,25 +72,6 @@ flowchart TD
     F --> H["/ogre:stop --archive / --delete<br/>runtime cleanup, code untouched"]
 ```
 
-The isolation boundary that makes this useful:
-
-```mermaid
-flowchart LR
-    subgraph Main["Your Claude Code session (orchestrator)"]
-        M1["/ogre:execute forgot-password"]
-        M2["sees: pass/fail + short report"]
-    end
-    subgraph Sub["Fresh session, spawned per step (Codex or Claude)"]
-        S1["reads plan-runner.md"]
-        S2["edits files, validates"]
-        S3["ogre task-complete --status passed/failed"]
-    end
-    M1 -->|spawns, blocks until done| S1
-    S1 --> S2 --> S3
-    S3 -->|ledger written to disk| M2
-    Mon["background monitor<br/>(tails execute logs)"] -.->|live notification,<br/>no polling needed| Main
-```
-
 ## Why this helps
 
 - **Main session stays clean.** Implementation noise lives in a subprocess's own context, not yours. Keep planning/reviewing other work in the same conversation without it degrading.
@@ -119,106 +100,102 @@ Inside each target project, Ogre creates:
   prompts/
 ```
 
-## Commands / Skills
-
-Expected Claude Code commands:
-
-```txt
-/ogre:feature       # accepts an issue number/URL/local file, OR a freeform --statement (no issue needed)
-/ogre:review-plan
-/ogre:execute
-/ogre:add-blocker   # attach a new blocker mid-flight (issue or freeform --statement)
-/ogre:task-list     # list every checklist step for a job, one row per step
-/ogre:stop
-/ogre:status
-```
-
-The skills delegate deterministic setup to:
-
-```txt
-scripts/ogre
-```
-
 ## Command Reference
 
-All commands run as `scripts/ogre <command> ...` or via the matching `/ogre:<command>` skill (same flags either way). Positional input always comes first, flags after, in any order.
+Invoke as `/ogre:<command> ...` inside Claude Code (or `scripts/ogre <command> ...` directly, same flags either way). Positional input always comes first, flags after, in any order. `init` and `task-complete` have no skill wrapper — run those via `scripts/ogre`.
 
 ### `ogre init`
 
 Optional. Creates the runtime folders and copies templates up front. Other Ogre commands do this automatically when needed, so you can skip `init` unless you want to verify setup before starting.
 
-### `ogre feature`
+```bash
+scripts/ogre init
+```
+
+### `/ogre:feature`
 
 Starts a new workflow and generates the planning runner. It also creates the `.ai/.ogre/` runtime folders/templates automatically if they do not exist, so you do not need to run `ogre init` first. The main path is freeform text:
 
-```bash
-ogre feature --statement "need a forgot-password page" --name forgot-password
+```
+/ogre:feature --statement "need a forgot-password page" --name forgot-password
 ```
 
 Use a positional issue number, URL, or local file when you already have one.
 
 | Option | Example | Description |
 | :--- | :--- | :--- |
-| `--statement "..."` | `ogre feature --statement "need a forgot-password page"` | Freeform feature text, no issue needed at all |
-| `--name NAME` | `ogre feature --statement "..." --name forgot-password` | Slug for runtime paths when using `--statement` (default: first ~4 words + short uuid) |
-| `<issue>` (positional) | `ogre feature 107` | GitHub issue number (GitHub-only, resolved via `gh` + this project's git remote) |
-| `<issue>` (positional) | `ogre feature https://github.com/acme/app/issues/107` | Full GitHub issue URL |
-| `<issue>` (positional) | `ogre feature https://gitlab.com/acme/app/-/issues/9` | Any non-GitHub issue/page URL (GitLab, self-hosted GitLab, Bitbucket, Jira, etc.), fetched generically as page text, not via an API |
-| `<issue>` (positional) | `ogre feature ./notes/bug-report.md` | Local file path (`.md`, `.txt` copied verbatim; `.docx` text-extracted) |
-| `--blocks ref,ref` | `ogre feature --statement "..." --name forgot-password --blocks ./notes/auth-debt.md` | Comma-separated blockers (issue numbers/URLs/paths), fetched alongside the main input, no status remark |
-| `--blocker REF --remarks "..."` | `ogre feature --statement "..." --name forgot-password --blocker ./notes/auth-debt.md --remarks "PR merged"` | One blocker plus a freeform status remark tied to it. Repeatable; `--remarks` annotates the blocker right before it; mix freely with `--blocks`. The remark is prepended to the blocker's file and shown to the planner so it can reason about what's already landed vs still in flight |
-| `--plan NAME.md` | `ogre feature --statement "..." --name forgot-password --plan forgot-password-v2.md` | Custom plan output filename instead of the default issue-derived or statement-derived plan name |
-| `--planner claude\|codex` | `ogre feature --statement "..." --name forgot-password --planner codex` | Which LLM CLI plans the feature (default: `claude`) |
-| `--model MODEL` | `ogre feature --statement "..." --name forgot-password --planner codex --model gpt-5.5` | Model override for the planner |
+| `--statement "..."` | `/ogre:feature --statement "need a forgot-password page"` | Freeform feature text, no issue needed at all |
+| `--name NAME` | `/ogre:feature --statement "..." --name forgot-password` | Slug for runtime paths when using `--statement` (default: first ~4 words + short uuid) |
+| `<issue>` (positional) | `/ogre:feature 107` | GitHub issue number (GitHub-only, resolved via `gh` + this project's git remote) |
+| `<issue>` (positional) | `/ogre:feature https://github.com/acme/app/issues/107` | Full GitHub issue URL |
+| `<issue>` (positional) | `/ogre:feature https://gitlab.com/acme/app/-/issues/9` | Any non-GitHub issue/page URL (GitLab, self-hosted GitLab, Bitbucket, Jira, etc.), fetched generically as page text, not via an API |
+| `<issue>` (positional) | `/ogre:feature ./notes/bug-report.md` | Local file path (`.md`, `.txt` copied verbatim; `.docx` text-extracted) |
+| `--blocks ref,ref` | `/ogre:feature --statement "..." --name forgot-password --blocks ./notes/auth-debt.md` | Comma-separated blockers (issue numbers/URLs/paths), fetched alongside the main input, no status remark |
+| `--blocker REF --remarks "..."` | `/ogre:feature --statement "..." --name forgot-password --blocker ./notes/auth-debt.md --remarks "PR merged"` | One blocker plus a freeform status remark tied to it. Repeatable; `--remarks` annotates the blocker right before it; mix freely with `--blocks`. The remark is prepended to the blocker's file and shown to the planner so it can reason about what's already landed vs still in flight |
+| `--plan NAME.md` | `/ogre:feature --statement "..." --name forgot-password --plan forgot-password-v2.md` | Custom plan output filename instead of the default issue-derived or statement-derived plan name |
+| `--planner claude\|codex` | `/ogre:feature --statement "..." --name forgot-password --planner codex` | Which LLM CLI plans the feature (default: `claude`) |
+| `--model MODEL` | `/ogre:feature --statement "..." --name forgot-password --planner codex --model gpt-5.5` | Model override for the planner |
 
-### `ogre add-blocker`
+### `/ogre:add-blocker`
 
 Attaches a new blocker to an issue already tracked by Ogre, and forces the plan to be revised. Refuses once execution has started (use `--force` to override; manual risk, since already-completed steps aren't retroactively revised).
 
-Accepts the same input types as `ogre feature` for the blocker itself:
+```
+/ogre:add-blocker 107 --statement "must also invalidate old reset tokens"
+```
+
+Accepts the same input types as `/ogre:feature` for the blocker itself:
 
 | Option | Example | Description |
 | :--- | :--- | :--- |
-| `<issue>` (positional, required) | `ogre add-blocker 107 ...` | The already-tracked issue to attach the blocker to |
-| `<blocker>` (positional) | `ogre add-blocker 107 108` | GitHub issue number (GitHub-only, resolved via `gh` + this project's git remote) |
-| `<blocker>` (positional) | `ogre add-blocker 107 https://github.com/acme/app/issues/108` | Full GitHub issue URL |
-| `<blocker>` (positional) | `ogre add-blocker 107 https://gitlab.com/acme/app/-/issues/9` | Any non-GitHub issue/page URL (GitLab, self-hosted GitLab, Bitbucket, Jira, etc.), fetched generically as page text |
-| `<blocker>` (positional) | `ogre add-blocker 107 ./notes/blocker.docx` | Local file path (`.md`, `.txt` copied verbatim; `.docx` text-extracted) |
-| `--statement "..."` | `ogre add-blocker 107 --statement "must invalidate old tokens"` | Freeform blocker text instead of an issue/URL/path |
-| `--name SLUG` | `ogre add-blocker 107 --statement "..." --name invalidate-tokens` | Slug for the blocker's file, only used with `--statement` |
-| `--remarks "..."` | `ogre add-blocker 107 108 --remarks "PR under review"` | Freeform status note tied to this blocker (e.g. merged / under review / blocking). Prepended to the blocker's file and shown to the planner; omit to store the blocker with no remark |
-| `--force` | `ogre add-blocker 107 108 --force` | Override the "execution already started" refusal (skips retroactive revision of completed steps; surface this warning to the user, never pass silently) |
+| `<issue>` (positional, required) | `/ogre:add-blocker 107 ...` | The already-tracked issue to attach the blocker to |
+| `<blocker>` (positional) | `/ogre:add-blocker 107 108` | GitHub issue number (GitHub-only, resolved via `gh` + this project's git remote) |
+| `<blocker>` (positional) | `/ogre:add-blocker 107 https://github.com/acme/app/issues/108` | Full GitHub issue URL |
+| `<blocker>` (positional) | `/ogre:add-blocker 107 https://gitlab.com/acme/app/-/issues/9` | Any non-GitHub issue/page URL (GitLab, self-hosted GitLab, Bitbucket, Jira, etc.), fetched generically as page text |
+| `<blocker>` (positional) | `/ogre:add-blocker 107 ./notes/blocker.docx` | Local file path (`.md`, `.txt` copied verbatim; `.docx` text-extracted) |
+| `--statement "..."` | `/ogre:add-blocker 107 --statement "must invalidate old tokens"` | Freeform blocker text instead of an issue/URL/path |
+| `--name SLUG` | `/ogre:add-blocker 107 --statement "..." --name invalidate-tokens` | Slug for the blocker's file, only used with `--statement` |
+| `--remarks "..."` | `/ogre:add-blocker 107 108 --remarks "PR under review"` | Freeform status note tied to this blocker (e.g. merged / under review / blocking). Prepended to the blocker's file and shown to the planner; omit to store the blocker with no remark |
+| `--force` | `/ogre:add-blocker 107 108 --force` | Override the "execution already started" refusal (skips retroactive revision of completed steps; surface this warning to the user, never pass silently) |
 
-### `ogre review-plan`
+### `/ogre:review-plan`
 
 Reviews a generated plan for hallucinations, missing validation, risky assumptions, over-scoped steps.
 
+```
+/ogre:review-plan 107 --reviewer claude
+```
+
 | Option | Example | Description |
 | :--- | :--- | :--- |
-| `<issue-or-plan>` (positional) | `ogre review-plan 107` | Issue number, plan name (`issue-107`), or plan path |
-| `--reviewer claude\|codex` | `ogre review-plan 107 --reviewer codex` | Which LLM CLI reviews the plan (default: `claude`) |
-| `--model MODEL` | `ogre review-plan 107 --reviewer codex --model gpt-5.5` | Model override for the reviewer |
+| `<issue-or-plan>` (positional) | `/ogre:review-plan 107` | Issue number, plan name (`issue-107`), or plan path |
+| `--reviewer claude\|codex` | `/ogre:review-plan 107 --reviewer codex` | Which LLM CLI reviews the plan (default: `claude`) |
+| `--model MODEL` | `/ogre:review-plan 107 --reviewer codex --model gpt-5.5` | Model override for the reviewer |
 
-### `ogre execute`
+### `/ogre:execute`
 
 Executes one checklist item (or all remaining, with `--all`) from an approved plan.
 
+```
+/ogre:execute 107 --executor codex
+```
+
 | Option | Example | Description |
 | :--- | :--- | :--- |
-| `<issue-or-plan>` (positional) | `ogre execute 107` | Issue number, plan name, or plan path |
-| `--job JOB_ID` | `ogre execute --job job-6d7715e4-...` | Target by job id instead of issue/plan |
-| `--executor codex\|claude` | `ogre execute 107 --executor claude` | Which LLM CLI executes the step (default: `codex`) |
-| `--model MODEL` | `ogre execute 107 --executor claude --model sonnet-5` | Model override for the executor |
-| `--task TASK_ID` | `ogre execute 107 --task task-0f32a78f-...` | Target one specific seeded step out of order |
-| `--step N` | `ogre execute 107 --step 3` | Target step N (1-based) out of order |
-| `--retry` | `ogre execute 107 --retry` | Re-run the lowest failed step in a fresh session, with the failed attempt's exit code and log tail injected into the runner prompt - the failure becomes an input instead of a dead end to re-explain by hand. Not combinable with `--all` |
-| `--all` | `ogre execute 107 --all` | Chain through every remaining step, each session handing off to a fresh one at the `--max-steps` cap or when it estimates ~50%+ context used, whichever comes first |
-| `--max-steps N` | `ogre execute 107 --all --max-steps 5` | Hard cap on checklist items per chained session (default: 3). Self-assessed context estimates are unreliable, so the cap is the authoritative limit |
-| `--fresh` | `ogre execute 107 --fresh` | Force a brand-new context for this step (default) |
-| `--resume` | `ogre execute 107 --resume` | Resume prior context for this step instead of starting fresh |
-| `--main` | `ogre execute 107 --main` | Run inline in the current Claude Code session, no subprocess spawned. Use only when explicitly requested; defeats Ogre's context-isolation purpose if habitual |
-| `--background` | `ogre execute 107 --background` | Same isolation as default (new session) but detached/non-blocking |
-| `--yes` | `ogre execute 107 --yes` | Required to proceed non-interactively when the step/job was previously `stopped`, or jumping to an out-of-order step whose earlier steps aren't `passed`. Only pass after explicit user confirmation |
+| `<issue-or-plan>` (positional) | `/ogre:execute 107` | Issue number, plan name, or plan path |
+| `--job JOB_ID` | `/ogre:execute --job job-6d7715e4-...` | Target by job id instead of issue/plan |
+| `--executor codex\|claude` | `/ogre:execute 107 --executor claude` | Which LLM CLI executes the step (default: `codex`) |
+| `--model MODEL` | `/ogre:execute 107 --executor claude --model sonnet-5` | Model override for the executor |
+| `--task TASK_ID` | `/ogre:execute 107 --task task-0f32a78f-...` | Target one specific seeded step out of order |
+| `--step N` | `/ogre:execute 107 --step 3` | Target step N (1-based) out of order |
+| `--retry` | `/ogre:execute 107 --retry` | Re-run the lowest failed step in a fresh session, with the failed attempt's exit code and log tail injected into the runner prompt - the failure becomes an input instead of a dead end to re-explain by hand. Not combinable with `--all` |
+| `--all` | `/ogre:execute 107 --all` | Chain through every remaining step, each session handing off to a fresh one at the `--max-steps` cap or when it estimates ~50%+ context used, whichever comes first |
+| `--max-steps N` | `/ogre:execute 107 --all --max-steps 5` | Hard cap on checklist items per chained session (default: 3). Self-assessed context estimates are unreliable, so the cap is the authoritative limit |
+| `--fresh` | `/ogre:execute 107 --fresh` | Force a brand-new context for this step (default) |
+| `--resume` | `/ogre:execute 107 --resume` | Resume prior context for this step instead of starting fresh |
+| `--main` | `/ogre:execute 107 --main` | Run inline in the current Claude Code session, no subprocess spawned. Use only when explicitly requested; defeats Ogre's context-isolation purpose if habitual |
+| `--background` | `/ogre:execute 107 --background` | Same isolation as default (new session) but detached/non-blocking |
+| `--yes` | `/ogre:execute 107 --yes` | Required to proceed non-interactively when the step/job was previously `stopped`, or jumping to an out-of-order step whose earlier steps aren't `passed`. Only pass after explicit user confirmation |
 
 Default with no isolation flag: foreground, brand-new codex/claude session, targeting the lowest-numbered pending step.
 
@@ -228,32 +205,44 @@ Every generated runner prompt also carries context blocks so a fresh session doe
 
 **`[BROWSER-CHECK]` steps.** Steps needing real browser rendering are tagged and auto-run inline (`--main`) instead of in an isolated subprocess.
 
-### `ogre status`
+### `/ogre:status`
 
 Shows job/task progress from `.ai/.ogre` state.
 
+```
+/ogre:status 107
+```
+
 | Option | Example | Description |
 | :--- | :--- | :--- |
-| `[issue]` (positional, optional) | `ogre status 107` | Show one issue's Job Summary + its tasks. Omit for every issue + every pending/running task |
-| `--job JOB_ID` | `ogre status --job job-6d7715e4-...` | Same as `[issue]`, addressed by job id |
-| `--tasks` | `ogre status --tasks` or `ogre status 107 --tasks` | List all tasks, optionally filtered to one issue |
-| `--task TASK_ID` | `ogre status --task task-0f32a78f-...` | Show one task's full record |
-| `--watch` | `ogre status --watch` | Live-refresh view (run standalone in another terminal), Ctrl-C to quit |
-| `--interval N` | `ogre status --watch --interval 5` | Refresh seconds for `--watch` (default: 2) |
+| `[issue]` (positional, optional) | `/ogre:status 107` | Show one issue's Job Summary + its tasks. Omit for every issue + every pending/running task |
+| `--job JOB_ID` | `/ogre:status --job job-6d7715e4-...` | Same as `[issue]`, addressed by job id |
+| `--tasks` | `/ogre:status --tasks` or `/ogre:status 107 --tasks` | List all tasks, optionally filtered to one issue |
+| `--task TASK_ID` | `/ogre:status --task task-0f32a78f-...` | Show one task's full record |
+| `--watch` | `/ogre:status --watch` | Live-refresh view (run standalone in another terminal), Ctrl-C to quit |
+| `--interval N` | `/ogre:status --watch --interval 5` | Refresh seconds for `--watch` (default: 2) |
 
-`ogre status`/`ogre execute` self-heal a missing `state.json` by backfilling it from the plan file, so hand-authored plans still work.
+`/ogre:status`/`/ogre:execute` self-heal a missing `state.json` by backfilling it from the plan file, so hand-authored plans still work.
 
-### `ogre task-list`
+### `/ogre:task-list`
 
 Lists every checklist step under one job, one row per step (including steps never executed yet).
 
+```
+/ogre:task-list job-6d7715e4-...
+```
+
 | Option | Example | Description |
 | :--- | :--- | :--- |
-| `<job-id>` (positional, required) | `ogre task-list job-6d7715e4-...` | Get the job id from `Job Id` in `ogre status <issue>` output |
+| `<job-id>` (positional, required) | `/ogre:task-list job-6d7715e4-...` | Get the job id from `Job Id` in `/ogre:status <issue>` output |
 
 ### `ogre task-complete`
 
 Manually marks a task's ledger status. Only needed when the executing agent did the work directly (not via `--run`/`--background`, which mark it automatically); this is the mandatory last step in that case.
+
+```bash
+scripts/ogre task-complete task-0f32a78f-... --status passed
+```
 
 | Option | Example | Description |
 | :--- | :--- | :--- |
@@ -262,19 +251,23 @@ Manually marks a task's ledger status. Only needed when the executing agent did 
 | `--exit-code N` | `ogre task-complete task-0f32a78f-... --status failed --exit-code 1` | Optional exit code to record alongside the status |
 | `--notes "..."` | `ogre task-complete task-0f32a78f-... --notes "reset route is POST /password/email, not /forgot"` | Findings the next step's fresh session must know (real signature/route found, deviation from plan, gotcha). Injected into every later runner prompt for the issue, so mid-step knowledge survives the session that discovered it |
 
-### `ogre stop`
+### `/ogre:stop`
 
 Stops, archives, or deletes Ogre runtime data. Does not revert code changes.
 
+```
+/ogre:stop 107
+```
+
 | Option | Example | Description |
 | :--- | :--- | :--- |
-| `[issue]` (positional, optional) | `ogre stop 107` | Stop the job: cascades to all its tasks (kills running pids, marks pending/running `stopped`) |
-| `--job JOB_ID` | `ogre stop --job job-6d7715e4-...` | Same, addressed by job id |
-| `--task TASK_ID` | `ogre stop --task task-0f32a78f-...` | Stop ONE task only; sibling tasks and job/issue state untouched |
-| `--all` | `ogre stop --all` | Stop every tracked job (cascades to all their tasks) |
-| `--archive` | `ogre stop 107 --archive` | Move the issue's runtime data to `.ai/.ogre/archive/issue-<n>-<timestamp>/` |
-| `--delete` | `ogre stop 107 --delete` | Delete the issue's runtime data (after confirmation) |
-| `--list` | `ogre stop 107 --list` | Print every runtime file/dir path for the issue without deleting, so the user can pick individually |
+| `[issue]` (positional, optional) | `/ogre:stop 107` | Stop the job: cascades to all its tasks (kills running pids, marks pending/running `stopped`) |
+| `--job JOB_ID` | `/ogre:stop --job job-6d7715e4-...` | Same, addressed by job id |
+| `--task TASK_ID` | `/ogre:stop --task task-0f32a78f-...` | Stop ONE task only; sibling tasks and job/issue state untouched |
+| `--all` | `/ogre:stop --all` | Stop every tracked job (cascades to all their tasks) |
+| `--archive` | `/ogre:stop 107 --archive` | Move the issue's runtime data to `.ai/.ogre/archive/issue-<n>-<timestamp>/` |
+| `--delete` | `/ogre:stop 107 --delete` | Delete the issue's runtime data (after confirmation) |
+| `--list` | `/ogre:stop 107 --list` | Print every runtime file/dir path for the issue without deleting, so the user can pick individually |
 
 ## Installation
 

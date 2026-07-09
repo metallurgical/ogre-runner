@@ -86,7 +86,7 @@ flowchart TD
 
 - **[Claude Code CLI](https://code.claude.com/docs/en/setup)** — required (you're already running it if you can install this plugin). Verified with `2.1.205`.
 - **[GitHub CLI (`gh`)](https://cli.github.com/)** — optional, used to resolve GitHub issue numbers/URLs. Verified with `2.92.0`. Missing/unauthenticated/no-access all fall back to a placeholder issue file you paste content into manually.
-- **[Codex CLI](https://developers.openai.com/codex/cli)** — optional, only needed for `--executor`/`--planner`/`--reviewer codex`. Verified with `0.143.0`. Missing it fails `--executor codex` (runner prompts can still be generated and run manually).
+- **[Codex CLI](https://developers.openai.com/codex/cli)** — optional. Default is `claude` for planner/reviewer/executor; pass `--planner`/`--reviewer`/`--executor codex` to use Codex instead. Verified with `0.143.0`. Missing it fails `--executor codex` (runner prompts can still be generated and run manually).
 
 ## Installation
 

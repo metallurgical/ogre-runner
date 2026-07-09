@@ -84,17 +84,9 @@ flowchart TD
 
 ## Requirements
 
-Optional but recommended:
-
-```bash
-gh --version
-codex --version
-claude --version
-```
-
-If an issue can't be fetched automatically (`gh` missing, not a GitHub repo, not authenticated, no access, or an unreachable URL), Ogre creates a placeholder issue file so you can paste the content manually.
-
-If `codex` is missing, `/ogre:execute --executor codex --run` will fail, but you can still generate runner prompts and pass them manually.
+- **[Claude Code CLI](https://code.claude.com/docs/en/setup)** — required (you're already running it if you can install this plugin). Verified with `2.1.205`.
+- **[GitHub CLI (`gh`)](https://cli.github.com/)** — optional, used to resolve GitHub issue numbers/URLs. Verified with `2.92.0`. Missing/unauthenticated/no-access all fall back to a placeholder issue file you paste content into manually.
+- **[Codex CLI](https://developers.openai.com/codex/cli)** — optional, only needed for `--executor`/`--planner`/`--reviewer codex`. Verified with `0.143.0`. Missing it fails `--executor codex` (runner prompts can still be generated and run manually).
 
 ## Installation
 

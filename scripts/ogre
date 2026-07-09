@@ -2313,6 +2313,8 @@ PY
     esac
   fi
   log "Task $tid finished: $final_status"
+  log ""
+  print_job_summary "$issue"
   exit "$rc"
 }
 

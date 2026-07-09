@@ -94,6 +94,17 @@ print(t['id'])
   [ "$(state_field 42 status)" = "executing" ]
 }
 
+@test "execute foreground prints the job summary automatically after finishing a step" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step" "Second step"
+  run "${OGRE_BIN}" execute 42
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Task"*"finished: passed"* ]]
+  [[ "${output}" == *"Steps Completed"* ]]
+  [[ "${output}" == *"Steps Remaining"* ]]
+  [[ "${output}" == *"Second step"* ]]
+}
+
 @test "execute foreground with --executor codex runs the lowest pending step and marks it passed" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42
   write_plan_with_steps 42 "First step" "Second step"

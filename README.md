@@ -20,7 +20,7 @@ Start from a sentence. No GitHub issue or setup step required:
 /ogre:feature --statement "need to implement forgot password page" --name forgot-password
 ```
 
-Ogre creates `.ai/.ogre/` automatically and generates a checklist plan. Review is optional, but useful before bigger changes:
+Ogre creates `.ai/.ogre/` automatically and writes a checklist plan to `.ai/.ogre/plans/issue-forgot-password.md`. Open it and edit by hand if you want, or run a second LLM pass over it — optional, but useful before bigger changes:
 
 ```
 /ogre:review-plan forgot-password --reviewer claude
@@ -165,24 +165,6 @@ See every checklist step for a job at once:
 /ogre:task-list job-<uuid>
 # One row per step: #, Task Id, Status, Executor, Step
 # Get the job id from `Job Id` in /ogre:status <issue> output
-```
-
-## Runtime Folder
-
-Inside each target project, Ogre creates:
-
-```txt
-.ai/.ogre/
-  config.json
-  issues/
-  plans/
-  reviews/
-  logs/
-  state/                          # per-issue state.json, shared tasks.json ledger,
-                                  # and issue-<n>-knowledge.md living knowledge bases
-  tmp/
-  archive/
-  prompts/
 ```
 
 ## Command Reference

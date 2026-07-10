@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OGRE_VERSION="1.4.0"
+OGRE_VERSION="1.4.1"
 RUNTIME=".ai/.ogre"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -2288,7 +2288,13 @@ PY
     set +e
     case "$executor" in
       codex)
-        local -a codex_args=(exec --skip-git-repo-check --sandbox workspace-write)
+        # -a never: headless codex exec has no TTY to answer an approval
+        # prompt, so any MCP tool with approval_mode="approve" in
+        # ~/.codex/config.toml (e.g. playwright's browser_navigate /
+        # browser_evaluate) silently stalls/no-ops without this - the model
+        # just reports the tool as unavailable. Sandbox stays workspace-write
+        # regardless; this only removes the unanswerable human-approval step.
+        local -a codex_args=(exec --skip-git-repo-check --sandbox workspace-write -a never)
         [ -n "$model" ] && codex_args+=(-m "$model")
         [ -n "$reasoning" ] && codex_args+=(-c "model_reasoning_effort=$reasoning")
         codex "${codex_args[@]}" - < "$link_runner" | tee "$link_logpath"
@@ -2316,7 +2322,8 @@ PY
     local link_tid="$1" link_runner="$2" link_logpath="$3" link_session="$4"
     case "$executor" in
       codex)
-        local -a codex_args=(exec --skip-git-repo-check --sandbox workspace-write)
+        # -a never: see run_link_body's codex branch for why this is required.
+        local -a codex_args=(exec --skip-git-repo-check --sandbox workspace-write -a never)
         [ -n "$model" ] && codex_args+=(-m "$model")
         [ -n "$reasoning" ] && codex_args+=(-c "model_reasoning_effort=$reasoning")
         codex "${codex_args[@]}" - < "$link_runner" > "$link_logpath" 2>&1

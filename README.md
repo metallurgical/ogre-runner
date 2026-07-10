@@ -390,4 +390,7 @@ For team-visible plans but private logs:
 .ai/.ogre/logs/
 .ai/.ogre/tmp/
 .ai/.ogre/reviews/
+.ai/.ogre/prompts/
 ```
+
+(`prompts/` is just a copy of the plugin's own templates, re-copied fresh on every command - never worth committing.)

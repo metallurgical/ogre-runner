@@ -30,7 +30,7 @@ Examples:
 
 Run:
 
-- `scripts/ogre stop [issue] [--job <job-id>] [--task <task-id>] [--all] [--archive] [--delete] [--list]`
+- `${CLAUDE_PLUGIN_ROOT}/scripts/ogre stop [issue] [--job <job-id>] [--task <task-id>] [--all] [--archive] [--delete] [--list]`
 
 ## Modes
 
@@ -77,6 +77,6 @@ Prints every runtime file/dir path for the issue (`.ai/.ogre/issues/`, `plans/`,
 `/ogre:status <issue>` reports when an issue's plan is fully checked off (`status: completed`). When you see that, ask the user what to do with the issue's Ogre runtime data — don't decide for them and don't delete automatically:
 
 - Keep it (no action)
-- Archive it (`scripts/ogre stop <issue> --archive`)
-- Delete all at once (`scripts/ogre stop <issue> --delete`)
-- Delete individually (`scripts/ogre stop <issue> --list`, then remove the specific paths they choose)
+- Archive it (`${CLAUDE_PLUGIN_ROOT}/scripts/ogre stop <issue> --archive`)
+- Delete all at once (`${CLAUDE_PLUGIN_ROOT}/scripts/ogre stop <issue> --delete`)
+- Delete individually (`${CLAUDE_PLUGIN_ROOT}/scripts/ogre stop <issue> --list`, then remove the specific paths they choose)

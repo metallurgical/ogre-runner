@@ -2,14 +2,14 @@ load test_helper
 
 @test "task-complete with no task id errors" {
   run "${OGRE_BIN}" task-complete
-  [ "${status}" -eq 1 ]
-  [[ "${output}" == *"Usage: ogre task-complete <task-id>"* ]]
+  [ "${status}" -eq 1 ] || return 1
+  [[ "${output}" == *"Usage: ogre task-complete <task-id>"* ]] || return 1
 }
 
 @test "task-complete with unknown task id errors" {
   run "${OGRE_BIN}" task-complete task-does-not-exist
-  [ "${status}" -eq 1 ]
-  [[ "${output}" == *"No task found with id task-does-not-exist"* ]]
+  [ "${status}" -eq 1 ] || return 1
+  [[ "${output}" == *"No task found with id task-does-not-exist"* ]] || return 1
 }
 
 @test "task-complete rejects an invalid --status value" {
@@ -20,8 +20,8 @@ load test_helper
   tid="$(python3 -c "import json; print(json.load(open('.ai/.ogre/state/tasks.json'))[0]['id'])")"
 
   run "${OGRE_BIN}" task-complete "${tid}" --status bogus
-  [ "${status}" -eq 1 ]
-  [[ "${output}" == *"Invalid --status: bogus"* ]]
+  [ "${status}" -eq 1 ] || return 1
+  [[ "${output}" == *"Invalid --status: bogus"* ]] || return 1
 }
 
 @test "task-complete defaults to passed and updates the ledger" {
@@ -32,9 +32,9 @@ load test_helper
   tid="$(python3 -c "import json; print(json.load(open('.ai/.ogre/state/tasks.json'))[0]['id'])")"
 
   run "${OGRE_BIN}" task-complete "${tid}"
-  [ "${status}" -eq 0 ]
-  [[ "${output}" == *"Task ${tid} marked passed."* ]]
-  [ "$(task_json_field "${tid}" status)" = "passed" ]
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" == *"Task ${tid} marked passed."* ]] || return 1
+  [ "$(task_json_field "${tid}" status)" = "passed" ] || return 1
 }
 
 @test "task-complete --notes records findings on the task and shows them in the summary" {
@@ -45,10 +45,10 @@ load test_helper
   tid="$(python3 -c "import json; print(json.load(open('.ai/.ogre/state/tasks.json'))[0]['id'])")"
 
   run "${OGRE_BIN}" task-complete "${tid}" --notes "reset route is POST /password/email, not /forgot"
-  [ "${status}" -eq 0 ]
-  [ "$(task_json_field "${tid}" notes)" = "reset route is POST /password/email, not /forgot" ]
-  [[ "${output}" == *"Notes"* ]]
-  [[ "${output}" == *"reset route is POST /password/email"* ]]
+  [ "${status}" -eq 0 ] || return 1
+  [ "$(task_json_field "${tid}" notes)" = "reset route is POST /password/email, not /forgot" ] || return 1
+  [[ "${output}" == *"Notes"* ]] || return 1
+  [[ "${output}" == *"reset route is POST /password/email"* ]] || return 1
 }
 
 @test "concurrent task-complete calls all land (ledger writes serialize, no lost updates)" {
@@ -65,10 +65,10 @@ load test_helper
 
   # Every one of the 8 parallel read-modify-write cycles must have landed.
   while IFS= read -r tid; do
-    [ "$(task_json_field "${tid}" status)" = "passed" ]
+    [ "$(task_json_field "${tid}" status)" = "passed" ] || return 1
   done <<< "${tids}"
   # Atomic writes leave no temp file behind.
-  [ ! -f ".ai/.ogre/state/tasks.json.tmp" ]
+  [ ! -f ".ai/.ogre/state/tasks.json.tmp" ] || return 1
   python3 -c "import json; json.load(open('.ai/.ogre/state/tasks.json'))"
 }
 
@@ -80,7 +80,7 @@ load test_helper
   tid="$(python3 -c "import json; print(json.load(open('.ai/.ogre/state/tasks.json'))[0]['id'])")"
 
   run "${OGRE_BIN}" task-complete "${tid}" --status failed --exit-code 3
-  [ "${status}" -eq 0 ]
-  [ "$(task_json_field "${tid}" status)" = "failed" ]
-  [ "$(task_json_field "${tid}" exit_code)" = "3" ]
+  [ "${status}" -eq 0 ] || return 1
+  [ "$(task_json_field "${tid}" status)" = "failed" ] || return 1
+  [ "$(task_json_field "${tid}" exit_code)" = "3" ] || return 1
 }

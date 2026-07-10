@@ -24,11 +24,12 @@ Optional flags:
 - `--task <task-id>` — target one specific seeded step out of order
 - `--step <n>` — target step N (1-based) out of order
 - `--retry` — re-run the lowest `failed` step in a fresh session. The failed attempt's exit code and log tail are injected into the runner prompt so the new session diagnoses the failure instead of repeating the same approach blindly. Prefer this over asking the user to explain what went wrong. Not combinable with `--all`.
-- `--all` — chain through every remaining step automatically. Each session hands off to a fresh one (cleanly, via `task-complete --status passed`, not as an error) at the `--max-steps` cap or once it estimates ~50%+ of its context used, whichever comes first — so simple steps can share one session while a heavier one splits off on its own. Works with `--main`/`--background` too. If the chain stops on a `[BROWSER-CHECK]` step, see "Auto-Resolving `[BROWSER-CHECK]` Pauses" below — handle it yourself, don't just relay the error to the user.
+- `--all` — chain through every remaining step automatically. Each session hands off to a fresh one (cleanly, via `task-complete --status passed`, not as an error) at the `--max-steps` cap or once it estimates ~50%+ of its context used, whichever comes first — so simple steps can share one session while a heavier one splits off on its own. Works with `--main`/`--background` too. Browser-check steps run isolated in the chain when the executor has a browser MCP; only if none is detected does the chain stop on one — see "`[BROWSER-CHECK]` Steps" below, and handle it yourself rather than relaying the error.
 - `--max-steps N` — hard cap on checklist items per chained `--all` session (default: 3). Self-assessed context estimates are unreliable, so the cap is the authoritative limit.
 - `--fresh`
 - `--resume`
-- `--main` — run inline in the current Claude Code session instead of spawning a new isolated codex/claude session. Use this only when the user explicitly wants the edit made in this conversation (e.g. a genuinely trivial step, or they say so directly) — it defeats the whole point of Ogre (keeping the main context clean) if used as a habit.
+- `--main` — run inline in the current Claude Code session instead of spawning a new isolated codex/claude session. Opt-in only: Ogre never forces it, except as the automatic fallback for a `[BROWSER-CHECK]` step when no browser MCP is detected (and it says so). Use it deliberately only when the user explicitly wants the edit made in this conversation — it defeats the whole point of Ogre (keeping the main context clean) if used as a habit.
+- `--mcp-config PATH` — browser MCP config-file handed to the spawned `claude` session so `[BROWSER-CHECK]` steps run isolated. Also settable persistently as `"browser_mcp"` in `.ai/.ogre/config.json`. **`claude`-only.** Codex gets its browser MCP from its own `~/.codex/config.toml` `mcp_servers` instead — codex `[BROWSER-CHECK]` also runs isolated when an external Playwright/Puppeteer MCP is in `codex mcp list` (Ogre's codex runner forces the external MCP over Codex's desktop in-app browser, which can't run headless — verified). No such MCP → `--main` fallback.
 - `--background` — same isolation as default (new session) but detached/non-blocking
 - `--yes` — required to proceed non-interactively (e.g. from this agent) when the target step/job was previously `stopped`, or when jumping to an out-of-order step whose earlier steps aren't `passed` yet. Only pass this after the user has explicitly confirmed.
 
@@ -49,14 +50,14 @@ Every feature is a **job** (1:1 with the issue, id `job-<uuid>`, stored as `job_
 
 `ogre execute` no longer creates a fresh task per invocation (except `--all`, see below) — it finds the matching seeded task and updates it in place. `--task <id>`/`--step <n>` let you jump to any step out of order; without them it takes the lowest pending `step_index`. `sync_state_from_plan` also reconciles both directions every time it runs: if a checklist item shows `[x]` in the plan but its task isn't `passed` yet, the task is force-flipped to `passed` — the plan file is the source of truth for "done," so ledger and checklist can never drift apart for long. `--all` is the one exception: it still creates an ad-hoc, unlinked task covering every remaining step in one runner call, for cases where you deliberately want the old bulk behavior.
 
-**`--run`/`--background` auto-mark the task `passed`/`failed` when the subprocess exits.** Every other path — a human running the printed `codex exec` command by hand, a `/codex:rescue` handoff, or (most common) the live Claude Code session executing the checklist item directly in this conversation — does NOT touch the ledger on its own. In all of those cases, the executing agent must run `scripts/ogre task-complete <task-id> --status passed|failed` as the last step (the exact command and task id are embedded in the generated runner file and in `templates/execution-handoff.md`'s "After Editing" section). Skipping it leaves the task stuck `pending` forever even though the real work is done — do not skip it.
+**`--run`/`--background` auto-mark the task `passed`/`failed` when the subprocess exits.** Every other path — a human running the printed `codex exec` command by hand, a `/codex:rescue` handoff, or (most common) the live Claude Code session executing the checklist item directly in this conversation — does NOT touch the ledger on its own. In all of those cases, the executing agent must run `${CLAUDE_PLUGIN_ROOT}/scripts/ogre task-complete <task-id> --status passed|failed` as the last step (the exact command and task id are embedded in the generated runner file and in `templates/execution-handoff.md`'s "After Editing" section). Skipping it leaves the task stuck `pending` forever even though the real work is done — do not skip it.
 
-- `scripts/ogre status --task <id>` — show one task's full record (status, pid, exit_code, timestamps, log path).
-- `scripts/ogre status --tasks [issue]` — list all tasks, optionally filtered to one issue.
-- `scripts/ogre status --job <job-id>` — same as `ogre status <issue>`, addressed by job id instead of issue slug.
-- `scripts/ogre status <issue>` — also lists tasks for that issue below the state json.
-- `scripts/ogre stop <issue>` / `scripts/ogre stop --job <job-id>` — stops the whole job: kills any `running` task's pid and marks all pending/running tasks for that issue `stopped`.
-- `scripts/ogre stop --task <id>` — stops just that one task (kills its pid if running). Sibling tasks and the job/issue state are untouched. Use this to kill one misbehaving background attempt without aborting the whole feature.
+- `${CLAUDE_PLUGIN_ROOT}/scripts/ogre status --task <id>` — show one task's full record (status, pid, exit_code, timestamps, log path).
+- `${CLAUDE_PLUGIN_ROOT}/scripts/ogre status --tasks [issue]` — list all tasks, optionally filtered to one issue.
+- `${CLAUDE_PLUGIN_ROOT}/scripts/ogre status --job <job-id>` — same as `ogre status <issue>`, addressed by job id instead of issue slug.
+- `${CLAUDE_PLUGIN_ROOT}/scripts/ogre status <issue>` — also lists tasks for that issue below the state json.
+- `${CLAUDE_PLUGIN_ROOT}/scripts/ogre stop <issue>` / `${CLAUDE_PLUGIN_ROOT}/scripts/ogre stop --job <job-id>` — stops the whole job: kills any `running` task's pid and marks all pending/running tasks for that issue `stopped`.
+- `${CLAUDE_PLUGIN_ROOT}/scripts/ogre stop --task <id>` — stops just that one task (kills its pid if running). Sibling tasks and the job/issue state are untouched. Use this to kill one misbehaving background attempt without aborting the whole feature.
 
 Use this when the user asks "what's still running", "did step N pass or fail", "show me task \<id\>", or "stop just that one background run".
 
@@ -69,23 +70,21 @@ Every `--run`/`--background` task also records the underlying CLI's own session 
 
 Always report `session_id` and the exact resume command back to the user after a task finishes (execute output shows it; `ogre status --task <id>` shows it too, once captured). For background codex tasks, it may be `null` until the process finishes — check status again after.
 
-## Auto-Resolving `[BROWSER-CHECK]` Pauses
+## `[BROWSER-CHECK]` Steps
 
-A step tagged `[BROWSER-CHECK]` needs a real browser to verify - a spawned codex/claude CLI subprocess doesn't have one, only this live session does (Playwright/browser MCP tools). This is a mechanical continuation, not a judgment call: never just relay the pause to the user and stop. Resolve it yourself:
+A step tagged `[BROWSER-CHECK]` needs a real rendered browser to verify (visual layout, interactive behavior). **By default these now run ISOLATED like any other step** — Ogre keeps main context clean whenever it can. What happens depends on whether the executor has a browser MCP:
 
-1. **Single-step / `--main`**: nothing to do - `ogre execute` already auto-switches to `--main` for you when it detects the tag on the target step. Just do the check as instructed.
-2. **`--all`, running synchronously in this turn (no `--background`)**: when the command exits because the next step is `[BROWSER-CHECK]`, immediately, in the same turn, without asking the user first:
-   - Run `scripts/ogre execute <issue> --main` and do that one step's real browser check yourself (screenshot/snapshot with your own tools).
-   - Run `scripts/ogre task-complete <task-id> --status passed|failed` for it.
-   - Re-run `scripts/ogre execute <issue> --all` (same executor/model/reasoning flags as the original call) to resume the chain.
-   - Repeat this loop if it pauses again on another `[BROWSER-CHECK]` step (each one is detected one at a time, not batched) - loop until the chain reports `completed`, `failed` for a real reason, or nothing left, then report the final result once.
-3. **`--all --background`**: first check whether a fork is even needed - grep the plan's remaining (unchecked) checklist items for `[BROWSER-CHECK]`. If none of the remaining steps are tagged, just kick off `--background` normally and stop there; nothing will pause mid-chain, the ledger updates itself when it finishes, and there's nothing for a fork to supervise. Do not launch a fork for a chain that has no browser-check steps in it.
+- **Browser MCP available** — `claude` executor only, with a Playwright/browser MCP configured (ambient project/user MCP shown in `claude mcp list`, `browser_mcp` in `.ai/.ogre/config.json`, or `--mcp-config PATH`): the spawned `claude -p` session verifies the step with its own browser tools (verified: it inherits the ambient MCP and drives a real headless browser). Nothing special for you to do — single steps and `--all` chains run straight through, main context untouched. This is the goal state; prefer configuring a browser MCP so browser-check never touches this session. Works for **both executors**: `claude` (ambient MCP / `browser_mcp` / `--mcp-config`) and `codex` (an external Playwright/Puppeteer MCP in `codex mcp list` — Ogre's codex runner forces it over Codex's desktop in-app browser, which can't run headless).
+- **No browser MCP detected**: Ogre falls back so the step still completes automatically (no manual retrigger):
+  1. **Single-step**: `ogre execute` auto-switches that one step to `--main` and prints a NOTE saying why. Just do the check as instructed in this session, then `task-complete`.
+  2. **`--all` foreground (no `--background`)**: the chain stops at the browser-check with a message. This is a mechanical continuation, not a question for the user — resolve it in the same turn: run `${CLAUDE_PLUGIN_ROOT}/scripts/ogre execute <issue> --main`, do that one step's real browser check yourself, `${CLAUDE_PLUGIN_ROOT}/scripts/ogre task-complete <task-id> --status passed|failed`, then re-run `${CLAUDE_PLUGIN_ROOT}/scripts/ogre execute <issue> --all` (same executor/model/reasoning) to resume. Loop until the chain reports `completed`/`failed`/nothing left.
+  3. **`--all --background`**: first grep the plan's remaining unchecked items for `[BROWSER-CHECK]`. None tagged → just kick off `--background` and stop; nothing will pause. At least one tagged → the detached run can't call back into this session, so the moment you launch it, launch a fork (`Agent`, `subagent_type: "fork"`) to supervise:
+     - Poll with **one single Bash tool call** running a real shell `while`+`sleep` loop (e.g. `while :; do ${CLAUDE_PLUGIN_ROOT}/scripts/ogre status <issue>; sleep 20; done` breaking on `completed`/`stopped`/`failed`/`[BROWSER-CHECK]`). Never poll across separate assistant turns — one grounded shell loop only.
+     - Never report a step number/`current_step`/count from memory — always quote the most recent `ogre status` output.
+     - Whenever `current_step` contains `[BROWSER-CHECK]` and the job isn't `completed`/`stopped`, resolve it like case 2 (`--main`, real check, `task-complete`, resume with `--all --background` preserving flags).
+     - Loop until `completed`/`stopped`/`failed` for a real reason, then return one final summary from the last real status read.
 
-   Only if at least one remaining step is tagged `[BROWSER-CHECK]`: the detached subprocess has no browser tools and cannot pause-and-call-back into this session while it's running unattended - there's no way around that, and waiting for your own next turn to check isn't reliable (you might not get one for hours). So the moment you kick off the `--background --all` run, launch a fork to supervise it: `Agent` tool, `subagent_type: "fork"`. Tell the fork to:
-   - Poll with **one single Bash tool call** that runs an actual shell `while` loop with `sleep` inside it (e.g. `while :; do scripts/ogre status <issue>; sleep 20; done` wrapped in a condition that breaks on `completed`/`stopped`/`failed`/`[BROWSER-CHECK]`). Do **not** poll by making separate assistant turns/tool calls in a loop ("check now, wait, check again") - across turns there's nothing forcing a fresh read, and the fork can drift into narrating remembered/assumed progress instead of the real ledger. One shell loop that only returns once something actionable happened is the only form that's grounded by construction.
-   - Never report or act on a step number, `current_step`, or completion count from memory - always re-derive it from the most recent `ogre status` output in front of you. If you're about to say "still on step N" or similar, that sentence must be a direct quote/paraphrase of the last poll's real output, not a running tally you're keeping yourself.
-   - Whenever `current_step` contains `[BROWSER-CHECK]` and the job isn't `completed`/`stopped`, resolve it itself exactly like step 2 above (`--main`, do the real check with its own browser tools, `task-complete`, then resume with `scripts/ogre execute <issue> --all --background`, preserving `--background` and any `--model`/`--reasoning` from the original call).
-   - Keep looping until the job reaches `completed`, `stopped`, or `failed` for a real (non-browser-check) reason, then return one final summary built from that last real `ogre status` read, not from anything summarized earlier in the loop.
+The cleanest fix for all of this is to give the executor a browser MCP once — then every case above collapses to "runs isolated, nothing to supervise."
 
    The fork's completion generates a `task-notification`, which reliably wakes a fresh turn in this session when it's done - so nothing is missed even with zero other interaction in between. Report that summary to the user when it arrives.
 
@@ -94,7 +93,7 @@ A step tagged `[BROWSER-CHECK]` needs a real browser to verify - a spawned codex
 ## Behavior
 
 1. Run:
-   - `scripts/ogre execute <issue-or-plan> [flags]`
+   - `${CLAUDE_PLUGIN_ROOT}/scripts/ogre execute <issue-or-plan> [flags]`
    - **If this exits non-zero because the next step is `[BROWSER-CHECK]`** (only possible with `--all`, see "Auto-Resolving `[BROWSER-CHECK]` Pauses" above): that's a mechanical continuation, not a confirmation case - handle it per that section, do not stop and ask the user.
    - **If it exits non-zero for any other reason, or prints `ERROR: Refusing to proceed non-interactively without confirmation...`**: STOP HERE. Do not read the runner file, do not edit any files, even if a runner file already exists from a prior attempt (it may be stale). Relay the exact warning to the user (e.g. "step/job was previously stopped, may depend on unfinished earlier steps") and ask whether to proceed. Only re-run with `--yes` after the user explicitly confirms.
    - **Without `--main`, this call blocks and actually runs codex/claude in a new isolated session** — wait for it to finish; don't do the edit yourself in parallel.
@@ -119,7 +118,7 @@ A step tagged `[BROWSER-CHECK]` needs a real browser to verify - a spawned codex
 
 ## After Execution
 
-Before reporting anything, mandatory, unless this run used `--run`/`--background` (those already do it): run `scripts/ogre task-complete <task-id> --status passed|failed` for the task id `ogre execute` printed. Do this yourself — don't ask the user to run it, don't skip it because the work is "obviously done." This is the step that keeps `ogre status`/`ogre task-list` accurate; the user should never need to know it exists.
+Before reporting anything, mandatory, unless this run used `--run`/`--background` (those already do it): run `${CLAUDE_PLUGIN_ROOT}/scripts/ogre task-complete <task-id> --status passed|failed` for the task id `ogre execute` printed. Do this yourself — don't ask the user to run it, don't skip it because the work is "obviously done." This is the step that keeps `ogre status`/`ogre task-list` accurate; the user should never need to know it exists.
 
 Add `--notes "..."` to that command whenever the step surfaced something the next step's fresh session must know — an actual signature/route/schema that differs from the plan, a deviation made, a gotcha. One or two sentences. Notes are injected into every later runner prompt for the issue; they are the only way mid-step knowledge survives the session that discovered it.
 

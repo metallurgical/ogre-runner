@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OGRE_VERSION="1.3.2"
+OGRE_VERSION="1.4.0"
 RUNTIME=".ai/.ogre"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -18,16 +18,19 @@ Usage:
   ogre add-blocker <issue> <blocker-number|url|path> [--force]
   ogre add-blocker <issue> --statement "free text blocker" [--name blocker-slug] [--force]
   ogre review-plan <issue-or-plan> [--reviewer claude|codex] [--model MODEL] [--reasoning LEVEL]
-  ogre execute <issue-or-plan> [--executor codex|claude] [--model MODEL] [--reasoning LEVEL] [--all] [--max-steps N] [--fresh|--resume] [--main|--background] [--yes]
+  ogre execute <issue-or-plan> [--executor codex|claude] [--model MODEL] [--reasoning LEVEL] [--mcp-config PATH] [--all] [--max-steps N] [--fresh|--resume] [--main|--background] [--yes]
                                    (--reasoning omitted: uses claude/codex's own default effort level - not forced by Ogre)
+                                   (--mcp-config PATH: browser MCP for [BROWSER-CHECK] steps, so they run isolated; also settable as "browser_mcp" in .ai/.ogre/config.json)
   ogre execute --job <job-id> [same flags as above]              (same, addressed by job id)
   ogre execute <issue-or-plan> --task <task-id>                  (target one specific seeded step out of order)
   ogre execute <issue-or-plan> --step <n>                        (target step N, 1-based, out of order)
   ogre execute <issue-or-plan> --retry                           (re-run the lowest failed step, feeding the failed attempt's log tail into the fresh session)
   (default with no --task/--step: run the lowest-numbered pending step)
   Isolation mode (default: foreground, brand-new codex/claude session):
-    (no flag)     foreground, new isolated session - main context untouched
-    --main        run inline in the current Claude Code session, no subprocess spawned
+    (no flag)     foreground, new isolated session - main context untouched (incl. [BROWSER-CHECK]
+                  steps, as long as the executor has a browser MCP; if none is detected, a
+                  browser-check step auto-falls back to --main so it still completes, with a notice)
+    --main        run inline in the current Claude Code session, no subprocess spawned (opt-in only)
     --background  same isolation as default, detached/non-blocking
   Granularity: default targets one step; --all chains through every remaining step, each session/subprocess
     capped at --max-steps items (default 3) and handing off to a fresh one at the cap or when it estimates
@@ -75,7 +78,8 @@ ensure_runtime() {
     "plan_reviewer": { "provider": "claude", "model": "claude-sonnet-5" },
     "executor": { "provider": "claude", "model": "claude-sonnet-5" },
     "diff_reviewer": { "provider": "codex", "model": "gpt-5.6-sol" }
-  }
+  },
+  "browser_mcp": null
 }
 JSON
   fi
@@ -89,6 +93,20 @@ json_array() { python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$@
 # (empty string if the key is missing/null). Callers add 2>/dev/null when the
 # file itself may be absent.
 json_field() { python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get(sys.argv[2]) or '')" "$1" "$2"; }
+
+# config_browser_mcp - the optional top-level "browser_mcp" field from
+# .ai/.ogre/config.json (empty if unset/missing). A path (or JSON string)
+# handed to `claude --mcp-config` so [BROWSER-CHECK] steps can reach a real
+# browser from an isolated spawn. Empty is the normal case: spawns then rely
+# on whatever MCP servers the environment already provides.
+config_browser_mcp() {
+  local cfg="$RUNTIME/config.json"
+  [ -f "$cfg" ] || return 0
+  python3 -c 'import json,sys
+try: d = json.load(open(sys.argv[1]))
+except Exception: sys.exit(0)
+print(d.get("browser_mcp") or "")' "$cfg"
+}
 
 gen_uuid() {
   if command -v uuidgen >/dev/null 2>&1; then
@@ -1812,7 +1830,7 @@ cmd_execute() {
   #   new        - default: foreground, brand-new codex/claude session, isolated from main context
   #   main       - run inline in the current Claude Code session (no subprocess spawned)
   #   background - same isolation as "new" but detached/non-blocking
-  local target="" executor="claude" model="" reasoning="" mode="next" freshness="fresh" iso="new" job_id="" task_id="" step_n="" assume_yes="false" max_steps="3" retry="false"
+  local target="" executor="claude" model="" reasoning="" mode="next" freshness="fresh" iso="new" job_id="" task_id="" step_n="" assume_yes="false" max_steps="3" retry="false" mcp_config=""
   if [ $# -gt 0 ] && [[ ! "$1" =~ ^-- ]]; then
     target="$1"; shift
   fi
@@ -1824,6 +1842,7 @@ cmd_execute() {
       --executor) executor="${2:-claude}"; shift 2 ;;
       --model) model="${2:-}"; shift 2 ;;
       --reasoning) reasoning="${2:-}"; shift 2 ;;
+      --mcp-config) mcp_config="${2:-}"; shift 2 ;;
       --max-steps) max_steps="${2:-3}"; shift 2 ;;
       --retry) retry="true"; shift ;;
       --all) mode="all"; shift ;;
@@ -1837,6 +1856,25 @@ cmd_execute() {
       *) err "Unknown option: $1"; exit 1 ;;
     esac
   done
+  # Browser MCP for [BROWSER-CHECK] steps: --mcp-config flag wins, else the
+  # optional browser_mcp field in .ai/.ogre/config.json. When set, it is passed
+  # to spawned `claude` sessions (--mcp-config) so a browser-check step can
+  # drive a real browser IN ISOLATION instead of being forced into --main.
+  # `claude -p` also inherits ambient project/user MCP servers regardless, so
+  # if a browser MCP is already configured there this is not even needed - the
+  # automatic path just works. codex relies on its own ~/.codex/config.toml
+  # mcp_servers (this flag/field does not apply to codex).
+  [ -n "$mcp_config" ] || mcp_config="$(config_browser_mcp)"
+  # For a codex executor, [BROWSER-CHECK] steps must be steered to the external
+  # Playwright MCP: Codex's bundled browser plugin otherwise routes browser
+  # work to its desktop-app in-app browser (node_repl/browser-client), which
+  # has no session in a headless spawn and fails. This note (injected into the
+  # runner only for codex) forces the external MCP and is what makes isolated
+  # codex browser-check actually work. Empty for claude, which has no such trap.
+  local browser_force_note=""
+  if [ "$executor" = "codex" ]; then
+    browser_force_note="Browser tools (mandatory for any [BROWSER-CHECK] work): use ONLY the external \"playwright\" MCP server tools (browser_navigate, browser_snapshot, etc.) directly. Do NOT use node_repl, the in-app browser, agent.browsers, or browser-client - those require the Codex desktop app and have no session in this headless spawn, so they will fail."
+  fi
   if [ -z "$model" ]; then
     case "$executor" in
       codex) model="gpt-5.6-sol" ;;
@@ -1867,14 +1905,49 @@ cmd_execute() {
   mkdir -p "$logdir" "$RUNTIME/tmp/issue-$issue"
   runner="$RUNTIME/tmp/issue-$issue/run-next.md"
 
-  # True if the plan's current (next-to-run) step is tagged [BROWSER-CHECK] -
-  # see templates/execution-blueprint-prompt.md. Used to keep both the
-  # single-step path and the --all chain from handing such a step to a
-  # spawned codex/claude CLI subprocess, which has no browser access.
+  # True if the plan's current (next-to-run) step is tagged [BROWSER-CHECK].
   next_step_is_browser_check() {
     local next_step
     next_step="$(json_field "$spath" current_step 2>/dev/null)"
     printf '%s' "$next_step" | grep -qi '\[browser-check\]'
+  }
+
+  # Best-effort: can the chosen executor drive a real browser from an isolated
+  # spawn? Positive signals only, biased to "no" - a false "no" just falls the
+  # step back to --main (which always completes), whereas a false "yes" would
+  # spawn a step that can't verify and stalls it pending. Signals:
+  #   - an explicit browser_mcp / --mcp-config is configured, or
+  #   - a browser-ish MCP server appears in the executor's own MCP config.
+  # `claude -p` / `codex exec` also inherit these ambient servers at run time,
+  # so a positive signal here means the isolated session really will have the
+  # tools.
+  browser_mcp_available() {
+    case "$executor" in
+      claude)
+        # Verified working: a spawned `claude -p --permission-mode
+        # bypassPermissions` inherits the ambient project/user MCP servers and
+        # drives a real (headless) browser through a Playwright MCP. Signal:
+        # an explicit --mcp-config/browser_mcp, or a browser-ish server in
+        # `claude mcp list`.
+        [ -n "$mcp_config" ] && return 0
+        command -v claude >/dev/null 2>&1 || return 1
+        claude mcp list </dev/null 2>/dev/null | grep -qiE 'playwright|browser|chrome|puppeteer'
+        ;;
+      codex)
+        # Verified working, but ONLY when the runner forces the external
+        # Playwright MCP over Codex's desktop-app in-app browser (node_repl /
+        # browser-client, agent.browsers.get("iab")) - that in-app browser has
+        # no session in a headless `codex exec` and Codex's bundled browser
+        # plugin otherwise steers it there and fails. So require a real
+        # external browser-driver MCP (playwright/puppeteer) in `codex mcp
+        # list`, not just any "browser"-ish string (which also matches the
+        # in-app node_repl server). browser_force_note injects the "use the
+        # external MCP, not the in-app browser" instruction into the runner.
+        command -v codex >/dev/null 2>&1 || return 1
+        codex mcp list </dev/null 2>/dev/null | grep -qiE 'playwright|puppeteer'
+        ;;
+      *) return 1 ;;
+    esac
   }
 
   # Writes the --all runner file for one chain link (tid/logpath vary per
@@ -1915,7 +1988,7 @@ Task:
 
 * Execute remaining incomplete checklist items in order, one at a time.
 * Follow the handoff rules exactly for each item.
-* If the next item is tagged \`[BROWSER-CHECK]\`, stop before attempting it - you (a spawned CLI subprocess) have no real browser access. Do not mark it passed or failed; leave it pending and report that it needs \`--main\`.
+* If an item is tagged \`[BROWSER-CHECK]\`, verify it by actually rendering the page/app with your browser MCP tools (e.g. Playwright) - that is what the tag means. ${browser_force_note:+$browser_force_note }If this session has no browser MCP tools available, do NOT mark the item passed or failed: leave it pending and report that a browser MCP must be configured (set \`browser_mcp\` in \`.ai/.ogre/config.json\`, or pass \`--mcp-config\`; see README) or the step re-run with \`--main\`.
 * Update each checklist item's status in the source plan only after its own work and validation are complete.
 * Write a concise execution log to \`$link_logpath\`.
 * Hard cap: complete at most $max_steps checklist items in this session, then STOP - even if items remain and your context feels fine. Self-assessed context estimates are unreliable; the cap is the authoritative limit.
@@ -1934,9 +2007,14 @@ Safety:
 EOF2
   }
 
-  if [ "$mode" = "all" ] && [ "$iso" != "main" ] && next_step_is_browser_check; then
-    err "Next step is tagged [BROWSER-CHECK] - it needs a real browser to verify, which a spawned codex/claude CLI subprocess doesn't have."
+  # In --all, a [BROWSER-CHECK] next step can run isolated ONLY if the executor
+  # has a browser MCP; otherwise stop and hand that one step to --main (the
+  # skill auto-loops this for foreground chains). When a browser MCP IS present,
+  # the chain runs straight through browser-check steps, fully isolated.
+  if [ "$mode" = "all" ] && [ "$iso" != "main" ] && next_step_is_browser_check && ! browser_mcp_available; then
+    err "Next step is [BROWSER-CHECK] and no browser MCP was detected for $executor, so a spawned session can't verify it."
     err "Finish that one step with --main first: $SCRIPT_DIR/ogre execute $issue --main"
+    err "or give $executor a browser MCP (browser_mcp in .ai/.ogre/config.json / --mcp-config / a Playwright MCP server) to run it isolated - see README."
     err "Then resume the chain: $SCRIPT_DIR/ogre execute $issue --all"
     exit 1
   fi
@@ -2073,16 +2151,29 @@ PY
     fi
 
     # A step tagged [BROWSER-CHECK] needs a real rendered browser to verify
-    # (see templates/execution-blueprint-prompt.md) - a spawned codex/claude
-    # CLI subprocess has no GUI/browser access and will burn a full run just
-    # to discover that and fail. --main doesn't spawn anything special
-    # either way (it just writes the runner and tells whoever is running
-    # `ogre execute` to do the step inline) - and that's always a live
-    # Claude Code session, so auto-switch to it instead of erroring and
-    # making the user retype the command with --main by hand.
-    if [ "$iso" != "main" ] && printf '%s' "$step_text" | grep -qi '\[browser-check\]'; then
-      log "Step $step_index is tagged [BROWSER-CHECK] - it needs a real browser to verify, which a spawned codex/claude CLI subprocess doesn't have. Switching to --main so it runs inline in this session instead."
-      iso="main"
+    # (see templates/execution-blueprint-prompt.md). It is NOT forced into
+    # --main anymore: it spawns isolated like every other step and is expected
+    # to drive a browser via MCP tools (inherited ambient MCP, or the
+    # browser_mcp/--mcp-config passed to the claude spawn). The runner just
+    # tells it to use those tools, and to leave the step pending (not failed)
+    # if none are available rather than guessing.
+    local browser_check_note=""
+    if printf '%s' "$step_text" | grep -qi '\[browser-check\]'; then
+      browser_check_note="This is a [BROWSER-CHECK] step: verify it by actually rendering the page/app with your browser MCP tools (e.g. Playwright), not just by reading markup/CSS/JS.${browser_force_note:+ $browser_force_note}"
+      if [ "$iso" != "main" ]; then
+        if browser_mcp_available; then
+          log "Step $step_index is [BROWSER-CHECK] - running isolated; the spawned $executor session will verify it with its browser MCP tools (main context untouched)."
+        else
+          # No browser MCP for this executor and none configured. Fall back to
+          # --main so the step still completes automatically in this session
+          # (the whole point is no manual retrigger) rather than spawning a
+          # session that can't verify it. Notify so the user knows why, and
+          # how to keep it isolated next time.
+          iso="main"
+          log "NOTE: step $step_index is tagged [BROWSER-CHECK] but no browser MCP was detected for $executor. Falling back to --main so it still completes automatically here (no manual retrigger needed)."
+          log "      To keep browser-check steps isolated from this context, give $executor a browser MCP: set \"browser_mcp\" in .ai/.ogre/config.json, pass --mcp-config PATH, or add a Playwright/browser MCP server (see README)."
+        fi
+      fi
     fi
 
     logpath="$logdir/execute-$(date '+%Y%m%d-%H%M%S')-${tid:5:8}.log"
@@ -2117,6 +2208,8 @@ $(repo_drift_block "$plan")
 $(backfill_warning_block "$spath")
 
 $retry_block
+
+$browser_check_note
 
 Task:
 
@@ -2204,6 +2297,7 @@ PY
         local -a claude_args=(-p --permission-mode bypassPermissions --session-id "$link_session")
         [ -n "$model" ] && claude_args+=(--model "$model")
         [ -n "$reasoning" ] && claude_args+=(--effort "$reasoning")
+        [ -n "$mcp_config" ] && claude_args+=(--mcp-config "$mcp_config")
         claude "${claude_args[@]}" < "$link_runner" | tee "$link_logpath"
         ;;
     esac
@@ -2231,6 +2325,7 @@ PY
         local -a claude_args=(-p --permission-mode bypassPermissions --session-id "$link_session")
         [ -n "$model" ] && claude_args+=(--model "$model")
         [ -n "$reasoning" ] && claude_args+=(--effort "$reasoning")
+        [ -n "$mcp_config" ] && claude_args+=(--mcp-config "$mcp_config")
         claude "${claude_args[@]}" < "$link_runner" > "$link_logpath" 2>&1
         ;;
     esac
@@ -2290,10 +2385,9 @@ except Exception:
 PY
 )"
     [ "${pending_left:-0}" -gt 0 ] 2>/dev/null || return 1
-    if [ "$iso" != "main" ] && next_step_is_browser_check; then
-      err "Next step is tagged [BROWSER-CHECK] - stopping the --all chain here (a spawned codex/claude CLI subprocess can't verify it)."
-      err "Finish that one step with --main: $SCRIPT_DIR/ogre execute $issue --main"
-      err "Then resume the chain: $SCRIPT_DIR/ogre execute $issue --all"
+    if [ "$iso" != "main" ] && next_step_is_browser_check && ! browser_mcp_available; then
+      err "Next step is [BROWSER-CHECK] and no browser MCP was detected for $executor - stopping the --all chain here."
+      err "Finish that step with --main ($SCRIPT_DIR/ogre execute $issue --main) or give $executor a browser MCP, then resume: $SCRIPT_DIR/ogre execute $issue --all"
       return 1
     fi
     return 0

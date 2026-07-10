@@ -24,7 +24,7 @@ Optional flags:
 ## Behavior
 
 1. Run:
-   - `scripts/ogre review-plan <issue-or-plan> [flags]`
+   - `${CLAUDE_PLUGIN_ROOT}/scripts/ogre review-plan <issue-or-plan> [flags]`
 2. Read the generated runner:
    - `.ai/.ogre/tmp/issue-<number>/plan-review-runner.md`
 3. If reviewer is `claude`, perform the review directly.

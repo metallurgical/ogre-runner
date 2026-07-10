@@ -2,25 +2,25 @@ load test_helper
 
 @test "status with no issues yet says so" {
   run "${OGRE_BIN}" status
-  [ "${status}" -eq 0 ]
-  [[ "${output}" == *"No issues yet."* ]]
-  [[ "${output}" == *"Running/pending tasks:"* ]]
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" == *"No issues yet."* ]] || return 1
+  [[ "${output}" == *"Running/pending tasks:"* ]] || return 1
 }
 
 @test "status for an unknown issue errors" {
   run "${OGRE_BIN}" status 999
-  [ "${status}" -eq 1 ]
-  [[ "${output}" == *"No state found for issue 999"* ]]
+  [ "${status}" -eq 1 ] || return 1
+  [[ "${output}" == *"No state found for issue 999"* ]] || return 1
 }
 
 @test "status for a known issue prints job summary and raw state" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42
   run "${OGRE_BIN}" status 42
-  [ "${status}" -eq 0 ]
-  [[ "${output}" == *"Job Id"* ]]
-  [[ "${output}" == *"42"* ]]
-  [[ "${output}" == *"Raw state:"* ]]
-  [[ "${output}" == *'"status": "planning"'* ]]
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" == *"Job Id"* ]] || return 1
+  [[ "${output}" == *"42"* ]] || return 1
+  [[ "${output}" == *"Raw state:"* ]] || return 1
+  [[ "${output}" == *'"status": "planning"'* ]] || return 1
 }
 
 @test "status on a completed issue re-prints the Boom line (not just visible live during --background execute)" {
@@ -28,8 +28,8 @@ load test_helper
   write_plan_with_steps 42 "Only step"
   "${OGRE_BIN}" execute 42 >/dev/null
   run "${OGRE_BIN}" status 42
-  [ "${status}" -eq 0 ]
-  [[ "${output}" == *"Boom! Issue 42 has been resolved."* ]]
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" == *"Boom! Issue 42 has been resolved."* ]] || return 1
 }
 
 @test "status on a not-yet-completed issue has no Boom line" {
@@ -37,8 +37,8 @@ load test_helper
   write_plan_with_steps 42 "First step" "Second step"
   "${OGRE_BIN}" execute 42 >/dev/null
   run "${OGRE_BIN}" status 42
-  [ "${status}" -eq 0 ]
-  [[ "${output}" != *"Boom!"* ]]
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" != *"Boom!"* ]] || return 1
 }
 
 @test "status --job resolves by job id" {
@@ -46,14 +46,14 @@ load test_helper
   local job_id
   job_id="$(state_field 42 job_id)"
   run "${OGRE_BIN}" status --job "${job_id}"
-  [ "${status}" -eq 0 ]
-  [[ "${output}" == *"Job Id"* ]]
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" == *"Job Id"* ]] || return 1
 }
 
 @test "status --job with unknown job id errors" {
   run "${OGRE_BIN}" status --job "job-does-not-exist"
-  [ "${status}" -eq 1 ]
-  [[ "${output}" == *"No issue found with job id job-does-not-exist"* ]]
+  [ "${status}" -eq 1 ] || return 1
+  [[ "${output}" == *"No issue found with job id job-does-not-exist"* ]] || return 1
 }
 
 @test "status --tasks lists tasks, optionally filtered by issue" {
@@ -62,19 +62,19 @@ load test_helper
   "${OGRE_BIN}" status 42 >/dev/null # triggers sync_state_from_plan, seeding tasks
 
   run "${OGRE_BIN}" status --tasks
-  [ "${status}" -eq 0 ]
-  [[ "${output}" == *"Tasks:"* ]]
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" == *"Tasks:"* ]] || return 1
 
   run "${OGRE_BIN}" status --tasks 42
-  [ "${status}" -eq 0 ]
-  [[ "${output}" == *"Tasks for issue 42:"* ]]
-  [[ "${output}" == *"issue=42"* ]]
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" == *"Tasks for issue 42:"* ]] || return 1
+  [[ "${output}" == *"issue=42"* ]] || return 1
 }
 
 @test "status --task with unknown task id errors" {
   run "${OGRE_BIN}" status --task task-does-not-exist
-  [ "${status}" -eq 1 ]
-  [[ "${output}" == *"No task found with id task-does-not-exist"* ]]
+  [ "${status}" -eq 1 ] || return 1
+  [[ "${output}" == *"No task found with id task-does-not-exist"* ]] || return 1
 }
 
 @test "status --task shows the task summary and raw record" {
@@ -85,23 +85,23 @@ load test_helper
   local tid
   tid="$(python3 -c "import json; print(json.load(open('.ai/.ogre/state/tasks.json'))[0]['id'])")"
   run "${OGRE_BIN}" status --task "${tid}"
-  [ "${status}" -eq 0 ]
-  [[ "${output}" == *"Task Id"* ]]
-  [[ "${output}" == *"Raw task record:"* ]]
-  [[ "${output}" == *"\"id\": \"${tid}\""* ]]
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" == *"Task Id"* ]] || return 1
+  [[ "${output}" == *"Raw task record:"* ]] || return 1
+  [[ "${output}" == *"\"id\": \"${tid}\""* ]] || return 1
 }
 
 @test "status backfills state when a plan exists but state.json doesn't (ad-hoc plan, not created via ogre feature)" {
   write_plan_with_steps 42 "First step" "Second step"
-  [ ! -f ".ai/.ogre/state/issue-42.json" ]
+  [ ! -f ".ai/.ogre/state/issue-42.json" ] || return 1
 
   run "${OGRE_BIN}" status 42
-  [ "${status}" -eq 0 ]
-  [[ "${output}" == *"backfilling state"* ]]
-  [[ "${output}" == *"Job Id"* ]]
-  [ -f ".ai/.ogre/state/issue-42.json" ]
-  [ "$(state_field 42 status)" = "planning" ]
-  [ "$(state_field 42 current_step)" = "First step" ]
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" == *"backfilling state"* ]] || return 1
+  [[ "${output}" == *"Job Id"* ]] || return 1
+  [ -f ".ai/.ogre/state/issue-42.json" ] || return 1
+  [ "$(state_field 42 status)" = "planning" ] || return 1
+  [ "$(state_field 42 current_step)" = "First step" ] || return 1
 }
 
 @test "status auto-fails a running task whose recorded pid is dead (no exit sentinel)" {
@@ -124,9 +124,9 @@ json.dump(tasks, open(p, "w"), indent=2)
 PY
 
   run "${OGRE_BIN}" status 42
-  [ "${status}" -eq 0 ]
-  [[ "${output}" == *"marked failed"* ]]
-  [ "$(task_json_field "${tid}" status)" = "failed" ]
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" == *"marked failed"* ]] || return 1
+  [ "$(task_json_field "${tid}" status)" = "failed" ] || return 1
 }
 
 @test "status leaves a running task with a live pid untouched" {
@@ -150,8 +150,8 @@ PY
 
   run "${OGRE_BIN}" status 42
   kill "${live_pid}" 2>/dev/null || true
-  [ "${status}" -eq 0 ]
-  [ "$(task_json_field "${tid}" status)" = "running" ]
+  [ "${status}" -eq 0 ] || return 1
+  [ "$(task_json_field "${tid}" status)" = "running" ] || return 1
 }
 
 @test "status reaps a codex task via its exit sentinel and captures the session id from the log" {
@@ -184,10 +184,10 @@ PY
   printf '7' > ".ai/.ogre/tmp/issue-42/${tid}.exit"
 
   run "${OGRE_BIN}" status 42
-  [ "${status}" -eq 0 ]
-  [ "$(task_json_field "${tid}" status)" = "failed" ]
-  [ "$(task_json_field "${tid}" exit_code)" = "7" ]
-  [ "$(task_json_field "${tid}" session_id)" = "reaped-sid-42" ]
+  [ "${status}" -eq 0 ] || return 1
+  [ "$(task_json_field "${tid}" status)" = "failed" ] || return 1
+  [ "$(task_json_field "${tid}" exit_code)" = "7" ] || return 1
+  [ "$(task_json_field "${tid}" session_id)" = "reaped-sid-42" ] || return 1
 }
 
 @test "status shows a knowledge-base line and warns when it is bloated" {
@@ -195,23 +195,23 @@ PY
   write_plan_with_steps 42 "First step"
 
   run "${OGRE_BIN}" status 42
-  [ "${status}" -eq 0 ]
-  [[ "${output}" == *"Knowledge:"* ]]
-  [[ "${output}" == *"issue-42-knowledge.md"* ]]
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" == *"Knowledge:"* ]] || return 1
+  [[ "${output}" == *"issue-42-knowledge.md"* ]] || return 1
   # A fresh skeleton is under the soft cap: no warning.
-  [[ "${output}" != *"over the ~200 soft cap"* ]]
+  [[ "${output}" != *"over the ~200 soft cap"* ]] || return 1
 
   # Bloat it past the soft cap and confirm the warning fires.
   python3 -c "open('.ai/.ogre/state/issue-42-knowledge.md','a').write('\n'.join('- x %d' % i for i in range(250)))"
   run "${OGRE_BIN}" status 42
-  [ "${status}" -eq 0 ]
-  [[ "${output}" == *"over the ~200 soft cap"* ]]
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" == *"over the ~200 soft cap"* ]] || return 1
 }
 
 @test "status rejects unknown option" {
   run "${OGRE_BIN}" status --bogus
-  [ "${status}" -eq 1 ]
-  [[ "${output}" == *"Unknown option: --bogus"* ]]
+  [ "${status}" -eq 1 ] || return 1
+  [[ "${output}" == *"Unknown option: --bogus"* ]] || return 1
 }
 
 # count_tasks_for_issue <issue> - rows in the shared ledger for one issue.
@@ -223,14 +223,14 @@ count_tasks_for_issue() {
   "${OGRE_BIN}" feature --statement "base feature" --name 42
   write_plan_with_steps 42 "Step one" "Step two"
   "${OGRE_BIN}" status 42 >/dev/null # seeds step tasks for issue 42
-  [ "$(count_tasks_for_issue 42)" -ge 2 ]
+  [ "$(count_tasks_for_issue 42)" -ge 2 ] || return 1
 
   # Simulate a lost/orphaned issue: state file gone, ledger rows left behind.
   rm -f .ai/.ogre/state/issue-42.json
 
   run "${OGRE_BIN}" status
-  [ "${status}" -eq 0 ]
-  [ "$(count_tasks_for_issue 42)" -eq 0 ]
+  [ "${status}" -eq 0 ] || return 1
+  [ "$(count_tasks_for_issue 42)" -eq 0 ] || return 1
 }
 
 @test "status (no args) keeps a live issue's tasks while dropping orphans" {
@@ -244,7 +244,7 @@ count_tasks_for_issue() {
   rm -f .ai/.ogre/state/issue-42.json   # orphan 42, keep 99 live
 
   run "${OGRE_BIN}" status
-  [ "${status}" -eq 0 ]
+  [ "${status}" -eq 0 ] || return 1
   [ "$(count_tasks_for_issue 99)" -ge 1 ]   # live issue untouched
   [ "$(count_tasks_for_issue 42)" -eq 0 ]   # orphan compacted away
 }
@@ -253,7 +253,7 @@ count_tasks_for_issue() {
   "${OGRE_BIN}" feature --statement "base feature" --name 42
   "${OGRE_BIN}" stop 42 >/dev/null
   run "${OGRE_BIN}" status
-  [ "${status}" -eq 0 ]
-  [[ "${output}" == *"42"* ]]
-  [[ "${output}" == *"stopped"* ]]
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" == *"42"* ]] || return 1
+  [[ "${output}" == *"stopped"* ]] || return 1
 }

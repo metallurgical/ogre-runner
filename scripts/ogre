@@ -1865,6 +1865,16 @@ cmd_execute() {
   # automatic path just works. codex relies on its own ~/.codex/config.toml
   # mcp_servers (this flag/field does not apply to codex).
   [ -n "$mcp_config" ] || mcp_config="$(config_browser_mcp)"
+  # For a codex executor, [BROWSER-CHECK] steps must be steered to the external
+  # Playwright MCP: Codex's bundled browser plugin otherwise routes browser
+  # work to its desktop-app in-app browser (node_repl/browser-client), which
+  # has no session in a headless spawn and fails. This note (injected into the
+  # runner only for codex) forces the external MCP and is what makes isolated
+  # codex browser-check actually work. Empty for claude, which has no such trap.
+  local browser_force_note=""
+  if [ "$executor" = "codex" ]; then
+    browser_force_note="Browser tools (mandatory for any [BROWSER-CHECK] work): use ONLY the external \"playwright\" MCP server tools (browser_navigate, browser_snapshot, etc.) directly. Do NOT use node_repl, the in-app browser, agent.browsers, or browser-client - those require the Codex desktop app and have no session in this headless spawn, so they will fail."
+  fi
   if [ -z "$model" ]; then
     case "$executor" in
       codex) model="gpt-5.6-sol" ;;
@@ -1924,16 +1934,17 @@ cmd_execute() {
         claude mcp list </dev/null 2>/dev/null | grep -qiE 'playwright|browser|chrome|puppeteer'
         ;;
       codex)
-        # Verified NOT working: a headless `codex exec` spawn cannot drive a
-        # browser. Codex's browser surface is its desktop-app in-app browser
-        # (node_repl / browser-client, agent.browsers.get("iab")), which has no
-        # session in a spawned exec ("Browser MCP tools are installed, but no
-        # in-app browser session is available"), and Codex actively discourages
-        # using an external Playwright MCP there. So even with
-        # [mcp_servers.playwright] configured, an isolated codex browser-check
-        # fails. Report unavailable so it falls back to --main (which completes)
-        # instead of spawning a step that can't verify and stalls pending.
-        return 1
+        # Verified working, but ONLY when the runner forces the external
+        # Playwright MCP over Codex's desktop-app in-app browser (node_repl /
+        # browser-client, agent.browsers.get("iab")) - that in-app browser has
+        # no session in a headless `codex exec` and Codex's bundled browser
+        # plugin otherwise steers it there and fails. So require a real
+        # external browser-driver MCP (playwright/puppeteer) in `codex mcp
+        # list`, not just any "browser"-ish string (which also matches the
+        # in-app node_repl server). browser_force_note injects the "use the
+        # external MCP, not the in-app browser" instruction into the runner.
+        command -v codex >/dev/null 2>&1 || return 1
+        codex mcp list </dev/null 2>/dev/null | grep -qiE 'playwright|puppeteer'
         ;;
       *) return 1 ;;
     esac
@@ -1977,7 +1988,7 @@ Task:
 
 * Execute remaining incomplete checklist items in order, one at a time.
 * Follow the handoff rules exactly for each item.
-* If an item is tagged \`[BROWSER-CHECK]\`, verify it by actually rendering the page/app with your browser MCP tools (e.g. Playwright) - that is what the tag means. If this session has no browser MCP tools available, do NOT mark the item passed or failed: leave it pending and report that a browser MCP must be configured (set \`browser_mcp\` in \`.ai/.ogre/config.json\`, or pass \`--mcp-config\`; see README) or the step re-run with \`--main\`.
+* If an item is tagged \`[BROWSER-CHECK]\`, verify it by actually rendering the page/app with your browser MCP tools (e.g. Playwright) - that is what the tag means. ${browser_force_note:+$browser_force_note }If this session has no browser MCP tools available, do NOT mark the item passed or failed: leave it pending and report that a browser MCP must be configured (set \`browser_mcp\` in \`.ai/.ogre/config.json\`, or pass \`--mcp-config\`; see README) or the step re-run with \`--main\`.
 * Update each checklist item's status in the source plan only after its own work and validation are complete.
 * Write a concise execution log to \`$link_logpath\`.
 * Hard cap: complete at most $max_steps checklist items in this session, then STOP - even if items remain and your context feels fine. Self-assessed context estimates are unreliable; the cap is the authoritative limit.
@@ -2148,7 +2159,7 @@ PY
     # if none are available rather than guessing.
     local browser_check_note=""
     if printf '%s' "$step_text" | grep -qi '\[browser-check\]'; then
-      browser_check_note="This is a [BROWSER-CHECK] step: verify it by actually rendering the page/app with your browser MCP tools (e.g. Playwright), not just by reading markup/CSS/JS."
+      browser_check_note="This is a [BROWSER-CHECK] step: verify it by actually rendering the page/app with your browser MCP tools (e.g. Playwright), not just by reading markup/CSS/JS.${browser_force_note:+ $browser_force_note}"
       if [ "$iso" != "main" ]; then
         if browser_mcp_available; then
           log "Step $step_index is [BROWSER-CHECK] - running isolated; the spawned $executor session will verify it with its browser MCP tools (main context untouched)."

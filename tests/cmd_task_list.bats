@@ -2,14 +2,14 @@ load test_helper
 
 @test "task-list with no job-id errors" {
   run "${OGRE_BIN}" task-list
-  [ "${status}" -eq 1 ]
-  [[ "${output}" == *"Usage: ogre task-list <job-id>"* ]]
+  [ "${status}" -eq 1 ] || return 1
+  [[ "${output}" == *"Usage: ogre task-list <job-id>"* ]] || return 1
 }
 
 @test "task-list with unknown job-id errors" {
   run "${OGRE_BIN}" task-list job-does-not-exist
-  [ "${status}" -eq 1 ]
-  [[ "${output}" == *"No issue found with job id job-does-not-exist"* ]]
+  [ "${status}" -eq 1 ] || return 1
+  [[ "${output}" == *"No issue found with job id job-does-not-exist"* ]] || return 1
 }
 
 @test "task-list shows every seeded step for the job" {
@@ -19,11 +19,11 @@ load test_helper
   job_id="$(state_field 42 job_id)"
 
   run "${OGRE_BIN}" task-list "${job_id}"
-  [ "${status}" -eq 0 ]
-  [[ "${output}" == *"Job Id: ${job_id}   Issue: 42"* ]]
-  [[ "${output}" == *"First step"* ]]
-  [[ "${output}" == *"Second step"* ]]
-  [[ "${output}" == *"View one:  ogre status --task <task-id>"* ]]
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" == *"Job Id: ${job_id}   Issue: 42"* ]] || return 1
+  [[ "${output}" == *"First step"* ]] || return 1
+  [[ "${output}" == *"Second step"* ]] || return 1
+  [[ "${output}" == *"View one:  ogre status --task <task-id>"* ]] || return 1
 }
 
 @test "task-list with no tasks yet says so" {
@@ -32,6 +32,6 @@ load test_helper
   job_id="$(state_field 42 job_id)"
 
   run "${OGRE_BIN}" task-list "${job_id}"
-  [ "${status}" -eq 0 ]
-  [[ "${output}" == *"No tasks yet for this job."* ]]
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" == *"No tasks yet for this job."* ]] || return 1
 }

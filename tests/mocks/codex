@@ -13,8 +13,17 @@
 #   MOCK_CODEX_ARGS_FILE               - if set, the invocation's argv is
 #                                         appended there (one line), so tests
 #                                         can assert on flags ogre passed us.
+#   MOCK_CODEX_NO_MCP=1                - `codex mcp list` reports no browser MCP
+#                                        (default: reports a Playwright MCP, so
+#                                         [BROWSER-CHECK] isolation is exercised)
 set -euo pipefail
 [ -n "${MOCK_CODEX_ARGS_FILE:-}" ] && printf '%s\n' "$*" >> "${MOCK_CODEX_ARGS_FILE}"
+# `codex mcp list` - the browser-MCP detector for [BROWSER-CHECK] isolation.
+# Reports a Playwright MCP by default; MOCK_CODEX_NO_MCP=1 reports none.
+if [ "${1:-}" = "mcp" ]; then
+  [ -z "${MOCK_CODEX_NO_MCP:-}" ] && echo "playwright  npx  @playwright/mcp@latest  enabled"
+  exit 0
+fi
 runner="$(cat)" # capture stdin (the runner file) instead of draining it
 tid="$(printf '%s\n' "$runner" | sed -n 's/.*Task id: `\(task-[^`]*\)`.*/\1/p' | head -n1)"
 echo "session id: mock-codex-session-1234"

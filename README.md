@@ -309,7 +309,7 @@ Every generated runner prompt also carries context blocks so a fresh session doe
 { "browser_mcp": "/path/to/playwright-mcp.json" }
 ```
 
-**Codex caveat (verified):** with `--executor codex`, a `[BROWSER-CHECK]` step **always** falls back to `--main`. A headless `codex exec` spawn cannot drive a browser — Codex's browser surface is its desktop-app in-app browser, which has no session in a spawned exec, and Codex won't use an external Playwright MCP for it. So `browser_mcp` / `--mcp-config` apply to `claude` only; codex browser-check is never isolated (it still auto-completes, just in the main session).
+**Codex (verified):** with `--executor codex`, a `[BROWSER-CHECK]` step **also runs isolated — but only if a Playwright MCP is configured for codex** (shown in `codex mcp list`). Codex's bundled browser plugin defaults to its desktop-app in-app browser, which has no session in a headless `codex exec` and fails; Ogre's codex runner overrides that with an explicit instruction to use the external Playwright MCP directly (`browser_navigate`/`browser_snapshot`), and that drives a real headless browser (verified). If no external Playwright/Puppeteer MCP is in `codex mcp list`, the step falls back to `--main`. Note `--mcp-config` / `browser_mcp` (a config-file path) are `claude`-only; codex reads its own `~/.codex/config.toml` `mcp_servers`.
 
 ### `/ogre:status`
 

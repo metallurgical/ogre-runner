@@ -291,18 +291,71 @@ print(t['id'])
   [[ "${output}" == *"Mode: --main."* ]]
 }
 
-@test "execute --all refuses up front when the next pending step is [BROWSER-CHECK]" {
+@test "execute --all stops when next step is [BROWSER-CHECK] and no browser MCP is detected" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42
   write_plan_with_steps 42 "[BROWSER-CHECK] Verify the page renders correctly" "Second step"
+  # No browser_mcp configured and the mock `claude mcp list` reports none, so
+  # the chain can't verify a browser-check step in isolation -> it stops.
   run "${OGRE_BIN}" execute 42 --all --yes
   [ "${status}" -eq 1 ]
   [[ "${output}" == *"[BROWSER-CHECK]"* ]]
+  [[ "${output}" == *"no browser MCP was detected"* ]]
   [[ "${output}" == *"--main"* ]]
   # Refused before spawning anything - the seeded per-step tasks (from
   # sync_state_from_plan) exist but none was ever set running/passed/failed.
   local statuses
   statuses="$(python3 -c "import json; print([t.get('status') for t in json.load(open('.ai/.ogre/state/tasks.json'))])")"
   [[ "${statuses}" != *"running"* ]]
+}
+
+@test "execute --all does NOT stop on [BROWSER-CHECK] when a browser MCP is configured" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "[BROWSER-CHECK] Verify the page renders correctly" "Second step"
+  # A configured browser MCP means the spawned session can verify it in
+  # isolation, so the up-front guard must NOT fire. --main keeps the mock from
+  # actually chaining (which never ticks plan checkboxes) while still exercising
+  # the guard decision.
+  run "${OGRE_BIN}" execute 42 --all --main --mcp-config /tmp/fake-mcp.json
+  [ "${status}" -eq 0 ]
+  [[ "${output}" != *"no browser MCP was detected"* ]]
+}
+
+@test "execute a [BROWSER-CHECK] step with no browser MCP auto-falls back to --main with a notice" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "[BROWSER-CHECK] Verify the modal renders"
+  run "${OGRE_BIN}" execute 42
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"no browser MCP was detected"* ]]
+  [[ "${output}" == *"Falling back to --main"* ]]
+  [[ "${output}" == *"Mode: --main."* ]]   # ran inline, no subprocess spawned
+}
+
+@test "execute a [BROWSER-CHECK] step with --mcp-config runs isolated and passes --mcp-config to claude" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "[BROWSER-CHECK] Verify the modal renders"
+  local args_file="${TEST_TMP}/claude-args.log"
+  MOCK_CLAUDE_ARGS_FILE="${args_file}" run "${OGRE_BIN}" execute 42 --mcp-config /tmp/fake-mcp.json
+  [ "${status}" -eq 0 ]
+  [[ "${output}" != *"Falling back to --main"* ]]
+  [[ "${output}" == *"running isolated"* ]]
+  [ -f "${args_file}" ]
+  [[ "$(cat "${args_file}")" == *"--mcp-config /tmp/fake-mcp.json"* ]]
+}
+
+@test "execute a [BROWSER-CHECK] step uses browser_mcp from config.json to run isolated" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "[BROWSER-CHECK] Verify the modal renders"
+  python3 - <<'PY'
+import json
+p = ".ai/.ogre/config.json"
+d = json.load(open(p)); d["browser_mcp"] = "/tmp/cfg-mcp.json"
+json.dump(d, open(p, "w"), indent=2)
+PY
+  local args_file="${TEST_TMP}/claude-args.log"
+  MOCK_CLAUDE_ARGS_FILE="${args_file}" run "${OGRE_BIN}" execute 42
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"running isolated"* ]]
+  [[ "$(cat "${args_file}")" == *"--mcp-config /tmp/cfg-mcp.json"* ]]
 }
 
 @test "execute --all --main is unaffected by [BROWSER-CHECK] (real browser tools available inline)" {

@@ -291,7 +291,8 @@ Executes one checklist item (or all remaining, with `--all`) from an approved pl
 | `--max-steps N` | `/ogre:execute 107 --all --max-steps 5` | Hard cap on checklist items per chained session (default: 3). Self-assessed context estimates are unreliable, so the cap is the authoritative limit. Many tiny/trivial steps (e.g. scaffolding dozens of near-identical files)? Raise this so they batch into one session instead of one spawn per step |
 | `--fresh` | `/ogre:execute 107 --fresh` | Force a brand-new context for this step (default) |
 | `--resume` | `/ogre:execute 107 --resume` | Resume prior context for this step instead of starting fresh |
-| `--main` | `/ogre:execute 107 --main` | Run inline in the current Claude Code session, no subprocess spawned. Use only when explicitly requested; defeats Ogre's context-isolation purpose if habitual |
+| `--main` | `/ogre:execute 107 --main` | Run inline in the current Claude Code session, no subprocess spawned. Opt-in only (Ogre forces it only as the browser-check fallback when no browser MCP is detected); defeats Ogre's context-isolation purpose if habitual |
+| `--mcp-config PATH` | `/ogre:execute 107 --mcp-config ./playwright-mcp.json` | Browser MCP config for the spawned `claude` session, so `[BROWSER-CHECK]` steps run isolated instead of falling back to `--main`. Also settable as `"browser_mcp"` in `.ai/.ogre/config.json` |
 | `--background` | `/ogre:execute 107 --background` | Same isolation as default (new session) but detached/non-blocking |
 | `--yes` | `/ogre:execute 107 --yes` | Required to proceed non-interactively when the step/job was previously `stopped`, or jumping to an out-of-order step whose earlier steps aren't `passed`. Only pass after explicit user confirmation |
 
@@ -301,7 +302,13 @@ Every generated runner prompt also carries context blocks so a fresh session doe
 
 **Living knowledge base.** Each issue keeps `.ai/.ogre/state/issue-<n>-knowledge.md`, updated in place by every step and read by the next, so fresh sessions start oriented instead of re-discovering facts.
 
-**`[BROWSER-CHECK]` steps.** Steps needing real browser rendering are tagged and auto-run inline (`--main`) instead of in an isolated subprocess.
+**`[BROWSER-CHECK]` steps.** Steps needing real browser rendering are tagged `[BROWSER-CHECK]`. They run **isolated like every other step** as long as the executor has a browser MCP — so main context stays clean. Ogre finds a browser MCP from any of: the executor's ambient MCP servers (a Playwright MCP already configured for `claude`/`codex`), a `"browser_mcp"` path in `.ai/.ogre/config.json`, or `--mcp-config PATH` on `ogre execute`. If **no** browser MCP is detected, a browser-check step automatically falls back to `--main` (runs inline in the current session) so it still completes without a manual retrigger — Ogre prints a NOTE saying so and how to keep it isolated. `--main` is otherwise opt-in only; Ogre never forces it except this fallback.
+
+```jsonc
+// .ai/.ogre/config.json — point browser_mcp at an MCP config for claude spawns
+{ "browser_mcp": "/path/to/playwright-mcp.json" }
+```
+(`browser_mcp` / `--mcp-config` apply to the `claude` executor; `codex` reads its own `~/.codex/config.toml` `mcp_servers`.)
 
 ### `/ogre:status`
 

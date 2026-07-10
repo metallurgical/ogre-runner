@@ -20,7 +20,7 @@ Use this skill when the user wants to add a blocker to an issue Ogre is already 
 
 ## Behavior
 
-1. Run: `scripts/ogre add-blocker <issue> <blocker> [--statement "..."] [--name slug] [--remarks "status note"]`
+1. Run: `${CLAUDE_PLUGIN_ROOT}/scripts/ogre add-blocker <issue> <blocker> [--statement "..."] [--name slug] [--remarks "status note"]`
 2. The helper:
    - Fetches/writes the blocker into `.ai/.ogre/issues/`.
    - Appends it to `blocker_paths` in `.ai/.ogre/state/issue-<issue>.json`.

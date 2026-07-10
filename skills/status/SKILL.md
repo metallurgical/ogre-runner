@@ -29,7 +29,7 @@ Examples:
 
 Run:
 
-- `scripts/ogre status [issue] [--job <job-id>] [--tasks] [--task <id>] [--watch] [--interval <seconds>]`
+- `${CLAUDE_PLUGIN_ROOT}/scripts/ogre status [issue] [--job <job-id>] [--tasks] [--task <id>] [--watch] [--interval <seconds>]`
 
 `--watch` is meant to be run directly in a plain terminal (not through the agent) so the user has a live-updating view while a long `ogre execute` task runs in this or another session — since status only reads state off disk, it doesn't need the agent to be free. It clears and reprints the same Job/Task Summary block every `--interval` seconds (default 2) until Ctrl-C.
 

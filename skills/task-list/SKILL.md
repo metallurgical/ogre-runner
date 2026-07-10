@@ -17,7 +17,7 @@ Job id required. If the user gives an issue slug/number instead, run `/ogre:stat
 
 Run:
 
-- `scripts/ogre task-list <job-id>`
+- `${CLAUDE_PLUGIN_ROOT}/scripts/ogre task-list <job-id>`
 
 This also re-syncs the plan first, so every checklist step shows up here — including ones nobody has run `execute` against yet (those show `pending`, `Executor: -`).
 

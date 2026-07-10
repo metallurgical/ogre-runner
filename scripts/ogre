@@ -934,6 +934,10 @@ print_job_summary() {
   local spath
   spath="$(state_path "$issue")"
   [ -f "$spath" ] || return 0
+  if [ "$(json_field "$spath" status 2>/dev/null)" = "completed" ]; then
+    log "Boom! Issue $issue has been resolved."
+    log ""
+  fi
   python3 - "$spath" "$(tasks_path)" "$issue" <<'PY'
 import json, os, sys
 
@@ -2261,10 +2265,6 @@ PY
       final_status="$(task_field "$chain_tid" status)"
       log ""
       log "Task $chain_tid finished: $final_status"
-      if [ "$rc" -eq 0 ] && [ "$(json_field "$spath" status 2>/dev/null)" = "completed" ]; then
-        log ""
-        log "Boom! Issue $issue has been resolved."
-      fi
       log ""
       print_job_summary "$issue"
     ) &
@@ -2323,10 +2323,6 @@ PY
     esac
   fi
   log "Task $tid finished: $final_status"
-  if [ "$rc" -eq 0 ] && [ "$(json_field "$spath" status 2>/dev/null)" = "completed" ]; then
-    log ""
-    log "Boom! Issue $issue has been resolved."
-  fi
   log ""
   print_job_summary "$issue"
   exit "$rc"

@@ -23,6 +23,24 @@ load test_helper
   [[ "${output}" == *'"status": "planning"'* ]]
 }
 
+@test "status on a completed issue re-prints the Boom line (not just visible live during --background execute)" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "Only step"
+  "${OGRE_BIN}" execute 42 >/dev/null
+  run "${OGRE_BIN}" status 42
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Boom! Issue 42 has been resolved."* ]]
+}
+
+@test "status on a not-yet-completed issue has no Boom line" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step" "Second step"
+  "${OGRE_BIN}" execute 42 >/dev/null
+  run "${OGRE_BIN}" status 42
+  [ "${status}" -eq 0 ]
+  [[ "${output}" != *"Boom!"* ]]
+}
+
 @test "status --job resolves by job id" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42
   local job_id

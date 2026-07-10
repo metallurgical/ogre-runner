@@ -342,6 +342,17 @@ print(t['id'])
   [[ "$(cat "${args_file}")" == *"--mcp-config /tmp/fake-mcp.json"* ]]
 }
 
+@test "execute a [BROWSER-CHECK] step with --executor codex always falls back to --main (headless codex cannot drive a browser)" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "[BROWSER-CHECK] Verify the modal renders"
+  # Even with a browser MCP path passed, codex can't isolate a browser-check
+  # (its browser surface is the desktop-app in-app browser, absent in a spawn).
+  run "${OGRE_BIN}" execute 42 --executor codex --mcp-config /tmp/fake-mcp.json
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"no browser MCP was detected"* ]]
+  [[ "${output}" == *"Mode: --main."* ]]
+}
+
 @test "execute a [BROWSER-CHECK] step uses browser_mcp from config.json to run isolated" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42
   write_plan_with_steps 42 "[BROWSER-CHECK] Verify the modal renders"

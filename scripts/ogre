@@ -1912,15 +1912,28 @@ cmd_execute() {
   # so a positive signal here means the isolated session really will have the
   # tools.
   browser_mcp_available() {
-    [ -n "$mcp_config" ] && return 0
     case "$executor" in
       claude)
+        # Verified working: a spawned `claude -p --permission-mode
+        # bypassPermissions` inherits the ambient project/user MCP servers and
+        # drives a real (headless) browser through a Playwright MCP. Signal:
+        # an explicit --mcp-config/browser_mcp, or a browser-ish server in
+        # `claude mcp list`.
+        [ -n "$mcp_config" ] && return 0
         command -v claude >/dev/null 2>&1 || return 1
         claude mcp list </dev/null 2>/dev/null | grep -qiE 'playwright|browser|chrome|puppeteer'
         ;;
       codex)
-        [ -f "$HOME/.codex/config.toml" ] || return 1
-        grep -qiE 'playwright|browser|chrome|puppeteer' "$HOME/.codex/config.toml" 2>/dev/null
+        # Verified NOT working: a headless `codex exec` spawn cannot drive a
+        # browser. Codex's browser surface is its desktop-app in-app browser
+        # (node_repl / browser-client, agent.browsers.get("iab")), which has no
+        # session in a spawned exec ("Browser MCP tools are installed, but no
+        # in-app browser session is available"), and Codex actively discourages
+        # using an external Playwright MCP there. So even with
+        # [mcp_servers.playwright] configured, an isolated codex browser-check
+        # fails. Report unavailable so it falls back to --main (which completes)
+        # instead of spawning a step that can't verify and stalls pending.
+        return 1
         ;;
       *) return 1 ;;
     esac

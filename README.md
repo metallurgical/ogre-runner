@@ -302,13 +302,14 @@ Every generated runner prompt also carries context blocks so a fresh session doe
 
 **Living knowledge base.** Each issue keeps `.ai/.ogre/state/issue-<n>-knowledge.md`, updated in place by every step and read by the next, so fresh sessions start oriented instead of re-discovering facts.
 
-**`[BROWSER-CHECK]` steps.** Steps needing real browser rendering are tagged `[BROWSER-CHECK]`. They run **isolated like every other step** as long as the executor has a browser MCP — so main context stays clean. Ogre finds a browser MCP from any of: the executor's ambient MCP servers (a Playwright MCP already configured for `claude`/`codex`), a `"browser_mcp"` path in `.ai/.ogre/config.json`, or `--mcp-config PATH` on `ogre execute`. If **no** browser MCP is detected, a browser-check step automatically falls back to `--main` (runs inline in the current session) so it still completes without a manual retrigger — Ogre prints a NOTE saying so and how to keep it isolated. `--main` is otherwise opt-in only; Ogre never forces it except this fallback.
+**`[BROWSER-CHECK]` steps.** Steps needing real browser rendering are tagged `[BROWSER-CHECK]`. With the **`claude` executor** they run **isolated like every other step** as long as a browser MCP is available — so main context stays clean. Ogre finds one from any of: the ambient MCP servers shown in `claude mcp list` (e.g. a Playwright MCP), a `"browser_mcp"` path in `.ai/.ogre/config.json`, or `--mcp-config PATH` on `ogre execute`. (Verified: a spawned `claude -p` inherits the ambient MCP and drives a real headless browser.) If **no** browser MCP is detected, the step automatically falls back to `--main` (runs inline in the current session) so it still completes without a manual retrigger — Ogre prints a NOTE saying so and how to keep it isolated. `--main` is otherwise opt-in only; Ogre never forces it except this fallback.
 
 ```jsonc
 // .ai/.ogre/config.json — point browser_mcp at an MCP config for claude spawns
 { "browser_mcp": "/path/to/playwright-mcp.json" }
 ```
-(`browser_mcp` / `--mcp-config` apply to the `claude` executor; `codex` reads its own `~/.codex/config.toml` `mcp_servers`.)
+
+**Codex caveat (verified):** with `--executor codex`, a `[BROWSER-CHECK]` step **always** falls back to `--main`. A headless `codex exec` spawn cannot drive a browser — Codex's browser surface is its desktop-app in-app browser, which has no session in a spawned exec, and Codex won't use an external Playwright MCP for it. So `browser_mcp` / `--mcp-config` apply to `claude` only; codex browser-check is never isolated (it still auto-completes, just in the main session).
 
 ### `/ogre:status`
 

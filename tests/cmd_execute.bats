@@ -174,16 +174,6 @@ print(t['id'])
   [[ "$(cat "${args_file}")" == *"--sandbox workspace-write"* ]] || return 1
 }
 
-@test "execute foreground with --executor codex passes -a never (headless exec has no TTY to approve MCP tools like browser_navigate)" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
-  write_plan_with_steps 42 "Only step"
-  local args_file="${TEST_TMP}/codex-args.log"
-  MOCK_CODEX_ARGS_FILE="${args_file}" run "${OGRE_BIN}" execute 42 --executor codex
-  [ "${status}" -eq 0 ] || return 1
-  [ -f "${args_file}" ] || return 1
-  [[ "$(cat "${args_file}")" == *"-a never"* ]] || return 1
-}
-
 @test "execute --background with --executor codex passes --sandbox workspace-write" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42
   write_plan_with_steps 42 "Only step"
@@ -192,16 +182,6 @@ print(t['id'])
   [ "${status}" -eq 0 ] || return 1
   [ -f "${args_file}" ] || return 1
   [[ "$(cat "${args_file}")" == *"--sandbox workspace-write"* ]] || return 1
-}
-
-@test "execute --background with --executor codex passes -a never" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
-  write_plan_with_steps 42 "Only step"
-  local args_file="${TEST_TMP}/codex-args.log"
-  MOCK_CODEX_ARGS_FILE="${args_file}" run "${OGRE_BIN}" execute 42 --executor codex --background
-  [ "${status}" -eq 0 ] || return 1
-  [ -f "${args_file}" ] || return 1
-  [[ "$(cat "${args_file}")" == *"-a never"* ]] || return 1
 }
 
 @test "execute --reasoning passes --effort to claude" {

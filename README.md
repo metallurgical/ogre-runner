@@ -373,6 +373,8 @@ Stops, archives, or deletes Ogre runtime data. Does not revert code changes.
 - Ogre runtime state is file-based, so Claude and Codex can resume by reading `.ai/.ogre/state/` and `.ai/.ogre/plans/`.
 - Default execution is one checklist item at a time.
 - Use `--all` only when you deliberately want Ogre to chain through every remaining step automatically.
+- Spawned executor sessions run with permissions fully bypassed (`claude -p --permission-mode bypassPermissions`, `codex exec --sandbox workspace-write`) - no interactive approval, by design, since nothing can prompt a headless subprocess.
+- `/plugin marketplace update` alone does not update your install - only a version bump does. Update, then `/reload-plugins` (or reinstall) to actually pick up a new release.
 
 ## Suggested `.gitignore`
 

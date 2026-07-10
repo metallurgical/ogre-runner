@@ -63,6 +63,22 @@ load test_helper
   [ -n "$(find .ai/.ogre/archive -name 'issue-42-knowledge.md' 2>/dev/null)" ]
 }
 
+@test "stop --archive prunes the issue's tasks from the shared ledger" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "Step one" "Step two"
+  "${OGRE_BIN}" status 42 >/dev/null   # seeds step tasks for issue 42
+  run python3 -c "import json; print(len([t for t in json.load(open('.ai/.ogre/state/tasks.json')) if str(t.get('issue'))=='42']))"
+  [ "${output}" -ge 2 ]
+
+  run "${OGRE_BIN}" stop 42 --archive
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Pruned"* ]]
+  # Ledger no longer counts the archived issue's tasks (state moved to archive/,
+  # so sync could never reconcile them again - they'd leak otherwise).
+  run python3 -c "import json; print(len([t for t in json.load(open('.ai/.ogre/state/tasks.json')) if str(t.get('issue'))=='42']))"
+  [ "${output}" -eq 0 ]
+}
+
 @test "stop --delete cancels without typing yes" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42
   run bash -c "printf 'no\n' | '${OGRE_BIN}' stop 42 --delete"

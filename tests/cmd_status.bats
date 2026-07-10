@@ -177,3 +177,47 @@ PY
   [ "${status}" -eq 1 ]
   [[ "${output}" == *"Unknown option: --bogus"* ]]
 }
+
+# count_tasks_for_issue <issue> - rows in the shared ledger for one issue.
+count_tasks_for_issue() {
+  python3 -c "import json,sys; print(len([t for t in json.load(open('.ai/.ogre/state/tasks.json')) if str(t.get('issue'))==sys.argv[1]]))" "$1"
+}
+
+@test "status (no args) compacts orphaned tasks whose state file is gone" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "Step one" "Step two"
+  "${OGRE_BIN}" status 42 >/dev/null # seeds step tasks for issue 42
+  [ "$(count_tasks_for_issue 42)" -ge 2 ]
+
+  # Simulate a lost/orphaned issue: state file gone, ledger rows left behind.
+  rm -f .ai/.ogre/state/issue-42.json
+
+  run "${OGRE_BIN}" status
+  [ "${status}" -eq 0 ]
+  [ "$(count_tasks_for_issue 42)" -eq 0 ]
+}
+
+@test "status (no args) keeps a live issue's tasks while dropping orphans" {
+  "${OGRE_BIN}" feature --statement "live one" --name 99
+  write_plan_with_steps 99 "Step one"
+  "${OGRE_BIN}" status 99 >/dev/null
+
+  "${OGRE_BIN}" feature --statement "will orphan" --name 42
+  write_plan_with_steps 42 "Step one"
+  "${OGRE_BIN}" status 42 >/dev/null
+  rm -f .ai/.ogre/state/issue-42.json   # orphan 42, keep 99 live
+
+  run "${OGRE_BIN}" status
+  [ "${status}" -eq 0 ]
+  [ "$(count_tasks_for_issue 99)" -ge 1 ]   # live issue untouched
+  [ "$(count_tasks_for_issue 42)" -eq 0 ]   # orphan compacted away
+}
+
+@test "status (no args) still lists a stopped issue (terminal re-sync skipped)" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" stop 42 >/dev/null
+  run "${OGRE_BIN}" status
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"42"* ]]
+  [[ "${output}" == *"stopped"* ]]
+}

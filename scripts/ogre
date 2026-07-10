@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OGRE_VERSION="1.1.0"
+OGRE_VERSION="1.3.1"
 RUNTIME=".ai/.ogre"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -1270,7 +1270,7 @@ PY
 
 archive_issue() {
   local issue="$1"
-  local ts dest
+  local ts dest pruned
   ts="$(date '+%Y%m%d-%H%M%S')"
   dest="$RUNTIME/archive/issue-$issue-$ts"
   mkdir -p "$dest"
@@ -1286,7 +1286,15 @@ archive_issue() {
   [ -d "$RUNTIME/logs/issue-$issue" ] && mkdir -p "$dest/logs" && mv "$RUNTIME/logs/issue-$issue" "$dest/logs/"
   [ -f "$RUNTIME/state/issue-$issue.json" ] && mkdir -p "$dest/state" && mv "$RUNTIME/state/issue-$issue.json" "$dest/state/"
   [ -f "$(knowledge_path "$issue")" ] && mkdir -p "$dest/state" && mv "$(knowledge_path "$issue")" "$dest/state/"
+  # Prune this issue's rows from the shared ledger, same as delete does. The
+  # ledger is never GC'd on its own (every checklist step is seeded as a task,
+  # see sync_state_from_plan), so without this an archived issue's tasks stay
+  # in tasks.json forever - orphaned (their state file just moved to archive/,
+  # so sync can no longer reconcile them) and still counted by status/task-list.
+  pruned="$(prune_tasks_for_issue "$issue")"
   log "Archived issue $issue to $dest"
+  [ -n "$pruned" ] && log "Pruned $pruned task(s) for issue $issue from the shared ledger."
+  return 0   # don't let the trailing && test's exit status leak out under set -e
 }
 
 list_issue_files() {
@@ -1343,6 +1351,40 @@ tasks = [t for t in tasks if t.get("issue") != issue]
 removed = before - len(tasks)
 if removed:
     dump_json(tasks, path)
+    print(removed)
+PY
+}
+
+# Drop every ledger row whose issue no longer has a live state file - a safety
+# net for orphaned tasks left behind when an issue's state was archived (moved
+# to archive/) or its state file was deleted/lost outside `ogre stop --delete`.
+# prune_tasks_for_issue handles the archive/delete paths at the source; this is
+# the belt-and-suspenders GC run opportunistically from `ogre status` (no args)
+# so a stale ledger self-heals instead of growing without bound. Prints the
+# number removed. Never touches a row whose issue still has state (a live or
+# in-flight job always has one - write_state creates it before any task).
+compact_tasks_ledger() {
+  local path statedir
+  path="$(tasks_path)"
+  [ -f "$path" ] || return 0
+  statedir="$(dirname "$path")"
+  py_state "$path" "$statedir" <<'PY'
+import sys, glob, os
+path, statedir = sys.argv[1], sys.argv[2]
+_lk = lock_state(path)
+try:
+    tasks = json.load(open(path))
+except Exception:
+    tasks = []
+live = set()
+for p in glob.glob(os.path.join(statedir, "issue-*.json")):
+    b = os.path.basename(p)
+    live.add(b[len("issue-"):-len(".json")])
+before = len(tasks)
+kept = [t for t in tasks if str(t.get("issue")) in live]
+removed = before - len(kept)
+if removed:
+    dump_json(kept, path)
     print(removed)
 PY
 }
@@ -2208,14 +2250,18 @@ PY
     link_status="$(task_field "$link_tid" status)"
     [ "$link_status" = "passed" ] || return 1
     local pending_left
-    pending_left="$(python3 -c "
-import json
+    # $spath is passed as argv (not spliced into the source) so a slug can
+    # never break out of the string literal - consistent with every other
+    # state-reading snippet in this script.
+    pending_left="$(python3 - "$spath" 2>/dev/null <<'PY'
+import json, sys
 try:
-    d = json.load(open('$spath'))
+    d = json.load(open(sys.argv[1]))
     print(len(d.get('pending_steps') or []))
 except Exception:
     print(0)
-" 2>/dev/null || echo 0)"
+PY
+)"
     [ "${pending_left:-0}" -gt 0 ] 2>/dev/null || return 1
     if [ "$iso" != "main" ] && next_step_is_browser_check; then
       err "Next step is tagged [BROWSER-CHECK] - stopping the --all chain here (a spawned codex/claude CLI subprocess can't verify it)."
@@ -2426,12 +2472,22 @@ _status_render() {
   else
     log "Ogre runtime: $RUNTIME"
     log ""
-    local spath fissue any="false"
+    compact_tasks_ledger >/dev/null || true
+    local spath fissue fstatus any="false"
     for spath in "$RUNTIME"/state/issue-*.json; do
       [ -f "$spath" ] || continue
       any="true"
       fissue="$(basename "$spath")"; fissue="${fissue#issue-}"; fissue="${fissue%.json}"
-      sync_state_from_plan "$fissue"
+      # A completed/stopped job is terminal - its plan checklist won't change,
+      # so re-deriving state from the plan (several python3 spawns) is wasted
+      # work on every status call. One cheap status read decides; only live
+      # jobs pay for a full re-sync. Keeps `ogre status` (no args) from getting
+      # slower linearly as finished issues pile up.
+      fstatus="$(json_field "$spath" status 2>/dev/null || true)"
+      case "$fstatus" in
+        completed|stopped) ;;
+        *) sync_state_from_plan "$fissue" ;;
+      esac
       print_job_summary "$fissue"
       log ""
     done

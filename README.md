@@ -378,19 +378,10 @@ Stops, archives, or deletes Ogre runtime data. Does not revert code changes.
 
 ## Suggested `.gitignore`
 
-For private solo workflow:
-
 ```gitignore
 .ai/.ogre/
 ```
 
-For team-visible plans but private logs:
+Ignore the whole folder, even on a team. `.ai/.ogre/state/tasks.json` is a single shared ledger for *every* issue in the repo, not per-issue - if two people run `ogre execute` on different features at the same time and both commit, they're both rewriting the same file. Committing `.ai/.ogre/` also means everyone's working directory fills up with every other person's in-flight issues, whether or not they touch them.
 
-```gitignore
-.ai/.ogre/logs/
-.ai/.ogre/tmp/
-.ai/.ogre/reviews/
-.ai/.ogre/prompts/
-```
-
-(`prompts/` is just a copy of the plugin's own templates, re-copied fresh on every command - never worth committing.)
+If you want a teammate to pick up specifically where you left off on the *same* issue, hand off the `.ai/.ogre/` folder directly (zip it, `rsync` it, whatever) instead of committing it.

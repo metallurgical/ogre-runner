@@ -91,40 +91,6 @@ flowchart TD
 - **[Codex CLI](https://developers.openai.com/codex/cli)** — optional. Default is `claude` for planner/reviewer/executor; pass `--planner`/`--reviewer`/`--executor codex` to use Codex instead. Verified with `0.143.0`. Missing it fails `--executor codex` (runner prompts can still be generated and run manually).
 - **Windows** — `scripts/ogre` is a bash script requiring `python3` on PATH. No native cmd.exe/PowerShell support. Works under **WSL**. Untested under Git Bash (should work if `python3`/`gh`/`codex`/`claude` are all reachable from it).
 
-### Valid `--model` IDs
-
-`--model` is passed straight through to the underlying CLI, unvalidated. A wrong id doesn't fail loudly at plan/review time — it kills the run at launch. Use one of these:
-
-**`claude` provider** (aliases resolve to the latest of that tier; full ids pin a specific release):
-
-| Alias | Full id |
-| :--- | :--- |
-| `sonnet` | `claude-sonnet-5` |
-| `opus` | `claude-opus-4-8` |
-| `fable` | `claude-fable-5` |
-| — | `claude-haiku-4-5-20251001` (no alias) |
-
-**`codex` provider** — no fixed enum, OpenAI adds models over time; check `codex --help` or the [Codex CLI docs](https://developers.openai.com/codex/cli) for what your installed version accepts. Known-working at time of writing:
-
-| Model | Notes |
-| :--- | :--- |
-| `gpt-5.6-sol` | Codex CLI default; also Ogre's `diff_reviewer` default |
-| `gpt-5.6-terra` | |
-| `gpt-5.6-luna` | |
-| `gpt-5.5` | |
-| `gpt-5.4` | |
-| `gpt-5.4-mini` | |
-
-Omit `--model` to use Ogre's per-role default in `.ai/.ogre/config.json` (`claude-sonnet-5` for planner/reviewer/executor, `gpt-5.6-sol` for the codex diff reviewer).
-
-### Valid `--reasoning` levels
-
-Same pass-through-unvalidated rule as `--model`. Omit `--reasoning` entirely to use whatever the CLI defaults to on its own — Ogre never sets one unless you pass the flag.
-
-**`claude` provider** (`claude --help`): `low`, `medium`, `high`, `xhigh`, `max`.
-
-**`codex` provider**: no fixed enum exposed by `codex exec --help` either (passed as `-c model_reasoning_effort=LEVEL`); `none`, `minimal`, `low`, `medium`, `high`, `xhigh` are known-accepted at time of writing - check the [Codex CLI docs](https://developers.openai.com/codex/cli) if your installed version differs.
-
 ## Installation
 
 Ogre is distributed through its own marketplace. From inside Claude Code, in any project:
@@ -206,6 +172,40 @@ See every checklist step for a job at once:
 ## Command Reference
 
 Invoke as `/ogre:<command> ...` inside Claude Code (or `scripts/ogre <command> ...` directly, same flags either way). Positional input always comes first, flags after, in any order. `task-complete` has no skill wrapper — run it via `scripts/ogre`. `ogre init` is optional too — other commands create the runtime folders automatically when needed.
+
+### Valid `--model` IDs
+
+`--model` is passed straight through to the underlying CLI, unvalidated. A wrong id doesn't fail loudly at plan/review time — it kills the run at launch. Use one of these:
+
+**`claude` provider** (aliases resolve to the latest of that tier; full ids pin a specific release):
+
+| Alias | Full id |
+| :--- | :--- |
+| `sonnet` | `claude-sonnet-5` |
+| `opus` | `claude-opus-4-8` |
+| `fable` | `claude-fable-5` |
+| — | `claude-haiku-4-5-20251001` (no alias) |
+
+**`codex` provider** — no fixed enum, OpenAI adds models over time; check `codex --help` or the [Codex CLI docs](https://developers.openai.com/codex/cli) for what your installed version accepts. Known-working at time of writing:
+
+| Model | Notes |
+| :--- | :--- |
+| `gpt-5.6-sol` | Codex CLI default; also Ogre's `diff_reviewer` default |
+| `gpt-5.6-terra` | |
+| `gpt-5.6-luna` | |
+| `gpt-5.5` | |
+| `gpt-5.4` | |
+| `gpt-5.4-mini` | |
+
+Omit `--model` to use Ogre's per-role default in `.ai/.ogre/config.json` (`claude-sonnet-5` for planner/reviewer/executor, `gpt-5.6-sol` for the codex diff reviewer).
+
+### Valid `--reasoning` levels
+
+Same pass-through-unvalidated rule as `--model`. Omit `--reasoning` entirely to use whatever the CLI defaults to on its own — Ogre never sets one unless you pass the flag.
+
+**`claude` provider** (`claude --help`): `low`, `medium`, `high`, `xhigh`, `max`.
+
+**`codex` provider**: no fixed enum exposed by `codex exec --help` either (passed as `-c model_reasoning_effort=LEVEL`); `none`, `minimal`, `low`, `medium`, `high`, `xhigh` are known-accepted at time of writing - check the [Codex CLI docs](https://developers.openai.com/codex/cli) if your installed version differs.
 
 ### `/ogre:feature`
 

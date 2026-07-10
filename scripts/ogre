@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OGRE_VERSION="1.3.1"
+OGRE_VERSION="1.3.2"
 RUNTIME=".ai/.ogre"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -235,6 +235,32 @@ for t in tasks:
 PY
 }
 
+# task_fields <tid> <field> [field...] - print the requested fields in order,
+# one per line, from a SINGLE python invocation. Callers that need several
+# fields off the same task (reap_task, stop_one_task, the execute step read)
+# used to spend one `task_field` process per field; batching them here cuts
+# a hot path like reap_all_tasks (run on every status/execute) from ~3-6
+# python spawns per task down to one. Always prints exactly len(fields) lines
+# (empty line for a missing/null field or unknown task), so callers can `read`
+# a fixed number of values back. None of the fields read this way ever contain
+# a newline, so a plain `read -r` per line round-trips them faithfully.
+task_fields() {
+  local tid="$1"; shift
+  python3 - "$(tasks_path)" "$tid" "$@" <<'PY'
+import json, sys
+path, tid = sys.argv[1], sys.argv[2]
+fields = sys.argv[3:]
+try:
+    tasks = json.load(open(path))
+except Exception:
+    tasks = []
+t = next((x for x in tasks if x.get("id") == tid), None)
+for f in fields:
+    v = t.get(f) if t else None
+    print("" if v is None else v)
+PY
+}
+
 # repo_drift_block <plan-path> - markdown block of commits landed since the
 # plan file was last written, plus any uncommitted working-tree changes.
 # Injected into runner prompts so each executor session sees how the repo has
@@ -303,18 +329,22 @@ retry_context_block() {
 # call never landed, so (like finalize_link_status) fail closed on exit
 # code alone rather than guessing "passed" from a bare rc==0.
 reap_task() {
-  local tid="$1" issue exitfile
-  issue="$(task_field "$tid" issue)"
+  local tid="$1"
+  # One batched read for every field this function might need, instead of a
+  # fresh python spawn per field. The common case (task still running, no exit
+  # sentinel yet, pid alive) now costs one spawn here instead of three.
+  local issue status executor session_id codex_logpath pid exitfile
+  { read -r issue; read -r status; read -r executor; read -r session_id; read -r codex_logpath; read -r pid; } \
+    < <(task_fields "$tid" issue status executor session_id log_path pid)
   [ -n "$issue" ] || return 0
-  [ "$(task_field "$tid" status)" = "running" ] || return 0
+  [ "$status" = "running" ] || return 0
   exitfile="$RUNTIME/tmp/issue-$issue/$tid.exit"
   if [ -f "$exitfile" ]; then
     local code
     code="$(cat "$exitfile")"
     task_update "$tid" "status=failed" "exit_code=$code"
-    if [ "$(task_field "$tid" executor)" = "codex" ] && [ -z "$(task_field "$tid" session_id)" ]; then
-      local codex_logpath codex_sid
-      codex_logpath="$(task_field "$tid" log_path)"
+    if [ "$executor" = "codex" ] && [ -z "$session_id" ]; then
+      local codex_sid
       codex_sid="$(grep -m1 '^session id: ' "$codex_logpath" 2>/dev/null | sed 's/^session id: //')"
       [ -n "$codex_sid" ] && task_update "$tid" "session_id=$codex_sid"
     fi
@@ -327,8 +357,6 @@ reap_task() {
   # reporting (kill -9, reboot, crash). Fail the task instead of leaving it
   # "running" in the ledger forever - a stuck "running" blocks re-execution
   # and makes status lie about in-flight work.
-  local pid
-  pid="$(task_field "$tid" pid)"
   if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
     task_update "$tid" "status=failed"
     rm -f "$RUNTIME/tmp/issue-$issue/$tid.pid"
@@ -2035,8 +2063,7 @@ PY
       fi
     fi
     local step_text step_index
-    step_text="$(task_field "$tid" step)"
-    step_index="$(task_field "$tid" step_index)"
+    { read -r step_text; read -r step_index; } < <(task_fields "$tid" step step_index)
 
     # Capture the failed attempt's log/exit code before this run assigns the
     # task a fresh log path.
@@ -2547,14 +2574,12 @@ for t in tasks:
 stop_one_task() {
   local tid="$1"
   local issue pid status
-  issue="$(task_field "$tid" issue)"
+  { read -r issue; read -r status; read -r pid; } < <(task_fields "$tid" issue status pid)
   [ -n "$issue" ] || { err "No task found with id $tid"; exit 1; }
-  status="$(task_field "$tid" status)"
   if [ "$status" != "pending" ] && [ "$status" != "running" ]; then
     log "Task $tid is already $status. Nothing to stop."
     return
   fi
-  pid="$(task_field "$tid" pid)"
   if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
     kill "$pid" 2>/dev/null || true
     log "Killed running task $tid (pid $pid)"

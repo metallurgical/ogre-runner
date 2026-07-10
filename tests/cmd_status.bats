@@ -154,6 +154,42 @@ PY
   [ "$(task_json_field "${tid}" status)" = "running" ]
 }
 
+@test "status reaps a codex task via its exit sentinel and captures the session id from the log" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step"
+  "${OGRE_BIN}" status 42 >/dev/null # seed ledger tasks
+  local tid
+  tid="$(python3 -c "import json; print(json.load(open('.ai/.ogre/state/tasks.json'))[0]['id'])")"
+
+  # A background codex task that finished but only left its exit sentinel (its
+  # own task-complete never landed). reap_task must read executor + session_id
+  # + log_path in one batched pass, mark it failed with the sentinel's exit
+  # code, and lift the codex session id out of the log tail.
+  mkdir -p ".ai/.ogre/tmp/issue-42"
+  local logpath=".ai/.ogre/logs/issue-42/reaped.log"
+  mkdir -p ".ai/.ogre/logs/issue-42"
+  printf 'session id: reaped-sid-42\nwork...\n' > "${logpath}"
+  python3 - "${tid}" "${logpath}" <<'PY'
+import json, sys
+p = ".ai/.ogre/state/tasks.json"
+tasks = json.load(open(p))
+for t in tasks:
+    if t["id"] == sys.argv[1]:
+        t["status"] = "running"
+        t["executor"] = "codex"
+        t["session_id"] = None
+        t["log_path"] = sys.argv[2]
+json.dump(tasks, open(p, "w"), indent=2)
+PY
+  printf '7' > ".ai/.ogre/tmp/issue-42/${tid}.exit"
+
+  run "${OGRE_BIN}" status 42
+  [ "${status}" -eq 0 ]
+  [ "$(task_json_field "${tid}" status)" = "failed" ]
+  [ "$(task_json_field "${tid}" exit_code)" = "7" ]
+  [ "$(task_json_field "${tid}" session_id)" = "reaped-sid-42" ]
+}
+
 @test "status shows a knowledge-base line and warns when it is bloated" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42
   write_plan_with_steps 42 "First step"

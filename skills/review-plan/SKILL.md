@@ -19,6 +19,7 @@ Optional flags:
 
 - `--reviewer claude|codex`
 - `--model MODEL`
+- `--reasoning LEVEL` (reasoning effort for the reviewer; omit to use the CLI's own default)
 
 ## Behavior
 
@@ -28,7 +29,7 @@ Optional flags:
    - `.ai/.ogre/tmp/issue-<number>/plan-review-runner.md`
 3. If reviewer is `claude`, perform the review directly.
 4. If reviewer is `codex`, either:
-   - use `codex exec -m MODEL - < runner`, or
+   - use `codex exec -m MODEL -c model_reasoning_effort=LEVEL - < runner` (omit `-c model_reasoning_effort=...` if the user gave no `--reasoning`), or
    - ask the user to run it through `codex-plugin-cc` if they prefer same Claude Code TUI.
 5. Write output to:
    - `.ai/.ogre/reviews/issue-<number>/plan-review.md`

@@ -34,3 +34,17 @@ load test_helper
   [ "${status}" -eq 0 ]
   [[ "${output}" == *"Reviewer: codex (gpt-5.5)"* ]]
 }
+
+@test "review-plan accepts --reasoning and shows it in the reviewer log line" {
+  write_plan_with_steps 42 "Do the thing"
+  run "${OGRE_BIN}" review-plan 42 --reviewer codex --model gpt-5.6-sol --reasoning medium
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Reviewer: codex (gpt-5.6-sol) [reasoning: medium]"* ]]
+}
+
+@test "review-plan omits the reasoning tag from the reviewer log line when --reasoning isn't passed" {
+  write_plan_with_steps 42 "Do the thing"
+  run "${OGRE_BIN}" review-plan 42
+  [ "${status}" -eq 0 ]
+  [[ "${output}" != *"[reasoning:"* ]]
+}

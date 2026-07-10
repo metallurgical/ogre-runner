@@ -104,9 +104,26 @@ flowchart TD
 | `fable` | `claude-fable-5` |
 | — | `claude-haiku-4-5-20251001` (no alias) |
 
-**`codex` provider** — no fixed enum, OpenAI adds models over time; check `codex --help` or the [Codex CLI docs](https://developers.openai.com/codex/cli) for what your installed version accepts. Known-working at time of writing: `gpt-5.5` (Ogre's `diff_reviewer` default).
+**`codex` provider** — no fixed enum, OpenAI adds models over time; check `codex --help` or the [Codex CLI docs](https://developers.openai.com/codex/cli) for what your installed version accepts. Known-working at time of writing:
 
-Omit `--model` to use Ogre's per-role default in `.ai/.ogre/config.json` (`claude-sonnet-5` for planner/reviewer/executor, `gpt-5.5` for the codex diff reviewer).
+| Model | Notes |
+| :--- | :--- |
+| `gpt-5.6-sol` | Codex CLI default; also Ogre's `diff_reviewer` default |
+| `gpt-5.6-terra` | |
+| `gpt-5.6-luna` | |
+| `gpt-5.5` | |
+| `gpt-5.4` | |
+| `gpt-5.4-mini` | |
+
+Omit `--model` to use Ogre's per-role default in `.ai/.ogre/config.json` (`claude-sonnet-5` for planner/reviewer/executor, `gpt-5.6-sol` for the codex diff reviewer).
+
+### Valid `--reasoning` levels
+
+Same pass-through-unvalidated rule as `--model`. Omit `--reasoning` entirely to use whatever the CLI defaults to on its own — Ogre never sets one unless you pass the flag.
+
+**`claude` provider** (`claude --help`): `low`, `medium`, `high`, `xhigh`, `max`.
+
+**`codex` provider**: no fixed enum exposed by `codex exec --help` either (passed as `-c model_reasoning_effort=LEVEL`); `none`, `minimal`, `low`, `medium`, `high`, `xhigh` are known-accepted at time of writing - check the [Codex CLI docs](https://developers.openai.com/codex/cli) if your installed version differs.
 
 ## Installation
 
@@ -212,7 +229,8 @@ Use a positional issue number, URL, or local file when you already have one.
 | `--blocker REF --remarks "..."` | `/ogre:feature --statement "..." --name forgot-password --blocker ./notes/auth-debt.md --remarks "PR merged"` | One blocker plus a freeform status remark tied to it. Repeatable; `--remarks` annotates the blocker right before it; mix freely with `--blocks`. The remark is prepended to the blocker's file and shown to the planner so it can reason about what's already landed vs still in flight |
 | `--plan NAME.md` | `/ogre:feature --statement "..." --name forgot-password --plan forgot-password-v2.md` | Custom plan output filename instead of the default issue-derived or statement-derived plan name |
 | `--planner claude\|codex` | `/ogre:feature --statement "..." --name forgot-password --planner codex` | Which LLM CLI plans the feature (default: `claude`) |
-| `--model MODEL` | `/ogre:feature --statement "..." --name forgot-password --planner codex --model gpt-5.5` | Model override for the planner |
+| `--model MODEL` | `/ogre:feature --statement "..." --name forgot-password --planner codex --model gpt-5.6-sol` | Model override for the planner |
+| `--reasoning LEVEL` | `/ogre:feature --statement "..." --name forgot-password --planner codex --reasoning high` | Reasoning effort for the planner. Omit it to use the CLI's own default - Ogre never forces one |
 
 ### `/ogre:add-blocker`
 
@@ -248,7 +266,8 @@ Reviews a generated plan for hallucinations, missing validation, risky assumptio
 | :--- | :--- | :--- |
 | `<issue-or-plan>` (positional) | `/ogre:review-plan 107` | Issue number, plan name (`issue-107`), or plan path |
 | `--reviewer claude\|codex` | `/ogre:review-plan 107 --reviewer codex` | Which LLM CLI reviews the plan (default: `claude`) |
-| `--model MODEL` | `/ogre:review-plan 107 --reviewer codex --model gpt-5.5` | Model override for the reviewer |
+| `--model MODEL` | `/ogre:review-plan 107 --reviewer codex --model gpt-5.6-sol` | Model override for the reviewer |
+| `--reasoning LEVEL` | `/ogre:review-plan 107 --reviewer codex --reasoning high` | Reasoning effort for the reviewer. Omit it to use the CLI's own default - Ogre never forces one |
 
 ### `/ogre:execute`
 
@@ -264,6 +283,7 @@ Executes one checklist item (or all remaining, with `--all`) from an approved pl
 | `--job JOB_ID` | `/ogre:execute --job job-6d7715e4-...` | Target by job id instead of issue/plan |
 | `--executor codex\|claude` | `/ogre:execute 107 --executor codex` | Which LLM CLI executes the step (default: `claude` — always present since it's the host; use `codex` if installed) |
 | `--model MODEL` | `/ogre:execute 107 --executor claude --model claude-sonnet-5` | Model override for the executor |
+| `--reasoning LEVEL` | `/ogre:execute 107 --executor codex --reasoning high` | Reasoning effort for the executor - `claude -p` gets `--effort LEVEL`, `codex exec` gets `-c model_reasoning_effort=LEVEL`. Omit it to use the CLI's own default; Ogre never forces one |
 | `--task TASK_ID` | `/ogre:execute 107 --task task-0f32a78f-...` | Target one specific seeded step out of order |
 | `--step N` | `/ogre:execute 107 --step 3` | Target step N (1-based) out of order |
 | `--retry` | `/ogre:execute 107 --retry` | Re-run the lowest failed step in a fresh session, with the failed attempt's exit code and log tail injected into the runner prompt - the failure becomes an input instead of a dead end to re-explain by hand. Not combinable with `--all` |

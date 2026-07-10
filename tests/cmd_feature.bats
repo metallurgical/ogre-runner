@@ -197,6 +197,18 @@ load test_helper
   [ "$(state_field 44 plan_path)" = ".ai/.ogre/plans/custom-plan.md" ]
 }
 
+@test "feature accepts --reasoning and shows it in the planner log line" {
+  run "${OGRE_BIN}" feature --statement "x" --name 46 --planner codex --model gpt-5.6-sol --reasoning high
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Planner: codex (gpt-5.6-sol) [reasoning: high]"* ]]
+}
+
+@test "feature omits the reasoning tag from the planner log line when --reasoning isn't passed" {
+  run "${OGRE_BIN}" feature --statement "x" --name 47
+  [ "${status}" -eq 0 ]
+  [[ "${output}" != *"[reasoning:"* ]]
+}
+
 @test "state.json stays valid JSON even when --model contains quotes" {
   run "${OGRE_BIN}" feature --statement "x" --name 45 --planner claude --model 'sonnet", "injected": "1'
   [ "${status}" -eq 0 ]

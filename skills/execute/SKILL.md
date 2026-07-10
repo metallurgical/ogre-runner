@@ -20,6 +20,7 @@ Optional flags:
 
 - `--executor codex|claude`
 - `--model MODEL`
+- `--reasoning LEVEL` — reasoning effort for the executor (`claude -p` gets `--effort LEVEL`, `codex exec` gets `-c model_reasoning_effort=LEVEL`). Omit it to use the CLI's own default; Ogre never forces one.
 - `--task <task-id>` — target one specific seeded step out of order
 - `--step <n>` — target step N (1-based) out of order
 - `--retry` — re-run the lowest `failed` step in a fresh session. The failed attempt's exit code and log tail are injected into the runner prompt so the new session diagnoses the failure instead of repeating the same approach blindly. Prefer this over asking the user to explain what went wrong. Not combinable with `--all`.
@@ -76,14 +77,14 @@ A step tagged `[BROWSER-CHECK]` needs a real browser to verify - a spawned codex
 2. **`--all`, running synchronously in this turn (no `--background`)**: when the command exits because the next step is `[BROWSER-CHECK]`, immediately, in the same turn, without asking the user first:
    - Run `scripts/ogre execute <issue> --main` and do that one step's real browser check yourself (screenshot/snapshot with your own tools).
    - Run `scripts/ogre task-complete <task-id> --status passed|failed` for it.
-   - Re-run `scripts/ogre execute <issue> --all` (same executor/model flags as the original call) to resume the chain.
+   - Re-run `scripts/ogre execute <issue> --all` (same executor/model/reasoning flags as the original call) to resume the chain.
    - Repeat this loop if it pauses again on another `[BROWSER-CHECK]` step (each one is detected one at a time, not batched) - loop until the chain reports `completed`, `failed` for a real reason, or nothing left, then report the final result once.
 3. **`--all --background`**: first check whether a fork is even needed - grep the plan's remaining (unchecked) checklist items for `[BROWSER-CHECK]`. If none of the remaining steps are tagged, just kick off `--background` normally and stop there; nothing will pause mid-chain, the ledger updates itself when it finishes, and there's nothing for a fork to supervise. Do not launch a fork for a chain that has no browser-check steps in it.
 
    Only if at least one remaining step is tagged `[BROWSER-CHECK]`: the detached subprocess has no browser tools and cannot pause-and-call-back into this session while it's running unattended - there's no way around that, and waiting for your own next turn to check isn't reliable (you might not get one for hours). So the moment you kick off the `--background --all` run, launch a fork to supervise it: `Agent` tool, `subagent_type: "fork"`. Tell the fork to:
    - Poll with **one single Bash tool call** that runs an actual shell `while` loop with `sleep` inside it (e.g. `while :; do scripts/ogre status <issue>; sleep 20; done` wrapped in a condition that breaks on `completed`/`stopped`/`failed`/`[BROWSER-CHECK]`). Do **not** poll by making separate assistant turns/tool calls in a loop ("check now, wait, check again") - across turns there's nothing forcing a fresh read, and the fork can drift into narrating remembered/assumed progress instead of the real ledger. One shell loop that only returns once something actionable happened is the only form that's grounded by construction.
    - Never report or act on a step number, `current_step`, or completion count from memory - always re-derive it from the most recent `ogre status` output in front of you. If you're about to say "still on step N" or similar, that sentence must be a direct quote/paraphrase of the last poll's real output, not a running tally you're keeping yourself.
-   - Whenever `current_step` contains `[BROWSER-CHECK]` and the job isn't `completed`/`stopped`, resolve it itself exactly like step 2 above (`--main`, do the real check with its own browser tools, `task-complete`, then resume with `scripts/ogre execute <issue> --all --background`, preserving `--background`).
+   - Whenever `current_step` contains `[BROWSER-CHECK]` and the job isn't `completed`/`stopped`, resolve it itself exactly like step 2 above (`--main`, do the real check with its own browser tools, `task-complete`, then resume with `scripts/ogre execute <issue> --all --background`, preserving `--background` and any `--model`/`--reasoning` from the original call).
    - Keep looping until the job reaches `completed`, `stopped`, or `failed` for a real (non-browser-check) reason, then return one final summary built from that last real `ogre status` read, not from anything summarized earlier in the loop.
 
    The fork's completion generates a `task-notification`, which reliably wakes a fresh turn in this session when it's done - so nothing is missed even with zero other interaction in between. Report that summary to the user when it arrives.

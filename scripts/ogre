@@ -13,12 +13,13 @@ Ogre $OGRE_VERSION
 
 Usage:
   ogre init
-  ogre feature <issue-number|issue-url|issue-file> [--blocks 1,2,url,path] [--plan issue-107.md] [--planner claude|codex] [--model MODEL]
-  ogre feature --statement "free text description" [--name my-feature] [--blocks 1,2,url,path] [--plan NAME.md] [--planner claude|codex] [--model MODEL]
+  ogre feature <issue-number|issue-url|issue-file> [--blocks 1,2,url,path] [--plan issue-107.md] [--planner claude|codex] [--model MODEL] [--reasoning LEVEL]
+  ogre feature --statement "free text description" [--name my-feature] [--blocks 1,2,url,path] [--plan NAME.md] [--planner claude|codex] [--model MODEL] [--reasoning LEVEL]
   ogre add-blocker <issue> <blocker-number|url|path> [--force]
   ogre add-blocker <issue> --statement "free text blocker" [--name blocker-slug] [--force]
-  ogre review-plan <issue-or-plan> [--reviewer claude|codex] [--model MODEL]
-  ogre execute <issue-or-plan> [--executor codex|claude] [--model MODEL] [--all] [--max-steps N] [--fresh|--resume] [--main|--background] [--yes]
+  ogre review-plan <issue-or-plan> [--reviewer claude|codex] [--model MODEL] [--reasoning LEVEL]
+  ogre execute <issue-or-plan> [--executor codex|claude] [--model MODEL] [--reasoning LEVEL] [--all] [--max-steps N] [--fresh|--resume] [--main|--background] [--yes]
+                                   (--reasoning omitted: uses claude/codex's own default effort level - not forced by Ogre)
   ogre execute --job <job-id> [same flags as above]              (same, addressed by job id)
   ogre execute <issue-or-plan> --task <task-id>                  (target one specific seeded step out of order)
   ogre execute <issue-or-plan> --step <n>                        (target step N, 1-based, out of order)
@@ -73,7 +74,7 @@ ensure_runtime() {
     "planner": { "provider": "claude", "model": "claude-sonnet-5" },
     "plan_reviewer": { "provider": "claude", "model": "claude-sonnet-5" },
     "executor": { "provider": "claude", "model": "claude-sonnet-5" },
-    "diff_reviewer": { "provider": "codex", "model": "gpt-5.5" }
+    "diff_reviewer": { "provider": "codex", "model": "gpt-5.6-sol" }
   }
 }
 JSON
@@ -805,7 +806,7 @@ ensure_state_from_plan() {
   [ -f "$spath" ] && return 0
   plan="$RUNTIME/plans/issue-$issue.md"
   [ -f "$plan" ] || return 1
-  write_state "$issue" "planning" "$plan" "claude" "claude-sonnet-5" "claude" "claude-sonnet-5" "codex" "gpt-5.5" "[]"
+  write_state "$issue" "planning" "$plan" "claude" "claude-sonnet-5" "claude" "claude-sonnet-5" "codex" "gpt-5.6-sol" "[]"
   # Flag the record: a backfilled ledger only knows what the plan's checkboxes
   # say, so its "pending" statuses are unreliable - work may already exist in
   # the code from before the state was lost. Runner prompts read this flag and
@@ -1353,7 +1354,7 @@ cmd_init() {
 
 cmd_feature() {
   ensure_runtime
-  local current="" plan_name="" planner="claude" model="claude-sonnet-5" statement="" name=""
+  local current="" plan_name="" planner="claude" model="claude-sonnet-5" reasoning="" statement="" name=""
   # Blockers are collected as two parallel arrays: block_refs[i] is the
   # blocker reference, block_remarks[i] its (optional) freeform status remark.
   # `--blocks a,b` adds refs with no remark; `--blocker REF --remarks TEXT`
@@ -1381,6 +1382,7 @@ cmd_feature() {
       --plan) plan_name="${2:-}"; shift 2 ;;
       --planner) planner="${2:-claude}"; shift 2 ;;
       --model) model="${2:-}"; shift 2 ;;
+      --reasoning) reasoning="${2:-}"; shift 2 ;;
       --statement) statement="${2:-}"; shift 2 ;;
       --name) name="${2:-}"; shift 2 ;;
       *) err "Unknown option: $1"; exit 1 ;;
@@ -1502,6 +1504,7 @@ EOF2
   print_job_summary "$issue"
   log ""
   log "Planning runner created: $runner"
+  log "Planner: $planner ${model:+($model)}${reasoning:+ [reasoning: $reasoning]}"
   log "Next inside Claude Code: read $runner and create the plan."
 }
 
@@ -1685,13 +1688,14 @@ EOF2
 
 cmd_review_plan() {
   ensure_runtime
-  local target="${1:-}" reviewer="claude" model="claude-sonnet-5"
+  local target="${1:-}" reviewer="claude" model="claude-sonnet-5" reasoning=""
   [ -n "$target" ] || { err "Missing issue or plan path"; usage; exit 1; }
   shift || true
   while [ $# -gt 0 ]; do
     case "$1" in
       --reviewer) reviewer="${2:-claude}"; shift 2 ;;
       --model) model="${2:-}"; shift 2 ;;
+      --reasoning) reasoning="${2:-}"; shift 2 ;;
       *) err "Unknown option: $1"; exit 1 ;;
     esac
   done
@@ -1728,7 +1732,7 @@ Rules:
 EOF2
 
   log "Plan review runner created: $runner"
-  log "Reviewer: $reviewer ${model:+($model)}"
+  log "Reviewer: $reviewer ${model:+($model)}${reasoning:+ [reasoning: $reasoning]}"
   log "Review output: $review_path"
 }
 
@@ -1738,7 +1742,7 @@ cmd_execute() {
   #   new        - default: foreground, brand-new codex/claude session, isolated from main context
   #   main       - run inline in the current Claude Code session (no subprocess spawned)
   #   background - same isolation as "new" but detached/non-blocking
-  local target="" executor="claude" model="" mode="next" freshness="fresh" iso="new" job_id="" task_id="" step_n="" assume_yes="false" max_steps="3" retry="false"
+  local target="" executor="claude" model="" reasoning="" mode="next" freshness="fresh" iso="new" job_id="" task_id="" step_n="" assume_yes="false" max_steps="3" retry="false"
   if [ $# -gt 0 ] && [[ ! "$1" =~ ^-- ]]; then
     target="$1"; shift
   fi
@@ -1749,6 +1753,7 @@ cmd_execute() {
       --step) step_n="${2:-}"; shift 2 ;;
       --executor) executor="${2:-claude}"; shift 2 ;;
       --model) model="${2:-}"; shift 2 ;;
+      --reasoning) reasoning="${2:-}"; shift 2 ;;
       --max-steps) max_steps="${2:-3}"; shift 2 ;;
       --retry) retry="true"; shift ;;
       --all) mode="all"; shift ;;
@@ -1764,7 +1769,7 @@ cmd_execute() {
   done
   if [ -z "$model" ]; then
     case "$executor" in
-      codex) model="gpt-5.5" ;;
+      codex) model="gpt-5.6-sol" ;;
       *) model="claude-sonnet-5" ;;
     esac
   fi
@@ -1826,6 +1831,7 @@ Execution mode:
 * Mode: \`all\` (chained)
 * Executor: \`$executor\`
 * Model: \`${model:-default}\`
+* Reasoning: \`${reasoning:-default}\`
 * Freshness: \`$freshness\`
 * Task id: \`$link_tid\`
 
@@ -2027,6 +2033,7 @@ Execution mode:
 
 * Executor: \`$executor\`
 * Model: \`${model:-default}\`
+* Reasoning: \`${reasoning:-default}\`
 * Freshness: \`$freshness\`
 * Task id: \`$tid\`
 
@@ -2090,14 +2097,14 @@ PY
   log "Execution runner created: $runner"
   log "Task id: $tid"
   [ -n "$session_id" ] && log "Session id: $session_id (resume in Claude TUI later: claude --resume $session_id)"
-  log "Executor: $executor ${model:+($model)}"
+  log "Executor: $executor ${model:+($model)}${reasoning:+ [reasoning: $reasoning]}"
   log "Log path: $logpath"
 
   if [ "$iso" = "main" ]; then
     log ""
     log "Mode: --main. Execute the target checklist item(s) from the runner file above directly in this session (no subprocess spawned)."
     log "Alternatively, run it in an isolated session yourself:"
-    log "  codex exec --skip-git-repo-check --sandbox workspace-write ${model:+-m $model} - < $runner"
+    log "  codex exec --skip-git-repo-check --sandbox workspace-write ${model:+-m $model} ${reasoning:+-c model_reasoning_effort=$reasoning} - < $runner"
     log ""
     log "Task $tid recorded as pending. Check with: $SCRIPT_DIR/ogre status --task $tid"
     log "When the work is done, mark it: $SCRIPT_DIR/ogre task-complete $tid --status passed|failed"
@@ -2119,14 +2126,16 @@ PY
     set +e
     case "$executor" in
       codex)
-        if [ -n "$model" ]; then codex exec --skip-git-repo-check --sandbox workspace-write -m "$model" - < "$link_runner" | tee "$link_logpath"
-        else codex exec --skip-git-repo-check --sandbox workspace-write - < "$link_runner" | tee "$link_logpath"
-        fi
+        local -a codex_args=(exec --skip-git-repo-check --sandbox workspace-write)
+        [ -n "$model" ] && codex_args+=(-m "$model")
+        [ -n "$reasoning" ] && codex_args+=(-c "model_reasoning_effort=$reasoning")
+        codex "${codex_args[@]}" - < "$link_runner" | tee "$link_logpath"
         ;;
       claude)
-        if [ -n "$model" ]; then claude -p --model "$model" --permission-mode bypassPermissions --session-id "$link_session" < "$link_runner" | tee "$link_logpath"
-        else claude -p --permission-mode bypassPermissions --session-id "$link_session" < "$link_runner" | tee "$link_logpath"
-        fi
+        local -a claude_args=(-p --permission-mode bypassPermissions --session-id "$link_session")
+        [ -n "$model" ] && claude_args+=(--model "$model")
+        [ -n "$reasoning" ] && claude_args+=(--effort "$reasoning")
+        claude "${claude_args[@]}" < "$link_runner" | tee "$link_logpath"
         ;;
     esac
     rc=$?
@@ -2144,14 +2153,16 @@ PY
     local link_tid="$1" link_runner="$2" link_logpath="$3" link_session="$4"
     case "$executor" in
       codex)
-        if [ -n "$model" ]; then codex exec --skip-git-repo-check --sandbox workspace-write -m "$model" - < "$link_runner" > "$link_logpath" 2>&1
-        else codex exec --skip-git-repo-check --sandbox workspace-write - < "$link_runner" > "$link_logpath" 2>&1
-        fi
+        local -a codex_args=(exec --skip-git-repo-check --sandbox workspace-write)
+        [ -n "$model" ] && codex_args+=(-m "$model")
+        [ -n "$reasoning" ] && codex_args+=(-c "model_reasoning_effort=$reasoning")
+        codex "${codex_args[@]}" - < "$link_runner" > "$link_logpath" 2>&1
         ;;
       claude)
-        if [ -n "$model" ]; then claude -p --model "$model" --permission-mode bypassPermissions --session-id "$link_session" < "$link_runner" > "$link_logpath" 2>&1
-        else claude -p --permission-mode bypassPermissions --session-id "$link_session" < "$link_runner" > "$link_logpath" 2>&1
-        fi
+        local -a claude_args=(-p --permission-mode bypassPermissions --session-id "$link_session")
+        [ -n "$model" ] && claude_args+=(--model "$model")
+        [ -n "$reasoning" ] && claude_args+=(--effort "$reasoning")
+        claude "${claude_args[@]}" < "$link_runner" > "$link_logpath" 2>&1
         ;;
     esac
     local rc=$?

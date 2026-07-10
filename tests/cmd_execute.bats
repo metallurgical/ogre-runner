@@ -184,6 +184,40 @@ print(t['id'])
   [[ "$(cat "${args_file}")" == *"--sandbox workspace-write"* ]]
 }
 
+@test "execute --reasoning passes --effort to claude" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "Only step"
+  local args_file="${TEST_TMP}/claude-args.log"
+  MOCK_CLAUDE_ARGS_FILE="${args_file}" run "${OGRE_BIN}" execute 42 --reasoning high
+  [ "${status}" -eq 0 ]
+  [[ "$(cat "${args_file}")" == *"--effort high"* ]]
+}
+
+@test "execute --reasoning passes -c model_reasoning_effort= to codex" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "Only step"
+  local args_file="${TEST_TMP}/codex-args.log"
+  MOCK_CODEX_ARGS_FILE="${args_file}" run "${OGRE_BIN}" execute 42 --executor codex --reasoning low
+  [ "${status}" -eq 0 ]
+  [[ "$(cat "${args_file}")" == *"-c model_reasoning_effort=low"* ]]
+}
+
+@test "execute without --reasoning omits the effort flag entirely (uses the CLI's own default, not forced by Ogre)" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "Only step"
+  local claude_args_file="${TEST_TMP}/claude-args.log"
+  MOCK_CLAUDE_ARGS_FILE="${claude_args_file}" run "${OGRE_BIN}" execute 42
+  [ "${status}" -eq 0 ]
+  [[ "$(cat "${claude_args_file}")" != *"--effort"* ]]
+
+  "${OGRE_BIN}" feature --statement "base feature" --name 43
+  write_plan_with_steps 43 "Only step"
+  local codex_args_file="${TEST_TMP}/codex-args.log"
+  MOCK_CODEX_ARGS_FILE="${codex_args_file}" run "${OGRE_BIN}" execute 43 --executor codex
+  [ "${status}" -eq 0 ]
+  [[ "$(cat "${codex_args_file}")" != *"model_reasoning_effort"* ]]
+}
+
 @test "execute foreground fails closed when codex exits 0 but never calls task-complete" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42
   write_plan_with_steps 42 "First step"

@@ -25,6 +25,7 @@ Optional flags:
 - `--plan issue-107.md`
 - `--planner claude|codex`
 - `--model MODEL`
+- `--reasoning LEVEL` (reasoning effort for the planner; omit to use the CLI's own default)
 - `--statement "free text description of the feature"` (use instead of an issue)
 - `--name my-feature` (slug for runtime paths when using `--statement`; default: first ~4 words of the statement + a short uuid suffix, e.g. "need to implement forgot password page" -> `need-to-implement-a1b2c3d4` — the suffix keeps it unique and ties the slug to that specific plan .md even if two features start with similar wording)
 
@@ -45,7 +46,7 @@ Optional flags:
 3. Read the generated planning runner:
    - `.ai/.ogre/tmp/issue-<number>/plan-runner.md`
 4. Create the plan exactly as requested by that runner.
-   - If `--planner codex` and Codex has no repo access of its own, you may need to assemble the template + issue + repo context into one prompt and pipe it into `codex exec -` yourself. Do this **without writing the assembled prompt to disk first** — pipe it straight through, e.g. `{ cat .ai/.ogre/prompts/execution-blueprint-prompt.md; echo; cat .ai/.ogre/issues/issue-<n>.md; } | codex exec -`. Don't create extra files like `codex-plan-input.md`/`codex-raw-output.txt` under `.ai/.ogre/tmp/` — only `plan-runner.md` belongs there.
+   - If `--planner codex` and Codex has no repo access of its own, you may need to assemble the template + issue + repo context into one prompt and pipe it into `codex exec -` yourself. Do this **without writing the assembled prompt to disk first** — pipe it straight through, e.g. `{ cat .ai/.ogre/prompts/execution-blueprint-prompt.md; echo; cat .ai/.ogre/issues/issue-<n>.md; } | codex exec -`. Carry through any `--model`/`--reasoning` the user gave: `-m <model>` / `-c model_reasoning_effort=<level>`. Don't create extra files like `codex-plan-input.md`/`codex-raw-output.txt` under `.ai/.ogre/tmp/` — only `plan-runner.md` belongs there.
 5. Write the final plan to:
    - `.ai/.ogre/plans/issue-<number>.md` or the custom plan path.
 6. Run `scripts/ogre status <issue>` and show that Job Summary again, same format as step 2 (verbatim code block, one field per line). The plan now exists, so this second summary will differ from the first: `Plan` drops `(not written yet)`, `Steps Completed/Remaining/Total` are populated, `Review plan`/`Execute next` rows appear, and a `Steps (N):` checklist table is printed below it. Don't skip this just because you already showed a summary in step 2 — that one was necessarily incomplete.

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OGRE_VERSION="1.4.11"
+OGRE_VERSION="1.4.12"
 RUNTIME=".ai/.ogre"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -2839,6 +2839,24 @@ PY
     (
       local chain_tid="$tid" chain_logpath="$logpath" chain_session="$session_id"
       local rc iterations=0 max_iterations=200
+      # This driver subshell's own, real, stable OS pid - same value the
+      # parent captured via $! right after launching it. Not $BASHPID
+      # (bash >= 4 only - macOS ships bash 3.2, where it's unset and blows
+      # up under `set -u`). Not $$ either - inside a `()` subshell that
+      # still reports the *invoking* shell's pid, not this one's. The
+      # `$(exec sh -c 'echo $PPID')` idiom works on both: command
+      # substitution's single-external-command optimization execs `sh`
+      # in place of forking again, so its $PPID is this subshell's real pid.
+      # Every link after the first is a fresh ledger row created only here,
+      # inside the loop; without recording this pid on it too, reap_task's
+      # "pid recorded but not alive -> mark failed" check (its only way to
+      # notice the driver died mid-chain, since only link 1's row - $tid -
+      # ever gets a pid from the parent-side `task_update "$tid" pid=$pid`
+      # below) has nothing to check for links 2+, so a driver death after
+      # link 1 leaves that link's row stuck on "running" forever and
+      # maybe_resume_stalled_chain's `status != running` gate never trips.
+      local driver_pid
+      driver_pid="$(exec sh -c 'echo $PPID')"
       while :; do
         iterations=$((iterations + 1))
         run_link_background_body "$chain_tid" "$runner" "$chain_logpath" "$chain_session"
@@ -2852,6 +2870,7 @@ PY
         chain_logpath="$logdir/execute-$(date '+%Y%m%d-%H%M%S')-${chain_tid:5:8}.log"
         write_all_runner "$chain_tid" "$chain_logpath"
         task_create "$chain_tid" "$issue" "execute" "$executor" "$model" "$mode" "$freshness" "$runner" "$chain_logpath" "running"
+        task_update "$chain_tid" "pid=$driver_pid"
         if [ "$executor" = "claude" ]; then
           chain_session="$(gen_uuid)"
           task_update "$chain_tid" "session_id=$chain_session"

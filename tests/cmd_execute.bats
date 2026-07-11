@@ -886,3 +886,82 @@ PY
   grep -q "UPDATE the knowledge base" .ai/.ogre/tmp/issue-42/run-next.md
   grep -q "issue-42-knowledge.md" .ai/.ogre/tmp/issue-42/run-next.md
 }
+
+@test "execute --all --background: link 2's ledger row gets the driver pid so a mid-chain driver death is detectable" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step" "Second step"
+
+  # Override the shared mock claude just for this test: 1st invocation
+  # behaves normally (passes, lets the chain advance); 2nd invocation blocks
+  # forever instead of calling task-complete, standing in for "still running
+  # when the driver process gets killed out from under it".
+  local call_counter="${TEST_TMP}/claude-calls"
+  local stub_bin="${TEST_TMP}/stub-bin"
+  mkdir -p "${stub_bin}"
+  cat > "${stub_bin}/claude" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+n=0
+[ -f "${call_counter}" ] && n="\$(cat "${call_counter}")"
+n=\$((n + 1))
+echo "\$n" > "${call_counter}"
+if [ "\$n" = "2" ]; then
+  sleep 300
+fi
+exec "${MOCK_BIN}/claude" "\$@"
+EOF
+  chmod +x "${stub_bin}/claude"
+  export PATH="${stub_bin}:${PATH}"
+
+  run "${OGRE_BIN}" execute 42 --all --background
+  [ "${status}" -eq 0 ] || return 1
+
+  # sync_state_from_plan pre-seeds one pending row per checklist step
+  # (tasks[0]/[1] here) - the actual execute chain link is a separate
+  # `mode: "all"` row appended after those, not tasks[0].
+  local tid1
+  tid1="$(python3 -c "
+import json
+tasks = json.load(open('.ai/.ogre/state/tasks.json'))
+rows = [t for t in tasks if t.get('mode') == 'all']
+print(rows[-1]['id'] if rows else '')
+")"
+  [ -n "${tid1}" ] || return 1
+  wait_for_task_status "${tid1}" passed 30
+
+  local tid2 waited=0
+  while [ -z "${tid2:-}" ] && [ "${waited}" -lt 30 ]; do
+    tid2="$(python3 -c "
+import json
+tasks = json.load(open('.ai/.ogre/state/tasks.json'))
+rows = [t for t in tasks if t.get('mode') == 'all' and t.get('id') != '${tid1}']
+print(rows[-1]['id'] if rows else '')
+")"
+    [ -n "${tid2}" ] || { sleep 0.2; waited=$((waited + 1)); }
+  done
+  [ -n "${tid2}" ] || return 1
+  [ "$(task_json_field "${tid2}" status)" = "running" ] || return 1
+
+  local bg_pid
+  bg_pid="$(cat .ai/.ogre/tmp/issue-42/${tid1}.pid)"
+  # The fix under test: link 2's own ledger row must carry the driver's pid,
+  # not the None task_create leaves it with, or reap_task has nothing to
+  # check when the driver dies mid-link.
+  [ "$(task_json_field "${tid2}" pid)" = "${bg_pid}" ] || return 1
+
+  # Simulate the driver dying mid-link-2: kill its whole process group (the
+  # blocked mock claude included) - no exit sentinel, no task-complete, same
+  # signature as an untraceable crash.
+  kill -KILL -- "-${bg_pid}" 2>/dev/null || true
+  local dead_waited=0
+  while kill -0 "${bg_pid}" 2>/dev/null && [ "${dead_waited}" -lt 30 ]; do
+    sleep 0.2
+    dead_waited=$((dead_waited + 1))
+  done
+
+  run "${OGRE_BIN}" status 42
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" == *"looks stalled"* ]] || return 1
+  [[ "${output}" == *"Auto-resuming"* ]] || return 1
+  [ "$(task_json_field "${tid2}" status)" = "failed" ] || return 1
+}

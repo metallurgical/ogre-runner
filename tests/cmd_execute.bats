@@ -965,3 +965,23 @@ print(rows[-1]['id'] if rows else '')
   [[ "${output}" == *"Auto-resuming"* ]] || return 1
   [ "$(task_json_field "${tid2}" status)" = "failed" ] || return 1
 }
+
+@test "execute --background: a caught signal to the driver is logged (forensics for the still-unexplained mid-chain deaths)" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "Only step"
+  run "${OGRE_BIN}" execute 42 --background
+  [ "${status}" -eq 0 ] || return 1
+
+  local pid
+  pid="$(cat .ai/.ogre/tmp/issue-42/*.pid)"
+  kill -TERM "${pid}"
+
+  local driverlog waited=0
+  driverlog="$(ls .ai/.ogre/logs/issue-42/background-driver-*.log)"
+  while ! grep -q "DRIVER_SIGNAL TERM" "${driverlog}" 2>/dev/null && [ "${waited}" -lt 30 ]; do
+    sleep 0.2
+    waited=$((waited + 1))
+  done
+  grep -q "DRIVER_SIGNAL TERM" "${driverlog}" || return 1
+  grep -q "DRIVER_EXIT" "${driverlog}" || return 1
+}

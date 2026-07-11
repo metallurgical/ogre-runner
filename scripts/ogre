@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OGRE_VERSION="1.4.12"
+OGRE_VERSION="1.4.13"
 RUNTIME=".ai/.ogre"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -2837,6 +2837,24 @@ PY
     # this script.
     set -m
     (
+      # Forensic-only: this driver has been observed dying outright mid-chain
+      # in real usage with zero trace (no exit sentinel, driverlog cut off
+      # mid-write) - cause unconfirmed after ruling out the two leading
+      # theories (harness reaping backgrounded children across tool-call
+      # boundaries; the LLM CLI child killing its own shared process group on
+      # exit) by direct reproduction attempts, neither of which reproduced a
+      # death. These traps don't change behavior - a caught signal still logs
+      # then exits with the conventional 128+signum code - they just make
+      # sure that *if* it happens again and the cause is a catchable signal
+      # (HUP/TERM/INT), this log has it instead of nothing. Can't catch
+      # SIGKILL - if the driver vanishes with no DRIVER_SIGNAL or DRIVER_EXIT
+      # line below it either way, that itself is the diagnostic: it means an
+      # uncatchable kill or a full process disappearance, not a bash-level
+      # crash.
+      trap 'echo "$(date "+%Y-%m-%dT%H:%M:%S%z") DRIVER_SIGNAL HUP - driver subshell caught SIGHUP, exiting"; exit 129' HUP
+      trap 'echo "$(date "+%Y-%m-%dT%H:%M:%S%z") DRIVER_SIGNAL TERM - driver subshell caught SIGTERM, exiting"; exit 143' TERM
+      trap 'echo "$(date "+%Y-%m-%dT%H:%M:%S%z") DRIVER_SIGNAL INT - driver subshell caught SIGINT, exiting"; exit 130' INT
+      trap 'echo "$(date "+%Y-%m-%dT%H:%M:%S%z") DRIVER_EXIT rc=$?"' EXIT
       local chain_tid="$tid" chain_logpath="$logpath" chain_session="$session_id"
       local rc iterations=0 max_iterations=200
       # This driver subshell's own, real, stable OS pid - same value the

@@ -398,8 +398,8 @@ defaults.plan_reviewer.provider    claude               config.json    --reviewe
 defaults.plan_reviewer.model       claude-sonnet-5      config.json    --model MODEL (ogre review-plan)
 defaults.executor.provider         claude               config.json    --executor PROVIDER (ogre execute)
 defaults.executor.model            claude-sonnet-5      config.json    --model MODEL (ogre execute)
-defaults.diff_reviewer.provider    codex                config.json    - (not read by any command yet)
-defaults.diff_reviewer.model       gpt-5.6-sol          config.json    - (not read by any command yet)
+defaults.diff_reviewer.provider    claude               config.json    - (not read by any command yet)
+defaults.diff_reviewer.model       claude-sonnet-5      config.json    - (not read by any command yet)
 browser_mcp                        (none)               fallback       --mcp-config PATH (ogre execute, [BROWSER-CHECK] steps)
 codex_unsandboxed_browser_check    false                fallback       --codex-unsandboxed-browser-check (ogre execute, codex [BROWSER-CHECK] only)
 ```

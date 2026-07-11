@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OGRE_VERSION="1.4.15"
+OGRE_VERSION="1.4.16"
 RUNTIME=".ai/.ogre"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -84,7 +84,7 @@ write_default_config() {
     "planner": { "provider": "claude", "model": "claude-sonnet-5" },
     "plan_reviewer": { "provider": "claude", "model": "claude-sonnet-5" },
     "executor": { "provider": "claude", "model": "claude-sonnet-5" },
-    "diff_reviewer": { "provider": "codex", "model": "gpt-5.6-sol" }
+    "diff_reviewer": { "provider": "claude", "model": "claude-sonnet-5" }
   },
   "browser_mcp": null
 }

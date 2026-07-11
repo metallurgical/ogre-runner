@@ -300,26 +300,23 @@ Executes one checklist item (or all remaining, with `--all`) from an approved pl
 
 Default with no isolation flag: foreground, brand-new codex/claude session, targeting the lowest-numbered pending step.
 
-Every generated runner prompt also carries context blocks so a fresh session doesn't start blind: the issue's **living knowledge base** (see below), and repo drift — commits landed and uncommitted changes made since the plan file was last written — so a late step trusts the current code over the plan's stale memory of it.
+Every runner prompt also includes the issue's **knowledge base** (`.ai/.ogre/state/issue-<n>-knowledge.md`, updated by each step so the next one starts oriented) and **repo drift** (commits/edits since the plan was last written), so a late step trusts current code over the plan's stale memory of it.
 
-**Living knowledge base.** Each issue keeps `.ai/.ogre/state/issue-<n>-knowledge.md`, updated in place by every step and read by the next, so fresh sessions start oriented instead of re-discovering facts.
+**`[BROWSER-CHECK]` steps** — opt-in: pass `--browser-check` to `/ogre:feature`, or plans never get the tag (you verify manually).
 
-**`[BROWSER-CHECK]` steps.** Opt-in at planning time: pass `--browser-check` to `/ogre:feature` and steps needing real browser rendering are tagged `[BROWSER-CHECK]`. Without that flag (the default) a plan never has any - you verify the feature yourself. With the **`claude` executor** they run **isolated like every other step** as long as a browser MCP is available — so main context stays clean. Ogre finds one from any of: the ambient MCP servers shown in `claude mcp list` (e.g. a Playwright MCP), a `"browser_mcp"` path in `.ai/.ogre/config.json`, or `--mcp-config PATH` on `ogre execute`. (Verified: a spawned `claude -p` inherits the ambient MCP and drives a real headless browser.) If **no** browser MCP is detected, the step automatically falls back to `--main` (runs inline in the current session) so it still completes without a manual retrigger — Ogre prints a NOTE saying so and how to keep it isolated. `--main` is otherwise opt-in only; Ogre never forces it except this fallback.
-
-```jsonc
-// .ai/.ogre/config.json — point browser_mcp at an MCP config for claude spawns
-{ "browser_mcp": "/path/to/playwright-mcp.json" }
-```
-
-**Codex — opt-in only, and it costs full sandboxing for that one step.** With `--executor codex`, a `[BROWSER-CHECK]` step falls back to `--main` by default, even when a Playwright MCP is configured (shown in `codex mcp list`) - that alone is **not** sufficient. Codex's bundled browser plugin defaults to its desktop-app in-app browser, which has no session in a headless `codex exec` and fails; Ogre's codex runner does override that with an explicit instruction to use the external Playwright MCP directly (`browser_navigate`/`browser_snapshot`), which gets the tool call routed correctly - but codex's own sandbox then silently cancels the call anyway, because launching a real browser means spawning a subprocess the sandbox denies. The only way found to make it actually complete is `--dangerously-bypass-approvals-and-sandbox`, which removes **all** sandboxing (filesystem + shell + network) for that spawn, not just the browser tool. Ogre never does this automatically - it requires the explicit `--codex-unsandboxed-browser-check` flag (or `"codex_unsandboxed_browser_check": true` in config.json), and even then it's scoped to only the spawn covering the actual `[BROWSER-CHECK]` step; every other step still runs under `--sandbox workspace-write`. Without the opt-in, codex `[BROWSER-CHECK]` steps fall back to `--main` same as claude does with no browser MCP. Note `--mcp-config` / `browser_mcp` (a config-file path) are `claude`-only; codex reads its own `~/.codex/config.toml` `mcp_servers`.
+| Executor | Runs isolated (real browser) if... | Otherwise |
+| :--- | :--- | :--- |
+| `claude` | a browser MCP is found — ambient `claude mcp list`, `browser_mcp` in config.json, or `--mcp-config` | falls back to `--main`, with a NOTE explaining why |
+| `codex` | `--codex-unsandboxed-browser-check` (or the config.json equivalent) is set **and** a browser MCP is present — codex's own sandbox otherwise blocks launching a real browser | falls back to `--main`, with a NOTE explaining why |
 
 ```jsonc
-// .ai/.ogre/config.json — opt in to a live browser for codex [BROWSER-CHECK] steps
-// (that one spawn runs with NO filesystem/shell/network confinement)
-{ "codex_unsandboxed_browser_check": true }
+// .ai/.ogre/config.json
+{ "browser_mcp": "/path/to/playwright-mcp.json", "codex_unsandboxed_browser_check": true }
 ```
 
-**Auto-fix on a failed `[BROWSER-CHECK]` (automatic in `--all`/`--background`, no flag needed).** A browser-check step is verify-only by design (it can't edit files) - so a real bug it finds would otherwise just be a dead end: `failed`, chain stops, you fix it by hand, re-run manually. Inside a chained run, Ogre instead inserts one ad-hoc `[AUTO-FIX n/2] Fix: <reason>` checklist item immediately before the failed check, using the failed attempt's own log as the problem description. That item is a normal step (full edit rights, same "smallest safe change" / "stop and mark NEEDS INSPECTION if this is ambiguous or needs touching more than ~3 files" rules every step already follows), run in its own fresh session so the re-check afterward is genuinely independent, not the same session convincing itself its own fix worked. Capped at 2 ad-hoc attempts per browser-check item; if it's still failing after that, the chain stops for real and the browser-check item's own ledger entry is marked `failed` with the cap-exceeded reason - the plan file itself keeps every `[AUTO-FIX]` attempt visible, nothing about the originally planned steps is ever touched. Verified end-to-end with a real (non-mocked) executor: a genuinely broken page → detected, ad-hoc fix applied for real, re-verified for real, issue completed with the actual bug fixed. Works the same under `--executor codex --codex-unsandboxed-browser-check`: only the `[BROWSER-CHECK]` re-verification attempts run unsandboxed, the `[AUTO-FIX]` step itself always runs under the normal `--sandbox workspace-write`, never the bypass.
+The codex flag removes **all** sandboxing (filesystem/shell/network) but only for the spawn covering that one `[BROWSER-CHECK]` step — every other step keeps its normal sandbox.
+
+**Auto-fix on a failed `[BROWSER-CHECK]`** (automatic in `--all`/`--background`, no flag needed). A browser-check step can't edit files, so a real bug it finds would otherwise be a dead end. Instead Ogre inserts up to 2 ad-hoc `[AUTO-FIX n/2]` steps (full edit rights, same safety rules as any step) before re-checking, each in its own fresh session so the re-check is genuinely independent. Still failing after 2 → chain stops for real, step marked `failed`. Every attempt stays visible in the plan file; the originally planned steps are never touched.
 
 ### `/ogre:status`
 

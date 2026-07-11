@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OGRE_VERSION="1.4.6"
+OGRE_VERSION="1.4.7"
 RUNTIME=".ai/.ogre"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -2679,6 +2679,19 @@ PY
     # file up front so it's immune to that regardless of what the launching
     # process does after this call returns.
     local driverlog="$logdir/background-driver-$tid.log"
+    # `disown` (below) only stops SIGHUP from killing this job when the
+    # launching shell exits - it does NOT move the job out of that shell's
+    # process group. If anything sends a signal to the whole group (a
+    # `killpg`-style teardown, e.g. a sandboxed session ending - not just the
+    # terminal's stdout closing, which the driverlog redirect above already
+    # covers), a merely-disowned same-pgid child dies with it, silently,
+    # possibly mid-chain with no trace. `set -m` (job control) makes bash put
+    # each background job in its OWN process group, so a group-wide signal
+    # aimed at the launching shell's pgid no longer reaches this one. Toggled
+    # off again immediately after capturing the pid - we don't want job
+    # control's terminal/foreground-process-group semantics for the rest of
+    # this script.
+    set -m
     (
       local chain_tid="$tid" chain_logpath="$logpath" chain_session="$session_id"
       local rc iterations=0 max_iterations=200
@@ -2709,6 +2722,7 @@ PY
       print_job_summary "$issue"
     ) > "$driverlog" 2>&1 &
     local pid=$!
+    set +m
     echo "$pid" > "$pidfile"
     disown "$pid" 2>/dev/null || true
     task_update "$tid" "pid=$pid"

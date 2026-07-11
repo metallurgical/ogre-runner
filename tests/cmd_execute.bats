@@ -643,6 +643,28 @@ print(t['id'])
   [ "$(task_json_field "${tid}" status)" = "passed" ] || return 1
 }
 
+@test "execute --background puts the driver subshell in its own process group, not the launching shell's" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step"
+  local launcher_pgid
+  launcher_pgid="$(ps -o pgid= -p $$ | tr -d ' ')"
+  run "${OGRE_BIN}" execute 42 --background
+  [ "${status}" -eq 0 ] || return 1
+  local bg_pid bg_pgid
+  bg_pid="$(cat .ai/.ogre/tmp/issue-42/*.pid)"
+  # A merely-disowned child stays in the launching shell's process group -
+  # anything that signals that whole group (not just closing its stdout,
+  # which the driver-log redirect already survives) still kills it. `set -m`
+  # around the launch must give it a separate group (pgid == its own pid).
+  bg_pgid="$(ps -o pgid= -p "${bg_pid}" 2>/dev/null | tr -d ' ')"
+  [ -n "${bg_pgid}" ] || return 1
+  [ "${bg_pgid}" != "${launcher_pgid}" ] || return 1
+  [ "${bg_pgid}" = "${bg_pid}" ] || return 1
+  local tid
+  tid="$(python3 -c "import json; print(json.load(open('.ai/.ogre/state/tasks.json'))[0]['id'])")"
+  wait_for_task_status "${tid}" passed 30
+}
+
 @test "execute on a previously-stopped task warns and requires confirmation" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42
   write_plan_with_steps 42 "First step"

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OGRE_VERSION="1.4.5"
+OGRE_VERSION="1.4.6"
 RUNTIME=".ai/.ogre"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -2594,12 +2594,23 @@ PY
             return 0
             ;;
           CAP_EXCEEDED)
-            local x_tid
+            local x_tid last_error
             x_tid="$(find_task_id_by_step "$current_step")"
-            if [ -n "$x_tid" ]; then
-              task_update "$x_tid" "status=failed" "notes=Auto-fix cap ($auto_fix_cap) exceeded - see the plan file for each attempt's own [AUTO-FIX] entry and log."
+            # Fold the real browser error from the LAST attempt into the
+            # ledger note and the stop message, not just a pointer to logs -
+            # the whole point of the cap is a human reads this once and acts,
+            # they shouldn't have to go dig up a log path first to learn what
+            # actually failed.
+            last_error="$(printf '%s' "$fail_reason" | tr '\n' ' ' | tr -s ' ')"
+            if [ "${#last_error}" -gt 600 ]; then
+              last_error="${last_error:0:600}..."
             fi
-            err "[BROWSER-CHECK] still failing after $auto_fix_cap ad-hoc [AUTO-FIX] attempts - stopping the chain. See the plan's [AUTO-FIX] entries and their logs for what was tried."
+            if [ -n "$x_tid" ]; then
+              task_update "$x_tid" "status=failed" "notes=Auto-fix cap ($auto_fix_cap) exceeded. Last verification failure: $last_error -- see the plan file for each [AUTO-FIX] attempt and its own log."
+            fi
+            err "[BROWSER-CHECK] still failing after $auto_fix_cap ad-hoc [AUTO-FIX] attempts - stopping the chain."
+            err "Last verification failure: $last_error"
+            err "See the plan's [AUTO-FIX] entries and their logs for every attempt tried."
             return 1
             ;;
           *) return 1 ;;

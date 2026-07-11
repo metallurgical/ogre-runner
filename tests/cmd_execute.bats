@@ -340,16 +340,29 @@ print(t['id'])
   [[ "${plan_content}" == *"[AUTO-FIX 2/2 fp:"* ]] || return 1
   [[ "${plan_content}" != *"[AUTO-FIX 3/2 fp:"* ]] || return 1
   [[ "${output}" == *"still failing after 2 ad-hoc"* ]] || return 1
+  # The stop message and the ledger note both carry the actual last failure
+  # (from the failed attempt's own log tail), not just a "go read the logs"
+  # pointer - the mock claude's log always contains this line.
+  [[ "${output}" == *"Last verification failure:"* ]] || return 1
+  [[ "${output}" == *"Mock claude -p output"* ]] || return 1
   # The original [BROWSER-CHECK] item's own ledger task ends up explicitly
   # failed with a reason, not stuck at "pending" forever.
-  local browser_check_status
+  local browser_check_status browser_check_notes
   browser_check_status="$(python3 -c "
 import json
 tasks = json.load(open('.ai/.ogre/state/tasks.json'))
 t = [x for x in tasks if x.get('issue')=='42' and (x.get('step') or '').startswith('[BROWSER-CHECK]')]
 print(t[0]['status'] if t else 'MISSING')
 ")"
+  browser_check_notes="$(python3 -c "
+import json
+tasks = json.load(open('.ai/.ogre/state/tasks.json'))
+t = [x for x in tasks if x.get('issue')=='42' and (x.get('step') or '').startswith('[BROWSER-CHECK]')]
+print(t[0].get('notes') or '' if t else '')
+")"
   [ "${browser_check_status}" = "failed" ] || return 1
+  [[ "${browser_check_notes}" == *"Last verification failure:"* ]] || return 1
+  [[ "${browser_check_notes}" == *"Mock claude -p output"* ]] || return 1
 }
 
 @test "execute --all does not auto-fix a failed step that is not [BROWSER-CHECK] - stops immediately, same as before" {
@@ -384,14 +397,24 @@ print(t[0]['status'] if t else 'MISSING')
   [[ "${plan_content}" == *"[AUTO-FIX 2/2 fp:"* ]] || return 1
   [[ "${plan_content}" != *"[AUTO-FIX 3/2 fp:"* ]] || return 1
   [[ "${output}" == *"still failing after 2 ad-hoc"* ]] || return 1
-  local browser_check_status
+  [[ "${output}" == *"Last verification failure:"* ]] || return 1
+  [[ "${output}" == *"Mock codex exec output"* ]] || return 1
+  local browser_check_status browser_check_notes
   browser_check_status="$(python3 -c "
 import json
 tasks = json.load(open('.ai/.ogre/state/tasks.json'))
 t = [x for x in tasks if x.get('issue')=='42' and (x.get('step') or '').startswith('[BROWSER-CHECK]')]
 print(t[0]['status'] if t else 'MISSING')
 ")"
+  browser_check_notes="$(python3 -c "
+import json
+tasks = json.load(open('.ai/.ogre/state/tasks.json'))
+t = [x for x in tasks if x.get('issue')=='42' and (x.get('step') or '').startswith('[BROWSER-CHECK]')]
+print(t[0].get('notes') or '' if t else '')
+")"
   [ "${browser_check_status}" = "failed" ] || return 1
+  [[ "${browser_check_notes}" == *"Last verification failure:"* ]] || return 1
+  [[ "${browser_check_notes}" == *"Mock codex exec output"* ]] || return 1
   # Every spawn ever made must be one of exactly two kinds: an unsandboxed
   # [BROWSER-CHECK] attempt, or a sandboxed [AUTO-FIX] attempt. A synthesized
   # [AUTO-FIX ...] line's own reason text embeds the original failed item's

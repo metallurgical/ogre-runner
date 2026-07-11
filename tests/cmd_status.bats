@@ -129,6 +129,84 @@ PY
   [ "$(task_json_field "${tid}" status)" = "failed" ] || return 1
 }
 
+@test "status auto-resumes a stalled --all chain: dead driver pid, terminal task, steps still pending" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "Step one" "Step two"
+  # Get the issue into "executing" (not "planning") the normal way, and tick
+  # step one, so step two is the sole real pending item - mirrors a chain
+  # that made some progress before its driver vanished.
+  run "${OGRE_BIN}" execute 42
+  [ "${status}" -eq 0 ] || return 1
+  local job_id
+  job_id="$(state_field 42 job_id)"
+
+  # Simulate the driver-death signature directly: a mode=all chain task,
+  # terminal status, a pid that can never be alive, no live process behind
+  # it, with a real pending step left - exactly what's left behind when a
+  # --all --background driver subshell dies between links instead of
+  # spawning the next one.
+  python3 - <<'PY'
+import json, uuid, datetime
+p = ".ai/.ogre/state/tasks.json"
+tasks = json.load(open(p))
+now = datetime.datetime.now().astimezone().isoformat()
+tasks.append({
+    "id": "task-{}".format(uuid.uuid4()), "issue": "42", "type": "execute",
+    "executor": "claude", "model": "claude-sonnet-5", "mode": "all", "freshness": "fresh",
+    "runner": None, "log_path": None, "status": "failed",
+    "pid": 99999999, "exit_code": 0, "session_id": None, "notes": None,
+    "created_at": now, "started_at": now, "ended_at": now, "updated_at": now,
+})
+json.dump(tasks, open(p, "w"), indent=2)
+PY
+
+  local args_file="${TEST_TMP}/claude-args.log"
+  MOCK_CLAUDE_ARGS_FILE="${args_file}" run "${OGRE_BIN}" status 42
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" == *"looks stalled"* ]] || return 1
+  [[ "${output}" == *"Auto-resuming"* ]] || return 1
+
+  # The resume itself runs detached (--background) - poll briefly for the
+  # spawned mock claude to actually have been invoked instead of asserting
+  # immediately and racing it.
+  local waited=0
+  while [ ! -s "${args_file}" ] && [ "${waited}" -lt 20 ]; do
+    sleep 0.2
+    waited=$((waited + 1))
+  done
+  [ -s "${args_file}" ] || return 1
+}
+
+@test "status does not touch a stopped issue even with a dead-pid mode=all task and steps pending" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "Step one" "Step two"
+  run "${OGRE_BIN}" execute 42
+  [ "${status}" -eq 0 ] || return 1
+  "${OGRE_BIN}" stop 42 >/dev/null
+
+  python3 - <<'PY'
+import json, uuid, datetime
+p = ".ai/.ogre/state/tasks.json"
+tasks = json.load(open(p))
+now = datetime.datetime.now().astimezone().isoformat()
+tasks.append({
+    "id": "task-{}".format(uuid.uuid4()), "issue": "42", "type": "execute",
+    "executor": "claude", "model": "claude-sonnet-5", "mode": "all", "freshness": "fresh",
+    "runner": None, "log_path": None, "status": "failed",
+    "pid": 99999999, "exit_code": 0, "session_id": None, "notes": None,
+    "created_at": now, "started_at": now, "ended_at": now, "updated_at": now,
+})
+json.dump(tasks, open(p, "w"), indent=2)
+PY
+
+  local args_file="${TEST_TMP}/claude-args.log"
+  MOCK_CLAUDE_ARGS_FILE="${args_file}" run "${OGRE_BIN}" status 42
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" != *"looks stalled"* ]] || return 1
+  [[ "${output}" != *"Auto-resuming"* ]] || return 1
+  [ ! -f "${args_file}" ] || return 1
+}
+
 @test "status leaves a running task with a live pid untouched" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42
   write_plan_with_steps 42 "First step"

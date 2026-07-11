@@ -88,6 +88,8 @@ A step tagged `[BROWSER-CHECK]` needs a real rendered browser to verify (visual 
 
 The cleanest fix for all of this is to give the executor a browser MCP once — then every case above collapses to "runs isolated, nothing to supervise."
 
+`ogre status <issue>` also self-heals a chain whose `--background` driver died outright (observed in the wild: no crash trace, process just gone, pending steps left with nothing running) — it detects a dead pid on the last `mode=all` chain task with steps still pending and auto-relaunches `--all --background` with the same executor/model, logging "Chain for issue ... looks stalled ... Auto-resuming". This means the poll loop above (which already calls `ogre status`) recovers from that case for free; you don't need separate dead-process detection in the fork. It never touches a `stopped` issue.
+
    The fork's completion generates a `task-notification`, which reliably wakes a fresh turn in this session when it's done - so nothing is missed even with zero other interaction in between. Report that summary to the user when it arrives.
 
    Do **not** use a fork for cases 1-2 above - those already resolve synchronously within the same turn, so forking would only inherit the whole conversation for no benefit.

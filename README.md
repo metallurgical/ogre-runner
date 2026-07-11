@@ -323,7 +323,7 @@ Every generated runner prompt also carries context blocks so a fresh session doe
 
 ### `/ogre:status`
 
-Shows job/task progress from `.ai/.ogre` state.
+Shows job/task progress from `.ai/.ogre` state. Also self-heals a `--all --background` chain whose driver process died outright with steps still pending (no crash trace, just gone) - detects the dead pid on the last chain task and auto-relaunches `--all --background` with the same executor/model. Never touches an issue you explicitly `stop`ped.
 
 ```
 /ogre:status 107

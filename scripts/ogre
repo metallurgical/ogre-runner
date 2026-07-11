@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OGRE_VERSION="1.4.10"
+OGRE_VERSION="1.4.11"
 RUNTIME=".ai/.ogre"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -417,6 +417,75 @@ for t in tasks:
 ' | while IFS= read -r tid; do
     [ -n "$tid" ] && reap_task "$tid"
   done
+}
+
+# maybe_resume_stalled_chain <issue> - a `--all --background` chain link is
+# supposed to keep spawning fresh sessions on its own (should_continue_chain)
+# until nothing pending is left. Observed in the wild: the driver subshell
+# can die outright between one link finishing and the next one starting -
+# no crash trace, no exit sentinel, just gone - leaving pending steps with no
+# task running and nothing to resume it. Call this after reap_all_tasks +
+# sync_state_from_plan (both call sites already run in that order) so a dead
+# pid has already been reaped into a terminal ledger status by the time this
+# runs. Idempotent: the resumed chain's own new task immediately shows up as
+# "running" with a live pid, so a status call landing moments later sees that
+# and does nothing - no risk of double-launching a second chain on top.
+maybe_resume_stalled_chain() {
+  local issue="$1"
+  local spath
+  spath="$(state_path "$issue")"
+  [ -f "$spath" ] || return 0
+  local status pending_left job_id
+  { read -r status; read -r pending_left; read -r job_id; } < <(python3 -c '
+import json
+try:
+    d = json.load(open("'"$spath"'"))
+except Exception:
+    d = {}
+print(d.get("status") or "")
+print(len(d.get("pending_steps") or []))
+print(d.get("job_id") or "")
+')
+  case "$status" in
+    stopped|completed|planning|"") return 0 ;;
+  esac
+  [ "${pending_left:-0}" -gt 0 ] || return 0
+  [ -n "$job_id" ] || return 0
+
+  # Most recently created `mode=all` (chained) task for this issue - that's
+  # the one whose death (if any) means the chain stopped without finishing.
+  # A single-step (non-chained) `execute` never self-resumes and was never
+  # supposed to, so this only ever acts on mode=all tasks.
+  local last_tid last_status last_pid executor model
+  { read -r last_tid; read -r last_status; read -r last_pid; read -r executor; read -r model; } < <(python3 -c '
+import json
+try:
+    tasks = json.load(open("'"$(tasks_path)"'"))
+except Exception:
+    tasks = []
+cand = [t for t in tasks if t.get("issue") == "'"$issue"'" and t.get("mode") == "all"]
+cand.sort(key=lambda t: t.get("created_at") or "")
+if cand:
+    t = cand[-1]
+    for f in ("id", "status", "pid", "executor", "model"):
+        v = t.get(f)
+        print("" if v is None else v)
+else:
+    print(""); print(""); print(""); print(""); print("")
+')
+  [ -n "$last_tid" ] || return 0
+  [ "$last_status" != "running" ] || return 0
+  # Belt and suspenders: if the pid is somehow still alive despite a
+  # terminal ledger status, it's mid-finalization, not stalled - don't race it.
+  [ -z "$last_pid" ] || ! kill -0 "$last_pid" 2>/dev/null || return 0
+
+  log ""
+  log "Chain for issue $issue looks stalled: $pending_left step(s) still pending, last chain task ($last_tid) is '$last_status' with no live process behind it. Auto-resuming a fresh --all --background chain."
+  local -a resume_args=(execute --job "$job_id" --all --background)
+  [ -n "$executor" ] && resume_args+=(--executor "$executor")
+  [ -n "$model" ] && resume_args+=(--model "$model")
+  "$SCRIPT_DIR/ogre" "${resume_args[@]}" \
+    || err "Auto-resume for issue $issue failed to start - resume it yourself: $SCRIPT_DIR/ogre execute --job $job_id --all --background"
 }
 
 tasks_list() {
@@ -2929,6 +2998,7 @@ _status_render() {
     if [ -f "$spath" ]; then
       reap_all_tasks
       sync_state_from_plan "$issue"
+      maybe_resume_stalled_chain "$issue"
       seed_knowledge "$issue"
       print_job_summary "$issue"
       local kpath
@@ -2948,6 +3018,12 @@ _status_render() {
     log "Ogre runtime: $RUNTIME"
     log ""
     compact_tasks_ledger >/dev/null || true
+    # Reaped up front (not just in the "Running/pending tasks" section below)
+    # so a dead pid is already flipped to a terminal ledger status before
+    # maybe_resume_stalled_chain looks at it per-issue in the loop next -
+    # otherwise a genuinely-dead "running" task would look like it's still
+    # in flight and get skipped instead of resumed.
+    reap_all_tasks
     local spath fissue fstatus any="false"
     for spath in "$RUNTIME"/state/issue-*.json; do
       [ -f "$spath" ] || continue
@@ -2961,7 +3037,7 @@ _status_render() {
       fstatus="$(json_field "$spath" status 2>/dev/null || true)"
       case "$fstatus" in
         completed|stopped) ;;
-        *) sync_state_from_plan "$fissue" ;;
+        *) sync_state_from_plan "$fissue"; maybe_resume_stalled_chain "$fissue" ;;
       esac
       print_job_summary "$fissue"
       log ""

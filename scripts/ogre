@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OGRE_VERSION="1.4.3"
+OGRE_VERSION="1.4.4"
 RUNTIME=".ai/.ogre"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -910,7 +910,14 @@ _lk = lock_state(spath)
 text = open(plan_path).read()
 m = re.search(r"##\s*6\.\s*Execution Order(.*?)(\n##\s|\Z)", text, re.S)
 section = m.group(1) if m else text
-items = re.findall(r"^\s*[-*]\s*\[( |x|X)\]\s*(.+)$", section, re.M)
+# Marker capture is deliberately lenient ([^\]]* not just " |x|X"): an
+# executor sometimes invents a non-standard marker on failure (e.g.
+# "[FAILED]") despite being told not to. Strict matching would silently drop
+# that whole line from `items` - not "pending", just gone, breaking chain
+# continuation and any auto-fix logic that depends on seeing it. Any marker
+# other than exactly "x"/"X" is treated as not-done (see is_done below), so
+# the item stays visible and pending instead of vanishing.
+items = re.findall(r"^\s*[-*]\s*\[([^\]]*)\]\s*(.+)$", section, re.M)
 
 try:
     tasks = json.load(open(tasks_path))
@@ -2024,7 +2031,7 @@ Task:
 
 * Execute remaining incomplete checklist items in order, one at a time.
 * Follow the handoff rules exactly for each item.
-* If an item is tagged \`[BROWSER-CHECK]\`, verify it by actually rendering the page/app with your browser MCP tools (e.g. Playwright) - that is what the tag means. ${browser_force_note:+$browser_force_note }If this session has no browser MCP tools available, do NOT mark the item passed or failed: leave it pending and report that a browser MCP must be configured (set \`browser_mcp\` in \`.ai/.ogre/config.json\`, or pass \`--mcp-config\`; see README) or the step re-run with \`--main\`.
+* If an item is tagged \`[BROWSER-CHECK]\`, verify it by actually rendering the page/app with your browser MCP tools (e.g. Playwright) - that is what the tag means. ${browser_force_note:+$browser_force_note }If this session has no browser MCP tools available, do NOT mark the item passed or failed: leave it pending and report that a browser MCP must be configured (set \`browser_mcp\` in \`.ai/.ogre/config.json\`, or pass \`--mcp-config\`; see README) or the step re-run with \`--main\`. If the check genuinely FAILS (real bug found), do NOT edit its checkbox marker or its own checklist line text in any way - leave that exact line untouched (still \`- [ ] <original text>\`, no added notes, no custom marker like \`[FAILED]\`). Report the failure ONLY via \`ogre task-complete <task-id> --status failed\` with the reason in \`--notes\` - Ogre reads that ledger signal (and its own tooling may act on it automatically), not any hand-edited checkbox text.
 * Update each checklist item's status in the source plan only after its own work and validation are complete.
 * Write a concise execution log to \`$link_logpath\`.
 * Hard cap: complete at most $max_steps checklist items in this session, then STOP - even if items remain and your context feels fine. Self-assessed context estimates are unreliable; the cap is the authoritative limit.
@@ -2196,7 +2203,7 @@ PY
     local browser_check_note=""
     if printf '%s' "$step_text" | grep -qi '\[browser-check\]'; then
       target_is_browser_check="true"
-      browser_check_note="This is a [BROWSER-CHECK] step: verify it by actually rendering the page/app with your browser MCP tools (e.g. Playwright), not just by reading markup/CSS/JS.${browser_force_note:+ $browser_force_note}"
+      browser_check_note="This is a [BROWSER-CHECK] step: verify it by actually rendering the page/app with your browser MCP tools (e.g. Playwright), not just by reading markup/CSS/JS.${browser_force_note:+ $browser_force_note} If it genuinely FAILS (real bug found), do NOT edit its checkbox marker or its own checklist line text in any way - leave that exact line untouched (still \`- [ ] <original text>\`, no added notes, no custom marker like \`[FAILED]\`). Report the failure ONLY via \`ogre task-complete <task-id> --status failed\` with the reason in \`--notes\`."
       if [ "$iso" != "main" ]; then
         if browser_mcp_available; then
           log "Step $step_index is [BROWSER-CHECK] - running isolated; the spawned $executor session will verify it with its browser MCP tools (main context untouched)."
@@ -2426,15 +2433,173 @@ PY
     fi
   }
 
+  # Ad-hoc [AUTO-FIX] steps for a failed [BROWSER-CHECK]: capped at this many
+  # per browser-check item (not configurable - if 2 real attempts can't fix
+  # it, it needs a human, not a third guess). See should_continue_chain.
+  local auto_fix_cap=2
+
+  # Finds the ledger task id whose "step" field exactly matches the given
+  # checklist text (sync_state_from_plan auto-seeds one such task per plan
+  # item, matched by exact text - this is how a specific plan line's own
+  # ledger record is found without threading a task id through everything).
+  find_task_id_by_step() {
+    local step_text="$1"
+    python3 - "$(tasks_path)" "$issue" "$step_text" <<'PY'
+import json, sys
+tasks_path, issue, step_text = sys.argv[1:4]
+try:
+    tasks = json.load(open(tasks_path))
+except Exception:
+    tasks = []
+for t in tasks:
+    if t.get("issue") == issue and t.get("step") == step_text:
+        print(t.get("id") or "")
+        sys.exit(0)
+print("")
+PY
+  }
+
+  # Inserts one ad-hoc "- [ ] [AUTO-FIX n/cap fp:<hash>] Fix ...: <reason>"
+  # checklist item into the plan's Execution Order, immediately before the
+  # given (still-pending, unchecked) [BROWSER-CHECK] item's own line -
+  # fingerprinted by a hash of that item's exact text so repeated attempts
+  # are counted correctly regardless of how the plan file shifts around it.
+  # Never touches any other line - the real planned steps stay exactly as
+  # written. Prints OK / CAP_EXCEEDED / NOT_FOUND on stdout; caller checks it.
+  synthesize_auto_fix_step() {
+    local target_text="$1" reason="$2" cap="$3"
+    python3 - "$plan" "$target_text" "$reason" "$cap" <<'PY'
+import hashlib, re, sys
+plan_path, target_text, reason, cap = sys.argv[1:5]
+cap = int(cap)
+text = open(plan_path).read()
+fp = hashlib.md5(target_text.encode()).hexdigest()[:8]
+existing = len(re.findall(r'\[AUTO-FIX \d+/%d fp:%s\]' % (cap, fp), text))
+attempt = existing + 1
+if attempt > cap:
+    print('CAP_EXCEEDED')
+    sys.exit(0)
+target_line_re = re.compile(
+    r'^([ \t]*[-*]\s*\[ \]\s*)' + re.escape(target_text) + r'\s*$', re.M
+)
+m = target_line_re.search(text)
+if not m:
+    print('NOT_FOUND')
+    sys.exit(0)
+snippet = target_text.strip()
+if len(snippet) > 80:
+    snippet = snippet[:80] + '...'
+reason_snippet = reason.strip().replace('\n', ' ')
+if len(reason_snippet) > 600:
+    reason_snippet = reason_snippet[:600] + '...'
+new_line = (
+    '- [ ] [AUTO-FIX {attempt}/{cap} fp:{fp}] Fix the following issue found '
+    'verifying "{snippet}", using the smallest safe change: {reason}. If the '
+    'true fix needs touching more than about 3 files, or the root cause is '
+    'an ambiguous/missing requirement rather than a clear defect, mark this '
+    'NEEDS INSPECTION and stop instead of guessing.\n'
+).format(attempt=attempt, cap=cap, fp=fp, snippet=snippet, reason=reason_snippet)
+insert_at = m.start()
+text = text[:insert_at] + new_line + text[insert_at:]
+open(plan_path, 'w').write(text)
+print('OK')
+PY
+  }
+
+  # Marks the given (currently-pending) [AUTO-FIX ...] line's checkbox [x] in
+  # the plan without claiming success - used when the fix attempt itself
+  # failed to complete (crashed, or explicitly bailed with NEEDS INSPECTION).
+  # This is purely to stop it blocking progress as the perpetual "current"
+  # pending item. Flips ONLY the marker, never the line's own text - changing
+  # the text would break sync_state_from_plan's by-text ledger matching
+  # (it'd look like a brand new checklist item and orphan/duplicate the
+  # existing task instead of resolving it). The attempt-numbered fp tag
+  # already on the line is the visible record that this was one of possibly
+  # several tries; that's enough for a human reading the plan afterward.
+  close_out_stuck_auto_fix_step() {
+    local target_text="$1"
+    python3 - "$plan" "$target_text" <<'PY'
+import re, sys
+plan_path, target_text = sys.argv[1:3]
+text = open(plan_path).read()
+line_re = re.compile(
+    r'^([ \t]*[-*]\s*)\[ \](\s*' + re.escape(target_text) + r'\s*)$', re.M
+)
+m = line_re.search(text)
+if not m:
+    print('NOT_FOUND')
+    sys.exit(0)
+replacement = m.group(1) + '[x]' + m.group(2)
+text = text[:m.start()] + replacement + text[m.end():]
+open(plan_path, 'w').write(text)
+print('OK')
+PY
+  }
+
   # After a link finishes: passed + steps still pending in the plan means it
   # deliberately handed off on its own context budget - spawn a fresh link
-  # to continue. Failed, or nothing left, ends the chain.
+  # to continue. Failed, or nothing left, ends the chain - UNLESS the failure
+  # was on a [BROWSER-CHECK] step (or an [AUTO-FIX] step working to unblock
+  # one) with a real reason to work from (not a crash/fail-closed, which has
+  # nothing to diagnose):
+  #   - current pending item is [BROWSER-CHECK] and it just failed -> insert
+  #     one ad-hoc [AUTO-FIX] attempt ahead of it, capped at auto_fix_cap
+  #     total attempts per browser-check item.
+  #   - current pending item is itself an [AUTO-FIX ...] attempt and IT
+  #     failed to complete -> close it out (tick it, marked "did not
+  #     complete") so the chain falls back to the original [BROWSER-CHECK]
+  #     item on the next turn, which re-triggers the branch above for a
+  #     fresh attempt (still bounded by the same cap, since closing a stuck
+  #     line never resets the count - the count is the number of [AUTO-FIX]
+  #     lines that ever existed for that item, closed or not).
+  #   - anything else failed -> stop, same as always.
   should_continue_chain() {
     local link_tid="$1"
     [ "$mode" = "all" ] || return 1
     local link_status
     link_status="$(task_field "$link_tid" status)"
-    [ "$link_status" = "passed" ] || return 1
+    if [ "$link_status" != "passed" ]; then
+      [ "$link_status" = "failed" ] || return 1
+      local current_step
+      current_step="$(json_field "$spath" current_step 2>/dev/null)"
+      [ -n "$current_step" ] || return 1
+      # [AUTO-FIX ...] must be checked BEFORE the generic [browser-check]
+      # substring match: a synthesized line embeds the target's own text
+      # (which contains "[BROWSER-CHECK]") inside its reason snippet, so the
+      # looser check below would also match an AUTO-FIX line and misfire.
+      if printf '%s' "$current_step" | grep -q '^\[AUTO-FIX '; then
+        close_out_stuck_auto_fix_step "$current_step" >/dev/null
+        log "Ad-hoc [AUTO-FIX] attempt did not complete - closing it out and falling back to the original [BROWSER-CHECK] step for another attempt."
+        sync_state_from_plan "$issue"
+        return 0
+      elif printf '%s' "$current_step" | grep -qi '\[browser-check\]'; then
+        local link_log fail_reason fix_result
+        link_log="$(task_field "$link_tid" log_path)"
+        fail_reason=""
+        [ -n "$link_log" ] && [ -f "$link_log" ] && fail_reason="$(tail -n 60 "$link_log" 2>/dev/null)"
+        [ -n "$fail_reason" ] || return 1  # nothing to diagnose - stay failed, same as today
+        fix_result="$(synthesize_auto_fix_step "$current_step" "$fail_reason" "$auto_fix_cap")"
+        case "$fix_result" in
+          OK)
+            log "[BROWSER-CHECK] failed with a real reason - inserted an ad-hoc [AUTO-FIX] step ahead of it and continuing the chain (capped at $auto_fix_cap attempts)."
+            sync_state_from_plan "$issue"
+            return 0
+            ;;
+          CAP_EXCEEDED)
+            local x_tid
+            x_tid="$(find_task_id_by_step "$current_step")"
+            if [ -n "$x_tid" ]; then
+              task_update "$x_tid" "status=failed" "notes=Auto-fix cap ($auto_fix_cap) exceeded - see the plan file for each attempt's own [AUTO-FIX] entry and log."
+            fi
+            err "[BROWSER-CHECK] still failing after $auto_fix_cap ad-hoc [AUTO-FIX] attempts - stopping the chain. See the plan's [AUTO-FIX] entries and their logs for what was tried."
+            return 1
+            ;;
+          *) return 1 ;;
+        esac
+      else
+        return 1
+      fi
+    fi
     local pending_left
     # $spath is passed as argv (not spliced into the source) so a slug can
     # never break out of the string literal - consistent with every other
@@ -2536,7 +2701,9 @@ PY
       break
     fi
     log ""
-    log "Task $chain_tid passed and stopped early on its own context budget; steps remain - spawning a fresh session to continue."
+    if [ "$(task_field "$chain_tid" status)" = "passed" ]; then
+      log "Task $chain_tid passed and stopped early on its own context budget; steps remain - spawning a fresh session to continue."
+    fi
     chain_tid="$(new_task_id)"
     chain_logpath="$logdir/execute-$(date '+%Y%m%d-%H%M%S')-${chain_tid:5:8}.log"
     write_all_runner "$chain_tid" "$chain_logpath"

@@ -323,6 +323,50 @@ print(t['id'])
   [[ "${output}" != *"no browser MCP was detected"* ]] || return 1
 }
 
+@test "execute --all retries a failed [BROWSER-CHECK] with ad-hoc [AUTO-FIX] attempts, capped at 2, then marks it failed with a reason" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "[BROWSER-CHECK] Verify the modal renders"
+  local args_file="${TEST_TMP}/claude-args.log"
+  MOCK_CLAUDE_ARGS_FILE="${args_file}" MOCK_CLAUDE_STATUS=failed \
+    run "${OGRE_BIN}" execute 42 --all --mcp-config /tmp/fake-mcp.json
+  [ "${status}" -eq 1 ] || return 1
+  # Real retries happened: more than just the one initial spawn.
+  local call_count
+  call_count="$(wc -l < "${args_file}")"
+  [ "${call_count}" -ge 3 ] || return 1
+  local plan_content
+  plan_content="$(cat .ai/.ogre/plans/issue-42.md)"
+  [[ "${plan_content}" == *"[AUTO-FIX 1/2 fp:"* ]] || return 1
+  [[ "${plan_content}" == *"[AUTO-FIX 2/2 fp:"* ]] || return 1
+  [[ "${plan_content}" != *"[AUTO-FIX 3/2 fp:"* ]] || return 1
+  [[ "${output}" == *"still failing after 2 ad-hoc"* ]] || return 1
+  # The original [BROWSER-CHECK] item's own ledger task ends up explicitly
+  # failed with a reason, not stuck at "pending" forever.
+  local browser_check_status
+  browser_check_status="$(python3 -c "
+import json
+tasks = json.load(open('.ai/.ogre/state/tasks.json'))
+t = [x for x in tasks if x.get('issue')=='42' and (x.get('step') or '').startswith('[BROWSER-CHECK]')]
+print(t[0]['status'] if t else 'MISSING')
+")"
+  [ "${browser_check_status}" = "failed" ] || return 1
+}
+
+@test "execute --all does not auto-fix a failed step that is not [BROWSER-CHECK] - stops immediately, same as before" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "Just a normal step"
+  local args_file="${TEST_TMP}/claude-args.log"
+  MOCK_CLAUDE_ARGS_FILE="${args_file}" MOCK_CLAUDE_STATUS=failed \
+    run "${OGRE_BIN}" execute 42 --all
+  [ "${status}" -eq 1 ] || return 1
+  local call_count
+  call_count="$(wc -l < "${args_file}")"
+  [ "${call_count}" -eq 1 ] || return 1
+  local plan_content
+  plan_content="$(cat .ai/.ogre/plans/issue-42.md)"
+  [[ "${plan_content}" != *"AUTO-FIX"* ]] || return 1
+}
+
 @test "execute a [BROWSER-CHECK] step with no browser MCP auto-falls back to --main with a notice" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42
   write_plan_with_steps 42 "[BROWSER-CHECK] Verify the modal renders"

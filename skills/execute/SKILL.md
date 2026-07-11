@@ -90,11 +90,27 @@ The cleanest fix for all of this is to give the executor a browser MCP once — 
 
    Do **not** use a fork for cases 1-2 above - those already resolve synchronously within the same turn, so forking would only inherit the whole conversation for no benefit.
 
+### Auto-Fix Cap Exceeded
+
+When `[BROWSER-CHECK]` keeps failing and the ad-hoc `[AUTO-FIX]` attempts hit `auto_fix_cap`, `ogre execute` marks the task `failed` and exits non-zero with `[BROWSER-CHECK] still failing after N ad-hoc [AUTO-FIX] attempts`. This is **not** an automatic "stop and ask the user" case like line 98's generic rule — decide it yourself:
+
+1. Read the last verification failure (printed, and in the task's `notes`) and the plan's `[AUTO-FIX]` entries to see what was actually tried.
+2. Judge scope: is the failure caused by (or squarely inside) what this plan's steps are building, or is it a pre-existing, site-wide condition unrelated to the feature (e.g. a global asset like `favicon.ico` that 404s on every page, not just the ones this plan touches)?
+   - **Pre-existing / out-of-scope**: resolve it yourself, don't ask the user to pick between options:
+     - Prefer the smallest fix that actually clears the check. If that means creating a small, self-contained file the site/feature is genuinely missing (e.g. a real `favicon.ico` at the site root so the browser's default request stops 404ing), create it — a minimal, real, working file, not a fake stub that only silences the checker.
+     - Revert any half-finished edits the failed `[AUTO-FIX]` attempts left behind that are outside the plan's intended file scope (e.g. a stray `<link>` edit) if they didn't actually fix it.
+     - Mark the original step `passed` via `task-complete --status passed --notes "..."` naming exactly what was created/changed to resolve it, that it's a minimal out-of-scope fix, and that the underlying condition predates this plan.
+     - Report to the user afterward what file(s) you created or reverted, that they're minimal/temporary in nature, and that the blast radius is low (e.g. "created a real `favicon.ico`, one small binary file at the project root, doesn't touch any of the 12 pages' existing icon links"). Tell, don't ask.
+   - **In-scope**: the plan's own change caused it, or fixing it is what the step exists to verify. Still don't open a multi-option menu for the user to pick a fix. Diagnose it yourself from the failure log and the plan's intent, apply the smallest correct fix, and re-verify. Only actually stop and ask when the fix requires a real judgment call outside what the plan already specifies — a genuine product/business decision (which of two valid UX behaviors is wanted), or an irreversible/destructive action (deleting data, dropping a migration, overwriting something not created by this plan). If you can't safely determine the fix and it's neither of those, mark the step `failed` with a note giving the concrete diagnosis and what you tried — report the failure plainly, that's not the same thing as pausing to ask which option to pick.
+3. This same distinction — decide and act vs. stop-and-ask only for irreversible/ambiguous calls — applies to *any* new error that surfaces while resolving one of these, not just the first one. Don't ratchet back to asking just because a second or third error showed up; keep diagnosing and fixing within the cap, and only escalate per the actual escalation criteria above.
+4. Whatever the path, never leave a stray out-of-scope edit (like a partial favicon link change or an orphaned asset file) sitting in the working tree just because the cap was hit — clean it up as part of resolving the step, in the same commit/session, not as a follow-up ask.
+
 ## Behavior
 
 1. Run:
    - `${CLAUDE_PLUGIN_ROOT}/scripts/ogre execute <issue-or-plan> [flags]`
    - **If this exits non-zero because the next step is `[BROWSER-CHECK]`** (only possible with `--all`, see "Auto-Resolving `[BROWSER-CHECK]` Pauses" above): that's a mechanical continuation, not a confirmation case - handle it per that section, do not stop and ask the user.
+   - **If this exits non-zero because the AUTO-FIX cap was exceeded** (`[BROWSER-CHECK] still failing after N ad-hoc [AUTO-FIX] attempts`): not a confirmation case either - handle it per "Auto-Fix Cap Exceeded" above, do not stop and ask the user.
    - **If it exits non-zero for any other reason, or prints `ERROR: Refusing to proceed non-interactively without confirmation...`**: STOP HERE. Do not read the runner file, do not edit any files, even if a runner file already exists from a prior attempt (it may be stale). Relay the exact warning to the user (e.g. "step/job was previously stopped, may depend on unfinished earlier steps") and ask whether to proceed. Only re-run with `--yes` after the user explicitly confirms.
    - **Without `--main`, this call blocks and actually runs codex/claude in a new isolated session** — wait for it to finish; don't do the edit yourself in parallel.
 2. Read the generated runner (mainly relevant when `--main` was used, or to review what the isolated session was told to do):

@@ -382,12 +382,12 @@ Stops, archives, or deletes Ogre runtime data. Does not revert code changes.
 | `--delete` | `/ogre:stop 107 --delete` | Delete the issue's runtime data (after confirmation) |
 | `--list` | `/ogre:stop 107 --list` | Print every runtime file/dir path for the issue without deleting, so the user can pick individually |
 
-### `ogre config`
+### `/ogre:config`
 
-Internal — no `/ogre:config` slash command yet, run it directly. Prints `config.json`'s actual nested shape (not a flattened dot-path list), each line annotated with whether that value came from the file or a hardcoded fallback, and the CLI flag that overrides it for one invocation. Useful because config.json has no schema of its own — a key set in the wrong spot (e.g. top-level instead of inside `"defaults"`) just does nothing, silently.
+Prints `config.json`'s actual nested shape (not a flattened dot-path list), each line annotated with whether that value came from the file or a hardcoded fallback, and the CLI flag that overrides it for one invocation. Useful because config.json has no schema of its own — a key set in the wrong spot (e.g. top-level instead of inside `"defaults"`) just does nothing, silently.
 
-```bash
-scripts/ogre config
+```
+/ogre:config
 ```
 
 ```jsonc
@@ -405,7 +405,7 @@ scripts/ogre config
 
 | Option | Example | Description |
 | :--- | :--- | :--- |
-| `--reset` | `scripts/ogre config --reset` | Back up the current `config.json` to `config.json.bak`, then overwrite it with fresh-install defaults — use when config.json has been hand-edited into a confusing state |
+| `--reset` | `/ogre:config --reset` | Back up the current `config.json` to `config.json.bak`, then overwrite it with fresh-install defaults — use when config.json has been hand-edited into a confusing state |
 
 Precedence for every value shown: CLI flag on the command itself wins, then config.json, then the hardcoded fallback (`claude`/`claude-sonnet-5` for planner/reviewer/executor).
 

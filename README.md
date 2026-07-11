@@ -384,24 +384,23 @@ Stops, archives, or deletes Ogre runtime data. Does not revert code changes.
 
 ### `ogre config`
 
-Internal — no `/ogre:config` slash command yet, run it directly. Shows every key `.ai/.ogre/config.json` actually affects: its dot path, current value, whether that value came from config.json or a hardcoded fallback, and the CLI flag that overrides it for one invocation. Useful because config.json has no schema of its own — a key set in the wrong spot (e.g. top-level instead of inside `"defaults"`) just does nothing, silently.
+Internal — no `/ogre:config` slash command yet, run it directly. Prints `config.json`'s actual nested shape (not a flattened dot-path list), each line annotated with whether that value came from the file or a hardcoded fallback, and the CLI flag that overrides it for one invocation. Useful because config.json has no schema of its own — a key set in the wrong spot (e.g. top-level instead of inside `"defaults"`) just does nothing, silently.
 
 ```bash
 scripts/ogre config
 ```
 
-```
-CONFIG.JSON KEY (dot path)         VALUE                SOURCE         OVERRIDE (flag, command)
-defaults.planner.provider          claude               config.json    --planner PROVIDER (ogre feature)
-defaults.planner.model             claude-sonnet-5      config.json    --model MODEL (ogre feature)
-defaults.plan_reviewer.provider    claude               config.json    --reviewer PROVIDER (ogre review-plan)
-defaults.plan_reviewer.model       claude-sonnet-5      config.json    --model MODEL (ogre review-plan)
-defaults.executor.provider         claude               config.json    --executor PROVIDER (ogre execute)
-defaults.executor.model            claude-sonnet-5      config.json    --model MODEL (ogre execute)
-defaults.diff_reviewer.provider    claude               config.json    - (not read by any command yet)
-defaults.diff_reviewer.model       claude-sonnet-5      config.json    - (not read by any command yet)
-browser_mcp                        (none)               fallback       --mcp-config PATH (ogre execute, [BROWSER-CHECK] steps)
-codex_unsandboxed_browser_check    false                fallback       --codex-unsandboxed-browser-check (ogre execute, codex [BROWSER-CHECK] only)
+```jsonc
+{
+  "defaults": {
+    "planner": { "provider": "claude", "model": "claude-sonnet-5" },        # config.json | override: --planner PROVIDER / --model MODEL (ogre feature)
+    "plan_reviewer": { "provider": "claude", "model": "claude-sonnet-5" },  # config.json | override: --reviewer PROVIDER / --model MODEL (ogre review-plan)
+    "executor": { "provider": "claude", "model": "claude-sonnet-5" },       # config.json | override: --executor PROVIDER / --model MODEL (ogre execute)
+    "diff_reviewer": { "provider": "claude", "model": "claude-sonnet-5" }   # config.json | not read by any command yet
+  },
+  "browser_mcp": null,                                                     # fallback | override: --mcp-config PATH (ogre execute, [BROWSER-CHECK] steps)
+  "codex_unsandboxed_browser_check": false                                 # fallback | override: --codex-unsandboxed-browser-check (ogre execute, codex [BROWSER-CHECK] only)
+}
 ```
 
 | Option | Example | Description |

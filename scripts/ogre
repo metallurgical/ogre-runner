@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OGRE_VERSION="1.4.16"
+OGRE_VERSION="1.4.17"
 RUNTIME=".ai/.ogre"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -3384,27 +3384,46 @@ def get(*keys):
         cur = cur.get(k)
     return cur
 
-rows = [
-    ("defaults.planner.provider",       get("defaults", "planner", "provider"),       "claude", "--planner PROVIDER",  "ogre feature"),
-    ("defaults.planner.model",          get("defaults", "planner", "model"),          "claude-sonnet-5", "--model MODEL", "ogre feature"),
-    ("defaults.plan_reviewer.provider", get("defaults", "plan_reviewer", "provider"), "claude", "--reviewer PROVIDER", "ogre review-plan"),
-    ("defaults.plan_reviewer.model",    get("defaults", "plan_reviewer", "model"),    "claude-sonnet-5", "--model MODEL", "ogre review-plan"),
-    ("defaults.executor.provider",      get("defaults", "executor", "provider"),      "claude", "--executor PROVIDER", "ogre execute"),
-    ("defaults.executor.model",         get("defaults", "executor", "model"),         "claude-sonnet-5", "--model MODEL", "ogre execute"),
-    ("defaults.diff_reviewer.provider", get("defaults", "diff_reviewer", "provider"), "(none)", "-", "not read by any command yet"),
-    ("defaults.diff_reviewer.model",    get("defaults", "diff_reviewer", "model"),    "(none)", "-", "not read by any command yet"),
-    ("browser_mcp",                     get("browser_mcp"),                          "(none)", "--mcp-config PATH", "ogre execute, [BROWSER-CHECK] steps"),
-    ("codex_unsandboxed_browser_check", get("codex_unsandboxed_browser_check"),      "false", "--codex-unsandboxed-browser-check", "ogre execute, codex [BROWSER-CHECK] only"),
+roles = [
+    ("planner",       "claude", "claude-sonnet-5", "--planner PROVIDER / --model MODEL (ogre feature)"),
+    ("plan_reviewer", "claude", "claude-sonnet-5", "--reviewer PROVIDER / --model MODEL (ogre review-plan)"),
+    ("executor",      "claude", "claude-sonnet-5", "--executor PROVIDER / --model MODEL (ogre execute)"),
+    ("diff_reviewer", "claude", "claude-sonnet-5", None),
 ]
 
-widths = (34, 20, 14)
-print("{:<{w0}} {:<{w1}} {:<{w2}} OVERRIDE (flag, command)".format("CONFIG.JSON KEY (dot path)", "VALUE", "SOURCE", w0=widths[0], w1=widths[1], w2=widths[2]))
-for key, val, fallback, flag, cmd in rows:
-    if val is None:
-        shown, source = fallback, "fallback"
-    else:
-        shown, source = val, "config.json"
-    print("{:<{w0}} {:<{w1}} {:<{w2}} {} ({})".format(key, str(shown), source, flag, cmd, w0=widths[0], w1=widths[1], w2=widths[2]))
+role_entries = []
+for name, provider_fb, model_fb, override in roles:
+    provider = get("defaults", name, "provider")
+    model = get("defaults", name, "model")
+    src = "config.json" if provider is not None or model is not None else "fallback"
+    provider = provider if provider is not None else provider_fb
+    model = model if model is not None else model_fb
+    entry = '    "{}": {{ "provider": "{}", "model": "{}" }}'.format(name, provider, model)
+    note = "{} | override: {}".format(src, override) if override else "{} | not read by any command yet".format(src)
+    role_entries.append((entry, note))
+
+browser_mcp = get("browser_mcp")
+bm_src = "config.json" if "browser_mcp" in d else "fallback"
+bm_shown = json.dumps(browser_mcp)
+codex_unsandboxed = d.get("codex_unsandboxed_browser_check")
+cu_src = "config.json" if "codex_unsandboxed_browser_check" in d else "fallback"
+cu_shown = "true" if codex_unsandboxed else "false"
+
+top_entries = [
+    ('  "browser_mcp": {},'.format(bm_shown), "{} | override: --mcp-config PATH (ogre execute, [BROWSER-CHECK] steps)".format(bm_src)),
+    ('  "codex_unsandboxed_browser_check": {}'.format(cu_shown), "{} | override: --codex-unsandboxed-browser-check (ogre execute, codex [BROWSER-CHECK] only)".format(cu_src)),
+]
+
+width = max(len(e) for e, _ in role_entries + top_entries)
+print("{")
+print('  "defaults": {')
+for i, (entry, note) in enumerate(role_entries):
+    comma = "," if i < len(role_entries) - 1 else ""
+    print("{:<{w}}  # {}".format(entry + comma, note, w=width + 1))
+print("  },")
+for entry, note in top_entries:
+    print("{:<{w}}  # {}".format(entry, note, w=width))
+print("}")
 PY
 }
 

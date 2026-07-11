@@ -367,6 +367,62 @@ print(t[0]['status'] if t else 'MISSING')
   [[ "${plan_content}" != *"AUTO-FIX"* ]] || return 1
 }
 
+@test "execute --all --executor codex retries a failed [BROWSER-CHECK] with ad-hoc [AUTO-FIX] attempts, keeping the unsandboxed bypass scoped to only the [BROWSER-CHECK] attempts, never the [AUTO-FIX] step itself" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "[BROWSER-CHECK] Verify the modal renders"
+  local args_file="${TEST_TMP}/codex-args.log"
+  MOCK_CODEX_ARGS_FILE="${args_file}" MOCK_CODEX_STATUS=failed \
+    run "${OGRE_BIN}" execute 42 --all --executor codex --codex-unsandboxed-browser-check
+  [ "${status}" -eq 1 ] || return 1
+  # Real retries happened: more than just the one initial spawn.
+  local call_count
+  call_count="$(wc -l < "${args_file}")"
+  [ "${call_count}" -ge 3 ] || return 1
+  local plan_content
+  plan_content="$(cat .ai/.ogre/plans/issue-42.md)"
+  [[ "${plan_content}" == *"[AUTO-FIX 1/2 fp:"* ]] || return 1
+  [[ "${plan_content}" == *"[AUTO-FIX 2/2 fp:"* ]] || return 1
+  [[ "${plan_content}" != *"[AUTO-FIX 3/2 fp:"* ]] || return 1
+  [[ "${output}" == *"still failing after 2 ad-hoc"* ]] || return 1
+  local browser_check_status
+  browser_check_status="$(python3 -c "
+import json
+tasks = json.load(open('.ai/.ogre/state/tasks.json'))
+t = [x for x in tasks if x.get('issue')=='42' and (x.get('step') or '').startswith('[BROWSER-CHECK]')]
+print(t[0]['status'] if t else 'MISSING')
+")"
+  [ "${browser_check_status}" = "failed" ] || return 1
+  # Every spawn ever made must be one of exactly two kinds: an unsandboxed
+  # [BROWSER-CHECK] attempt, or a sandboxed [AUTO-FIX] attempt. A synthesized
+  # [AUTO-FIX ...] line's own reason text embeds the original failed item's
+  # text (which itself contains "[BROWSER-CHECK]") - if next_step_is_browser_
+  # check()'s substring match ever regresses to matching that embedded text,
+  # an [AUTO-FIX] step would wrongly get spawned fully unsandboxed instead of
+  # under --sandbox workspace-write. Assert the invariant directly: bypass and
+  # workspace-write flags must never both be absent, or both be present, on
+  # any single logged invocation line.
+  while IFS= read -r line; do
+    # Skip "mcp list" calls (the browser-MCP detector, not an exec spawn).
+    case "$line" in mcp*) continue ;; esac
+    case "$line" in
+      *--dangerously-bypass-approvals-and-sandbox*"--sandbox workspace-write"*|*"--sandbox workspace-write"*--dangerously-bypass-approvals-and-sandbox*)
+        echo "invocation had both bypass and workspace-write: $line"; return 1 ;;
+      *--dangerously-bypass-approvals-and-sandbox*) : ;;
+      *"--sandbox workspace-write"*) : ;;
+      *) echo "invocation had neither bypass nor workspace-write: $line"; return 1 ;;
+    esac
+  done < "${args_file}"
+  # 5 real "exec" spawns total (the 1st line is codex's own "mcp list"
+  # browser-MCP probe, not a spawn): 3 unsandboxed [BROWSER-CHECK] attempts
+  # (initial, then one retry after each of the 2 AUTO-FIX attempts), and 2
+  # sandboxed [AUTO-FIX] steps themselves.
+  local exec_count bypass_count
+  exec_count="$(grep -c '^exec ' "${args_file}")"
+  bypass_count="$(grep -c -- "--dangerously-bypass-approvals-and-sandbox" "${args_file}")"
+  [ "${exec_count}" -eq 5 ] || return 1
+  [ "${bypass_count}" -eq 3 ] || return 1
+}
+
 @test "execute a [BROWSER-CHECK] step with no browser MCP auto-falls back to --main with a notice" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42
   write_plan_with_steps 42 "[BROWSER-CHECK] Verify the modal renders"

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OGRE_VERSION="1.4.4"
+OGRE_VERSION="1.4.5"
 RUNTIME=".ai/.ogre"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -1943,9 +1943,17 @@ cmd_execute() {
   runner="$RUNTIME/tmp/issue-$issue/run-next.md"
 
   # True if the plan's current (next-to-run) step is tagged [BROWSER-CHECK].
+  # An [AUTO-FIX ...] line is checked and excluded FIRST: it's a normal edit
+  # step, but its own text embeds the original failed item's text (which
+  # contains "[BROWSER-CHECK]") inside its reason snippet, so the substring
+  # match below would otherwise misfire on it too - wrongly forcing it through
+  # the browser-MCP gate and, for codex, wrongly running it fully unsandboxed
+  # via --dangerously-bypass-approvals-and-sandbox instead of
+  # --sandbox workspace-write (see link_wants_unsandboxed_browser_check).
   next_step_is_browser_check() {
     local next_step
     next_step="$(json_field "$spath" current_step 2>/dev/null)"
+    printf '%s' "$next_step" | grep -q '^\[AUTO-FIX ' && return 1
     printf '%s' "$next_step" | grep -qi '\[browser-check\]'
   }
 
@@ -2201,7 +2209,7 @@ PY
     # tells it to use those tools, and to leave the step pending (not failed)
     # if none are available rather than guessing.
     local browser_check_note=""
-    if printf '%s' "$step_text" | grep -qi '\[browser-check\]'; then
+    if ! printf '%s' "$step_text" | grep -q '^\[AUTO-FIX ' && printf '%s' "$step_text" | grep -qi '\[browser-check\]'; then
       target_is_browser_check="true"
       browser_check_note="This is a [BROWSER-CHECK] step: verify it by actually rendering the page/app with your browser MCP tools (e.g. Playwright), not just by reading markup/CSS/JS.${browser_force_note:+ $browser_force_note} If it genuinely FAILS (real bug found), do NOT edit its checkbox marker or its own checklist line text in any way - leave that exact line untouched (still \`- [ ] <original text>\`, no added notes, no custom marker like \`[FAILED]\`). Report the failure ONLY via \`ogre task-complete <task-id> --status failed\` with the reason in \`--notes\`."
       if [ "$iso" != "main" ]; then
@@ -2646,6 +2654,20 @@ PY
     task_update "$tid" "status=running"
     local exitfile="$RUNTIME/tmp/issue-$issue/$tid.exit"
     local pidfile="$RUNTIME/tmp/issue-$issue/$tid.pid"
+    # Every `log`/`err` call inside this subshell (should_continue_chain's
+    # own messages, the codex unsandboxed-browser-check warning, the finish
+    # summary, ...) would otherwise write to whatever stdout/stderr this
+    # subshell inherited at fork time. `disown` only stops SIGHUP from
+    # killing it when the launching shell exits - it does nothing to keep
+    # that inherited stdout/stderr *writable* afterward. Under `set -e`, the
+    # first `log`/`err` call after the launching shell is gone hits a broken
+    # pipe and kills the whole chain right there, silently, often before a
+    # multi-link chain even reaches its second link - defeating the entire
+    # point of `disown` (surviving the launching shell going away, e.g. a
+    # closed terminal). Redirect this subshell's own stdout/stderr to a real
+    # file up front so it's immune to that regardless of what the launching
+    # process does after this call returns.
+    local driverlog="$logdir/background-driver-$tid.log"
     (
       local chain_tid="$tid" chain_logpath="$logpath" chain_session="$session_id"
       local rc iterations=0 max_iterations=200
@@ -2674,12 +2696,13 @@ PY
       log "Task $chain_tid finished: $final_status"
       log ""
       print_job_summary "$issue"
-    ) &
+    ) > "$driverlog" 2>&1 &
     local pid=$!
     echo "$pid" > "$pidfile"
     disown "$pid" 2>/dev/null || true
     task_update "$tid" "pid=$pid"
     log "Task $tid started in background (pid $pid)."
+    log "Background chain driver log (should_continue_chain/finish messages): $driverlog"
     [ "$mode" = "all" ] && log "Chained --all: will keep spawning fresh sessions automatically as long as each one passes and steps remain."
     log "Check with: ogre status --task $tid"
     if [ "$executor" = "codex" ]; then

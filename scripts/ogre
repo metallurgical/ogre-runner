@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OGRE_VERSION="1.4.13"
+OGRE_VERSION="1.4.15"
 RUNTIME=".ai/.ogre"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -16,10 +16,13 @@ Usage:
   ogre feature <issue-number|issue-url|issue-file> [--blocks 1,2,url,path] [--plan issue-107.md] [--planner claude|codex] [--model MODEL] [--reasoning LEVEL] [--browser-check]
   ogre feature --statement "free text description" [--name my-feature] [--blocks 1,2,url,path] [--plan NAME.md] [--planner claude|codex] [--model MODEL] [--reasoning LEVEL] [--browser-check]
                                    (--browser-check: opt-in - the generated plan tags steps needing real browser verification with [BROWSER-CHECK]. Default omits the tag entirely; the user verifies the feature themselves)
+                                   (--planner/--model omitted: falls back to defaults.planner in .ai/.ogre/config.json, then claude/claude-sonnet-5)
   ogre add-blocker <issue> <blocker-number|url|path> [--force]
   ogre add-blocker <issue> --statement "free text blocker" [--name blocker-slug] [--force]
   ogre review-plan <issue-or-plan> [--reviewer claude|codex] [--model MODEL] [--reasoning LEVEL]
+                                   (--reviewer/--model omitted: falls back to defaults.plan_reviewer in .ai/.ogre/config.json, then claude/claude-sonnet-5)
   ogre execute <issue-or-plan> [--executor codex|claude] [--model MODEL] [--reasoning LEVEL] [--mcp-config PATH] [--all] [--max-steps N] [--fresh|--resume] [--main|--background] [--yes] [--codex-unsandboxed-browser-check]
+                                   (--executor/--model omitted: falls back to defaults.executor in .ai/.ogre/config.json, then claude/claude-sonnet-5)
                                    (--reasoning omitted: uses claude/codex's own default effort level - not forced by Ogre)
                                    (--mcp-config PATH: browser MCP for [BROWSER-CHECK] steps, so they run isolated; also settable as "browser_mcp" in .ai/.ogre/config.json)
                                    (--codex-unsandboxed-browser-check: opt-in - runs a codex [BROWSER-CHECK] step with --dangerously-bypass-approvals-and-sandbox instead of --sandbox workspace-write, because codex's sandbox otherwise blocks the browser subprocess entirely. Removes ALL confinement for that one step only, never on by default; also settable as "codex_unsandboxed_browser_check": true in .ai/.ogre/config.json)
@@ -40,6 +43,8 @@ Usage:
   ogre stop [issue] [--all] [--archive] [--delete] [--list]     (stop the job: cascades to all its tasks)
   ogre stop --job <job-id> [--archive] [--delete] [--list]      (same, addressed by job id)
   ogre stop --task <task-id>                                    (stop ONE task only, job/siblings untouched)
+  ogre config                                                   (show every config.json key ogre reads: dot path, current value/source, and the CLI flag that overrides it)
+  ogre config --reset                                           (back up config.json to config.json.bak, then overwrite it with fresh-install defaults)
   ogre status [issue]
   ogre status --job <job-id>       (same as: ogre status <issue>, addressed by job id)
   ogre status --tasks [issue]
@@ -66,14 +71,14 @@ USAGE
 log() { printf '%s\n' "$*"; }
 err() { printf 'ERROR: %s\n' "$*" >&2; }
 
-ensure_runtime() {
-  mkdir -p "$RUNTIME"/{issues,plans,reviews,logs,state,tmp,archive,prompts}
-  if [ -d "$TEMPLATE_DIR" ]; then
-    cp -f "$TEMPLATE_DIR"/*.md "$RUNTIME/prompts/" 2>/dev/null || true
-  fi
-  [ -f "$RUNTIME/state/tasks.json" ] || printf '[]' > "$RUNTIME/state/tasks.json"
-  if [ ! -f "$RUNTIME/config.json" ]; then
-    cat > "$RUNTIME/config.json" <<'JSON'
+# write_default_config <path> - the fresh-install config.json, unconditionally
+# overwritten to this. planner/plan_reviewer/executor here are read by
+# config_default_role and used as the fallback whenever the matching
+# --planner/--reviewer/--executor (and their --model) flag is omitted on the
+# CLI - CLI flags always win. diff_reviewer has no consumer yet (no command
+# uses that role) - it's reserved, not currently wired to anything.
+write_default_config() {
+  cat > "$1" <<'JSON'
 {
   "defaults": {
     "planner": { "provider": "claude", "model": "claude-sonnet-5" },
@@ -84,7 +89,15 @@ ensure_runtime() {
   "browser_mcp": null
 }
 JSON
+}
+
+ensure_runtime() {
+  mkdir -p "$RUNTIME"/{issues,plans,reviews,logs,state,tmp,archive,prompts}
+  if [ -d "$TEMPLATE_DIR" ]; then
+    cp -f "$TEMPLATE_DIR"/*.md "$RUNTIME/prompts/" 2>/dev/null || true
   fi
+  [ -f "$RUNTIME/state/tasks.json" ] || printf '[]' > "$RUNTIME/state/tasks.json"
+  [ -f "$RUNTIME/config.json" ] || write_default_config "$RUNTIME/config.json"
 }
 
 now_iso() { date '+%Y-%m-%dT%H:%M:%S%z'; }
@@ -127,6 +140,20 @@ config_codex_unsandboxed_browser_check() {
 try: d = json.load(open(sys.argv[1]))
 except Exception: print("false"); sys.exit(0)
 print("true" if d.get("codex_unsandboxed_browser_check") else "false")' "$cfg"
+}
+
+# config_default_role <role> <field> - reads .defaults.<role>.<field> from
+# .ai/.ogre/config.json (empty if unset/missing/no config file). role is one
+# of planner|plan_reviewer|executor|diff_reviewer; field is provider|model.
+# CLI flags always win over this - callers only consult it when the
+# corresponding flag was not passed.
+config_default_role() {
+  local cfg="$RUNTIME/config.json" role="$1" field="$2"
+  [ -f "$cfg" ] || return 0
+  python3 -c 'import json,sys
+try: d = json.load(open(sys.argv[1]))
+except Exception: sys.exit(0)
+print(((d.get("defaults") or {}).get(sys.argv[2]) or {}).get(sys.argv[3]) or "")' "$cfg" "$role" "$field"
 }
 
 gen_uuid() {
@@ -1600,7 +1627,7 @@ cmd_init() {
 
 cmd_feature() {
   ensure_runtime
-  local current="" plan_name="" planner="claude" model="claude-sonnet-5" reasoning="" statement="" name="" browser_check="false"
+  local current="" plan_name="" planner="" model="" reasoning="" statement="" name="" browser_check="false"
   # Blockers are collected as two parallel arrays: block_refs[i] is the
   # blocker reference, block_remarks[i] its (optional) freeform status remark.
   # `--blocks a,b` adds refs with no remark; `--blocker REF --remarks TEXT`
@@ -1626,7 +1653,7 @@ cmd_feature() {
         [ ${#block_refs[@]} -gt 0 ] || { err "--remarks must follow a --blocker (or --blocks) it annotates"; exit 1; }
         block_remarks[$((${#block_remarks[@]} - 1))]="${2:-}"; shift 2 ;;
       --plan) plan_name="${2:-}"; shift 2 ;;
-      --planner) planner="${2:-claude}"; shift 2 ;;
+      --planner) planner="${2:-}"; shift 2 ;;
       --model) model="${2:-}"; shift 2 ;;
       --reasoning) reasoning="${2:-}"; shift 2 ;;
       --statement) statement="${2:-}"; shift 2 ;;
@@ -1635,6 +1662,13 @@ cmd_feature() {
       *) err "Unknown option: $1"; exit 1 ;;
     esac
   done
+
+  # --planner/--model win if passed; else fall back to defaults.planner in
+  # .ai/.ogre/config.json; else the hardcoded claude/claude-sonnet-5 default.
+  [ -n "$planner" ] || planner="$(config_default_role planner provider)"
+  [ -n "$planner" ] || planner="claude"
+  [ -n "$model" ] || model="$(config_default_role planner model)"
+  [ -n "$model" ] || model="claude-sonnet-5"
 
   [ -n "$current" ] || [ -n "$statement" ] || { err "Provide an issue number/url/path, or --statement \"free text\""; usage; exit 1; }
 
@@ -1947,17 +1981,24 @@ EOF2
 
 cmd_review_plan() {
   ensure_runtime
-  local target="${1:-}" reviewer="claude" model="claude-sonnet-5" reasoning=""
+  local target="${1:-}" reviewer="" model="" reasoning=""
   [ -n "$target" ] || { err "Missing issue or plan path"; usage; exit 1; }
   shift || true
   while [ $# -gt 0 ]; do
     case "$1" in
-      --reviewer) reviewer="${2:-claude}"; shift 2 ;;
+      --reviewer) reviewer="${2:-}"; shift 2 ;;
       --model) model="${2:-}"; shift 2 ;;
       --reasoning) reasoning="${2:-}"; shift 2 ;;
       *) err "Unknown option: $1"; exit 1 ;;
     esac
   done
+
+  # --reviewer/--model win if passed; else fall back to defaults.plan_reviewer
+  # in .ai/.ogre/config.json; else the hardcoded claude/claude-sonnet-5 default.
+  [ -n "$reviewer" ] || reviewer="$(config_default_role plan_reviewer provider)"
+  [ -n "$reviewer" ] || reviewer="claude"
+  [ -n "$model" ] || model="$(config_default_role plan_reviewer model)"
+  [ -n "$model" ] || model="claude-sonnet-5"
 
   local plan issue runner review_dir review_path
   plan="$(get_plan_path "$target")"
@@ -2001,7 +2042,7 @@ cmd_execute() {
   #   new        - default: foreground, brand-new codex/claude session, isolated from main context
   #   main       - run inline in the current Claude Code session (no subprocess spawned)
   #   background - same isolation as "new" but detached/non-blocking
-  local target="" executor="claude" model="" reasoning="" mode="next" freshness="fresh" iso="new" job_id="" task_id="" step_n="" assume_yes="false" max_steps="3" retry="false" mcp_config="" codex_unsandboxed_browser_check="false"
+  local target="" executor="" model="" reasoning="" mode="next" freshness="fresh" iso="new" job_id="" task_id="" step_n="" assume_yes="false" max_steps="3" retry="false" mcp_config="" codex_unsandboxed_browser_check="false"
   if [ $# -gt 0 ] && [[ ! "$1" =~ ^-- ]]; then
     target="$1"; shift
   fi
@@ -2010,7 +2051,7 @@ cmd_execute() {
       --job) job_id="${2:-}"; shift 2 ;;
       --task) task_id="${2:-}"; shift 2 ;;
       --step) step_n="${2:-}"; shift 2 ;;
-      --executor) executor="${2:-claude}"; shift 2 ;;
+      --executor) executor="${2:-}"; shift 2 ;;
       --model) model="${2:-}"; shift 2 ;;
       --reasoning) reasoning="${2:-}"; shift 2 ;;
       --mcp-config) mcp_config="${2:-}"; shift 2 ;;
@@ -2028,6 +2069,10 @@ cmd_execute() {
       *) err "Unknown option: $1"; exit 1 ;;
     esac
   done
+  # --executor wins if passed; else fall back to defaults.executor in
+  # .ai/.ogre/config.json; else the hardcoded claude default.
+  [ -n "$executor" ] || executor="$(config_default_role executor provider)"
+  [ -n "$executor" ] || executor="claude"
   # Browser MCP for [BROWSER-CHECK] steps: --mcp-config flag wins, else the
   # optional browser_mcp field in .ai/.ogre/config.json. When set, it is passed
   # to spawned `claude` sessions (--mcp-config) so a browser-check step can
@@ -2048,6 +2093,7 @@ cmd_execute() {
   if [ "$executor" = "codex" ]; then
     browser_force_note="Browser tools (mandatory for any [BROWSER-CHECK] work): use ONLY the external \"playwright\" MCP server tools (browser_navigate, browser_snapshot, etc.) directly. Do NOT use node_repl, the in-app browser, agent.browsers, or browser-client - those require the Codex desktop app and have no session in this headless spawn, so they will fail."
   fi
+  [ -n "$model" ] || model="$(config_default_role executor model)"
   if [ -z "$model" ]; then
     case "$executor" in
       codex) model="gpt-5.6-sol" ;;
@@ -3291,6 +3337,77 @@ PY
   fi
 }
 
+# cmd_config - print every config.json key ogre actually reads: its dot path,
+# current value (config.json if set, else the hardcoded fallback), and the
+# CLI flag/command that overrides it for one invocation. Exists because
+# config.json has no schema of its own and a key set in the wrong place
+# (e.g. inside "defaults" vs top-level) silently does nothing.
+# --reset backs up the current file to config.json.bak, then overwrites
+# config.json with the fresh-install defaults (same as a brand-new project).
+cmd_config() {
+  local reset="false"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --reset) reset="true"; shift ;;
+      *) err "Unknown option: $1"; exit 1 ;;
+    esac
+  done
+  ensure_runtime
+  local cfg="$RUNTIME/config.json"
+  if [ "$reset" = "true" ]; then
+    if [ -f "$cfg" ]; then
+      cp -f "$cfg" "$cfg.bak"
+      log "Backed up previous config to $cfg.bak"
+    fi
+    write_default_config "$cfg"
+    log "Reset $cfg to fresh-install defaults."
+    log ""
+  fi
+  log "Config file: $cfg"
+  log ""
+  python3 - "$cfg" <<'PY'
+import json, os, sys
+
+path = sys.argv[1]
+d = {}
+if os.path.isfile(path):
+    try:
+        d = json.load(open(path))
+    except Exception:
+        d = {}
+
+def get(*keys):
+    cur = d
+    for k in keys:
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(k)
+    return cur
+
+rows = [
+    ("defaults.planner.provider",       get("defaults", "planner", "provider"),       "claude", "--planner PROVIDER",  "ogre feature"),
+    ("defaults.planner.model",          get("defaults", "planner", "model"),          "claude-sonnet-5", "--model MODEL", "ogre feature"),
+    ("defaults.plan_reviewer.provider", get("defaults", "plan_reviewer", "provider"), "claude", "--reviewer PROVIDER", "ogre review-plan"),
+    ("defaults.plan_reviewer.model",    get("defaults", "plan_reviewer", "model"),    "claude-sonnet-5", "--model MODEL", "ogre review-plan"),
+    ("defaults.executor.provider",      get("defaults", "executor", "provider"),      "claude", "--executor PROVIDER", "ogre execute"),
+    ("defaults.executor.model",         get("defaults", "executor", "model"),         "claude-sonnet-5", "--model MODEL", "ogre execute"),
+    ("defaults.diff_reviewer.provider", get("defaults", "diff_reviewer", "provider"), "(none)", "-", "not read by any command yet"),
+    ("defaults.diff_reviewer.model",    get("defaults", "diff_reviewer", "model"),    "(none)", "-", "not read by any command yet"),
+    ("browser_mcp",                     get("browser_mcp"),                          "(none)", "--mcp-config PATH", "ogre execute, [BROWSER-CHECK] steps"),
+    ("codex_unsandboxed_browser_check", get("codex_unsandboxed_browser_check"),      "false", "--codex-unsandboxed-browser-check", "ogre execute, codex [BROWSER-CHECK] only"),
+]
+
+widths = (34, 20, 14)
+print("{:<{w0}} {:<{w1}} {:<{w2}} OVERRIDE (flag, command)".format("CONFIG.JSON KEY (dot path)", "VALUE", "SOURCE", w0=widths[0], w1=widths[1], w2=widths[2]))
+for key, val, fallback, flag, cmd in rows:
+    if val is None:
+        shown, source = fallback, "fallback"
+    else:
+        shown, source = val, "config.json"
+    print("{:<{w0}} {:<{w1}} {:<{w2}} {} ({})".format(key, str(shown), source, flag, cmd, w0=widths[0], w1=widths[1], w2=widths[2]))
+PY
+}
+
 main() {
   local cmd="${1:-}"
   shift || true
@@ -3304,6 +3421,7 @@ main() {
     task-list) cmd_task_list "$@" ;;
     task-complete) cmd_task_complete "$@" ;;
     stop) cmd_stop "$@" ;;
+    config) cmd_config "$@" ;;
     -h|--help|help|"") usage ;;
     *) err "Unknown command: $cmd"; usage; exit 1 ;;
   esac

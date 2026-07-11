@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OGRE_VERSION="1.4.2"
+OGRE_VERSION="1.4.3"
 RUNTIME=".ai/.ogre"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -18,9 +18,10 @@ Usage:
   ogre add-blocker <issue> <blocker-number|url|path> [--force]
   ogre add-blocker <issue> --statement "free text blocker" [--name blocker-slug] [--force]
   ogre review-plan <issue-or-plan> [--reviewer claude|codex] [--model MODEL] [--reasoning LEVEL]
-  ogre execute <issue-or-plan> [--executor codex|claude] [--model MODEL] [--reasoning LEVEL] [--mcp-config PATH] [--all] [--max-steps N] [--fresh|--resume] [--main|--background] [--yes]
+  ogre execute <issue-or-plan> [--executor codex|claude] [--model MODEL] [--reasoning LEVEL] [--mcp-config PATH] [--all] [--max-steps N] [--fresh|--resume] [--main|--background] [--yes] [--codex-unsandboxed-browser-check]
                                    (--reasoning omitted: uses claude/codex's own default effort level - not forced by Ogre)
                                    (--mcp-config PATH: browser MCP for [BROWSER-CHECK] steps, so they run isolated; also settable as "browser_mcp" in .ai/.ogre/config.json)
+                                   (--codex-unsandboxed-browser-check: opt-in - runs a codex [BROWSER-CHECK] step with --dangerously-bypass-approvals-and-sandbox instead of --sandbox workspace-write, because codex's sandbox otherwise blocks the browser subprocess entirely. Removes ALL confinement for that one step only, never on by default; also settable as "codex_unsandboxed_browser_check": true in .ai/.ogre/config.json)
   ogre execute --job <job-id> [same flags as above]              (same, addressed by job id)
   ogre execute <issue-or-plan> --task <task-id>                  (target one specific seeded step out of order)
   ogre execute <issue-or-plan> --step <n>                        (target step N, 1-based, out of order)
@@ -106,6 +107,25 @@ config_browser_mcp() {
 try: d = json.load(open(sys.argv[1]))
 except Exception: sys.exit(0)
 print(d.get("browser_mcp") or "")' "$cfg"
+}
+
+# config_codex_unsandboxed_browser_check - the optional top-level
+# "codex_unsandboxed_browser_check" boolean field from .ai/.ogre/config.json.
+# Prints "true"/"false". Off by default: opting in means a codex
+# [BROWSER-CHECK] spawn runs with --dangerously-bypass-approvals-and-sandbox
+# instead of --sandbox workspace-write, because codex's sandbox blocks the
+# subprocess spawn a real browser needs (confirmed 2026-07-11 - not a tool
+# approval issue, not a network issue, the sandbox itself denies launching
+# Chromium). That flag removes ALL confinement (filesystem/shell/network) for
+# that one spawn, not just the browser tool, so this is never assumed - the
+# user explicitly accepts that trade for a live browser window under codex.
+config_codex_unsandboxed_browser_check() {
+  local cfg="$RUNTIME/config.json"
+  [ -f "$cfg" ] || { printf 'false'; return 0; }
+  python3 -c 'import json,sys
+try: d = json.load(open(sys.argv[1]))
+except Exception: print("false"); sys.exit(0)
+print("true" if d.get("codex_unsandboxed_browser_check") else "false")' "$cfg"
 }
 
 gen_uuid() {
@@ -1830,7 +1850,7 @@ cmd_execute() {
   #   new        - default: foreground, brand-new codex/claude session, isolated from main context
   #   main       - run inline in the current Claude Code session (no subprocess spawned)
   #   background - same isolation as "new" but detached/non-blocking
-  local target="" executor="claude" model="" reasoning="" mode="next" freshness="fresh" iso="new" job_id="" task_id="" step_n="" assume_yes="false" max_steps="3" retry="false" mcp_config=""
+  local target="" executor="claude" model="" reasoning="" mode="next" freshness="fresh" iso="new" job_id="" task_id="" step_n="" assume_yes="false" max_steps="3" retry="false" mcp_config="" codex_unsandboxed_browser_check="false"
   if [ $# -gt 0 ] && [[ ! "$1" =~ ^-- ]]; then
     target="$1"; shift
   fi
@@ -1843,6 +1863,7 @@ cmd_execute() {
       --model) model="${2:-}"; shift 2 ;;
       --reasoning) reasoning="${2:-}"; shift 2 ;;
       --mcp-config) mcp_config="${2:-}"; shift 2 ;;
+      --codex-unsandboxed-browser-check) codex_unsandboxed_browser_check="true"; shift ;;
       --max-steps) max_steps="${2:-3}"; shift 2 ;;
       --retry) retry="true"; shift ;;
       --all) mode="all"; shift ;;
@@ -1865,6 +1886,7 @@ cmd_execute() {
   # automatic path just works. codex relies on its own ~/.codex/config.toml
   # mcp_servers (this flag/field does not apply to codex).
   [ -n "$mcp_config" ] || mcp_config="$(config_browser_mcp)"
+  [ "$codex_unsandboxed_browser_check" = "true" ] || codex_unsandboxed_browser_check="$(config_codex_unsandboxed_browser_check)"
   # For a codex executor, [BROWSER-CHECK] steps must be steered to the external
   # Playwright MCP: Codex's bundled browser plugin otherwise routes browser
   # work to its desktop-app in-app browser (node_repl/browser-client), which
@@ -1895,6 +1917,14 @@ cmd_execute() {
   fi
 
   local plan issue runner logdir logpath tid spath
+  # Set true only for the single-step (non --all) path, when the specifically
+  # targeted task's own text is tagged [BROWSER-CHECK] - --task/--step can
+  # pick a step out of order, so this must reflect the actual picked task,
+  # not next_step_is_browser_check()'s plan-sequential "current_step" (which
+  # --all mode uses instead, re-checked fresh per chain link). Read by
+  # run_link_foreground/run_link_background_body to scope the codex
+  # unsandboxed-browser-check bypass to only the step that actually needs it.
+  local target_is_browser_check="false"
   plan="$(get_plan_path "$target")"
   [ -f "$plan" ] || { err "Plan not found: $plan"; exit 1; }
   issue="$(slug_from_issue "$plan")"
@@ -1934,15 +1964,21 @@ cmd_execute() {
         claude mcp list </dev/null 2>/dev/null | grep -qiE 'playwright|browser|chrome|puppeteer'
         ;;
       codex)
-        # Verified working, but ONLY when the runner forces the external
-        # Playwright MCP over Codex's desktop-app in-app browser (node_repl /
-        # browser-client, agent.browsers.get("iab")) - that in-app browser has
-        # no session in a headless `codex exec` and Codex's bundled browser
-        # plugin otherwise steers it there and fails. So require a real
-        # external browser-driver MCP (playwright/puppeteer) in `codex mcp
-        # list`, not just any "browser"-ish string (which also matches the
-        # in-app node_repl server). browser_force_note injects the "use the
-        # external MCP, not the in-app browser" instruction into the runner.
+        # Forcing the external Playwright MCP over Codex's desktop-app in-app
+        # browser (node_repl/browser-client/agent.browsers.get("iab")) gets
+        # the tool call routed correctly, but codex's own sandbox then denies
+        # the subprocess spawn a real browser needs (launching Chromium) -
+        # confirmed 2026-07-11 by direct repro; a plain `codex mcp list`
+        # showing playwright is NOT sufficient signal on its own (false
+        # positive - the tool call still gets silently cancelled). The only
+        # way found to make it actually complete is
+        # --dangerously-bypass-approvals-and-sandbox, which removes ALL
+        # sandboxing for that spawn, so it's never assumed here - it's gated
+        # on the explicit opt-in (--codex-unsandboxed-browser-check /
+        # codex_unsandboxed_browser_check in config.json). Without the
+        # opt-in, codex always falls back to --main for [BROWSER-CHECK],
+        # which is correct given it genuinely can't verify it isolated.
+        [ "$codex_unsandboxed_browser_check" = "true" ] || return 1
         command -v codex >/dev/null 2>&1 || return 1
         codex mcp list </dev/null 2>/dev/null | grep -qiE 'playwright|puppeteer'
         ;;
@@ -2159,6 +2195,7 @@ PY
     # if none are available rather than guessing.
     local browser_check_note=""
     if printf '%s' "$step_text" | grep -qi '\[browser-check\]'; then
+      target_is_browser_check="true"
       browser_check_note="This is a [BROWSER-CHECK] step: verify it by actually rendering the page/app with your browser MCP tools (e.g. Playwright), not just by reading markup/CSS/JS.${browser_force_note:+ $browser_force_note}"
       if [ "$iso" != "main" ]; then
         if browser_mcp_available; then
@@ -2282,13 +2319,34 @@ PY
   # Runs one subprocess link (foreground, blocking) for the given tid/runner/
   # logpath/session id, streaming to both stdout and the log file. Echoes
   # the exit code as the last line of stdout (caller captures it).
+  # True if THIS about-to-run link should use codex's unsandboxed browser-check
+  # bypass: opted in, AND the step this link is actually about to work on is
+  # tagged [BROWSER-CHECK]. --all mode re-checks the plan's live next step
+  # (chain links are spawned one at a time, state is synced between them);
+  # single-step mode uses the specifically targeted task's own text (set once
+  # into target_is_browser_check, since --task/--step can go out of order).
+  link_wants_unsandboxed_browser_check() {
+    [ "$codex_unsandboxed_browser_check" = "true" ] || return 1
+    if [ "$mode" = "all" ]; then
+      next_step_is_browser_check
+    else
+      [ "$target_is_browser_check" = "true" ]
+    fi
+  }
+
   run_link_foreground() {
     local link_tid="$1" link_runner="$2" link_logpath="$3" link_session="$4"
     local rc
     set +e
     case "$executor" in
       codex)
-        local -a codex_args=(exec --skip-git-repo-check --sandbox workspace-write)
+        local -a codex_args=(exec --skip-git-repo-check)
+        if link_wants_unsandboxed_browser_check; then
+          log "WARNING: running this codex step UNSANDBOXED (--dangerously-bypass-approvals-and-sandbox) - opted in via --codex-unsandboxed-browser-check/config for its [BROWSER-CHECK] step. No filesystem/shell/network confinement for this one spawn."
+          codex_args+=(--dangerously-bypass-approvals-and-sandbox)
+        else
+          codex_args+=(--sandbox workspace-write)
+        fi
         [ -n "$model" ] && codex_args+=(-m "$model")
         [ -n "$reasoning" ] && codex_args+=(-c "model_reasoning_effort=$reasoning")
         codex "${codex_args[@]}" - < "$link_runner" | tee "$link_logpath"
@@ -2316,7 +2374,13 @@ PY
     local link_tid="$1" link_runner="$2" link_logpath="$3" link_session="$4"
     case "$executor" in
       codex)
-        local -a codex_args=(exec --skip-git-repo-check --sandbox workspace-write)
+        local -a codex_args=(exec --skip-git-repo-check)
+        if link_wants_unsandboxed_browser_check; then
+          log "WARNING: running this codex step UNSANDBOXED (--dangerously-bypass-approvals-and-sandbox) - opted in via --codex-unsandboxed-browser-check/config for its [BROWSER-CHECK] step. No filesystem/shell/network confinement for this one spawn."
+          codex_args+=(--dangerously-bypass-approvals-and-sandbox)
+        else
+          codex_args+=(--sandbox workspace-write)
+        fi
         [ -n "$model" ] && codex_args+=(-m "$model")
         [ -n "$reasoning" ] && codex_args+=(-c "model_reasoning_effort=$reasoning")
         codex "${codex_args[@]}" - < "$link_runner" > "$link_logpath" 2>&1

@@ -293,6 +293,7 @@ Executes one checklist item (or all remaining, with `--all`) from an approved pl
 | `--resume` | `/ogre:execute 107 --resume` | Resume prior context for this step instead of starting fresh |
 | `--main` | `/ogre:execute 107 --main` | Run inline in the current Claude Code session, no subprocess spawned. Opt-in only (Ogre forces it only as the browser-check fallback when no browser MCP is detected); defeats Ogre's context-isolation purpose if habitual |
 | `--mcp-config PATH` | `/ogre:execute 107 --mcp-config ./playwright-mcp.json` | Browser MCP config for the spawned `claude` session, so `[BROWSER-CHECK]` steps run isolated instead of falling back to `--main`. Also settable as `"browser_mcp"` in `.ai/.ogre/config.json` |
+| `--codex-unsandboxed-browser-check` | `/ogre:execute 107 --executor codex --codex-unsandboxed-browser-check` | Opt-in only. Lets a codex `[BROWSER-CHECK]` step actually run isolated with a real browser, at the cost of spawning that one step with `--dangerously-bypass-approvals-and-sandbox` instead of `--sandbox workspace-write` - no filesystem/shell/network confinement for that spawn. Also settable as `"codex_unsandboxed_browser_check": true` in `.ai/.ogre/config.json`. See the Codex section below for why this exists |
 | `--background` | `/ogre:execute 107 --background` | Same isolation as default (new session) but detached/non-blocking |
 | `--yes` | `/ogre:execute 107 --yes` | Required to proceed non-interactively when the step/job was previously `stopped`, or jumping to an out-of-order step whose earlier steps aren't `passed`. Only pass after explicit user confirmation |
 
@@ -309,7 +310,13 @@ Every generated runner prompt also carries context blocks so a fresh session doe
 { "browser_mcp": "/path/to/playwright-mcp.json" }
 ```
 
-**Codex (verified):** with `--executor codex`, a `[BROWSER-CHECK]` step **also runs isolated — but only if a Playwright MCP is configured for codex** (shown in `codex mcp list`). Codex's bundled browser plugin defaults to its desktop-app in-app browser, which has no session in a headless `codex exec` and fails; Ogre's codex runner overrides that with an explicit instruction to use the external Playwright MCP directly (`browser_navigate`/`browser_snapshot`), and that drives a real headless browser (verified). If no external Playwright/Puppeteer MCP is in `codex mcp list`, the step falls back to `--main`. Note `--mcp-config` / `browser_mcp` (a config-file path) are `claude`-only; codex reads its own `~/.codex/config.toml` `mcp_servers`.
+**Codex — opt-in only, and it costs full sandboxing for that one step.** With `--executor codex`, a `[BROWSER-CHECK]` step falls back to `--main` by default, even when a Playwright MCP is configured (shown in `codex mcp list`) - that alone is **not** sufficient. Codex's bundled browser plugin defaults to its desktop-app in-app browser, which has no session in a headless `codex exec` and fails; Ogre's codex runner does override that with an explicit instruction to use the external Playwright MCP directly (`browser_navigate`/`browser_snapshot`), which gets the tool call routed correctly - but codex's own sandbox then silently cancels the call anyway, because launching a real browser means spawning a subprocess the sandbox denies. The only way found to make it actually complete is `--dangerously-bypass-approvals-and-sandbox`, which removes **all** sandboxing (filesystem + shell + network) for that spawn, not just the browser tool. Ogre never does this automatically - it requires the explicit `--codex-unsandboxed-browser-check` flag (or `"codex_unsandboxed_browser_check": true` in config.json), and even then it's scoped to only the spawn covering the actual `[BROWSER-CHECK]` step; every other step still runs under `--sandbox workspace-write`. Without the opt-in, codex `[BROWSER-CHECK]` steps fall back to `--main` same as claude does with no browser MCP. Note `--mcp-config` / `browser_mcp` (a config-file path) are `claude`-only; codex reads its own `~/.codex/config.toml` `mcp_servers`.
+
+```jsonc
+// .ai/.ogre/config.json — opt in to a live browser for codex [BROWSER-CHECK] steps
+// (that one spawn runs with NO filesystem/shell/network confinement)
+{ "codex_unsandboxed_browser_check": true }
+```
 
 ### `/ogre:status`
 

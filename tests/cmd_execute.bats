@@ -345,18 +345,17 @@ print(t['id'])
   [[ "$(cat "${args_file}")" == *"--mcp-config /tmp/fake-mcp.json"* ]] || return 1
 }
 
-@test "execute a [BROWSER-CHECK] step with --executor codex runs isolated and forces the external Playwright MCP" {
+@test "execute a [BROWSER-CHECK] step with --executor codex falls back to --main by default, even with a Playwright MCP configured (config presence alone is not sufficient - codex's sandbox blocks the browser subprocess regardless)" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42
   write_plan_with_steps 42 "[BROWSER-CHECK] Verify the modal renders"
-  # Mock `codex mcp list` reports a Playwright MCP, so codex isolates it.
+  # Mock `codex mcp list` reports a Playwright MCP, but without the explicit
+  # --codex-unsandboxed-browser-check opt-in this must NOT be treated as
+  # isolable - proven false positive (browser_navigate gets silently
+  # cancelled under codex's default sandbox even when the MCP is listed).
   run "${OGRE_BIN}" execute 42 --executor codex
   [ "${status}" -eq 0 ] || return 1
-  [[ "${output}" != *"Falling back to --main"* ]] || return 1
-  [[ "${output}" == *"running isolated"* ]] || return 1
-  # The codex runner forces the external MCP over the desktop in-app browser -
-  # the exact instruction that made isolated codex browser-check work.
-  grep -qi "external .*playwright.* MCP" .ai/.ogre/tmp/issue-42/run-next.md
-  grep -qi "in-app browser" .ai/.ogre/tmp/issue-42/run-next.md
+  [[ "${output}" == *"no browser MCP was detected"* ]] || return 1
+  [[ "${output}" == *"Mode: --main."* ]] || return 1
 }
 
 @test "execute a [BROWSER-CHECK] step with --executor codex and no browser MCP falls back to --main" {
@@ -366,6 +365,58 @@ print(t['id'])
   [ "${status}" -eq 0 ] || return 1
   [[ "${output}" == *"no browser MCP was detected"* ]] || return 1
   [[ "${output}" == *"Mode: --main."* ]] || return 1
+}
+
+@test "execute a [BROWSER-CHECK] step with --executor codex --codex-unsandboxed-browser-check runs isolated with --dangerously-bypass-approvals-and-sandbox, not --sandbox workspace-write" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "[BROWSER-CHECK] Verify the modal renders"
+  local args_file="${TEST_TMP}/codex-args.log"
+  MOCK_CODEX_ARGS_FILE="${args_file}" run "${OGRE_BIN}" execute 42 --executor codex --codex-unsandboxed-browser-check
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" != *"Falling back to --main"* ]] || return 1
+  [[ "${output}" == *"running isolated"* ]] || return 1
+  [[ "${output}" == *"UNSANDBOXED"* ]] || return 1
+  [ -f "${args_file}" ] || return 1
+  [[ "$(cat "${args_file}")" == *"--dangerously-bypass-approvals-and-sandbox"* ]] || return 1
+  [[ "$(cat "${args_file}")" != *"--sandbox workspace-write"* ]] || return 1
+  grep -qi "external .*playwright.* MCP" .ai/.ogre/tmp/issue-42/run-next.md
+  grep -qi "in-app browser" .ai/.ogre/tmp/issue-42/run-next.md
+}
+
+@test "execute a [BROWSER-CHECK] step with --codex-unsandboxed-browser-check but no browser MCP still falls back to --main (opt-in alone isn't enough, still needs a real playwright MCP)" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "[BROWSER-CHECK] Verify the modal renders"
+  MOCK_CODEX_NO_MCP=1 run "${OGRE_BIN}" execute 42 --executor codex --codex-unsandboxed-browser-check
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" == *"no browser MCP was detected"* ]] || return 1
+  [[ "${output}" == *"Mode: --main."* ]] || return 1
+}
+
+@test "execute a non-browser-check step with --executor codex --codex-unsandboxed-browser-check stays sandboxed (bypass only applies to the actual [BROWSER-CHECK] step)" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "Plain step, no browser check"
+  local args_file="${TEST_TMP}/codex-args.log"
+  MOCK_CODEX_ARGS_FILE="${args_file}" run "${OGRE_BIN}" execute 42 --executor codex --codex-unsandboxed-browser-check
+  [ "${status}" -eq 0 ] || return 1
+  [ -f "${args_file}" ] || return 1
+  [[ "$(cat "${args_file}")" == *"--sandbox workspace-write"* ]] || return 1
+  [[ "$(cat "${args_file}")" != *"--dangerously-bypass-approvals-and-sandbox"* ]] || return 1
+}
+
+@test "execute a [BROWSER-CHECK] step uses codex_unsandboxed_browser_check from config.json to run isolated with the bypass" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "[BROWSER-CHECK] Verify the modal renders"
+  python3 - <<'PY'
+import json
+p = ".ai/.ogre/config.json"
+d = json.load(open(p)); d["codex_unsandboxed_browser_check"] = True
+json.dump(d, open(p, "w"), indent=2)
+PY
+  local args_file="${TEST_TMP}/codex-args.log"
+  MOCK_CODEX_ARGS_FILE="${args_file}" run "${OGRE_BIN}" execute 42 --executor codex
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" == *"running isolated"* ]] || return 1
+  [[ "$(cat "${args_file}")" == *"--dangerously-bypass-approvals-and-sandbox"* ]] || return 1
 }
 
 @test "execute a [BROWSER-CHECK] step uses browser_mcp from config.json to run isolated" {

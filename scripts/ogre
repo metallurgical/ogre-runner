@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OGRE_VERSION="1.4.8"
+OGRE_VERSION="1.4.9"
 RUNTIME=".ai/.ogre"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -919,6 +919,16 @@ section = m.group(1) if m else text
 # the item stays visible and pending instead of vanishing.
 items = re.findall(r"^\s*[-*]\s*\[([^\]]*)\]\s*(.+)$", section, re.M)
 
+# Ad-hoc [AUTO-FIX n/cap fp:<hash>] lines (see synthesize_auto_fix_step) are
+# real checklist items for execution purposes, but they didn't exist when the
+# user reviewed/approved the plan - counting them in total_steps makes a
+# 4-step plan suddenly read as "6 steps" the moment a browser-check fails,
+# which reads as the plan itself changing rather than an internal retry. Keep
+# them working exactly the same for execution/ordering (step_index is
+# untouched), just don't let them inflate the step count the user sees.
+def is_auto_fix(raw_text):
+    return bool(re.match(r"^\[AUTO-FIX \d+/\d+ fp:", raw_text.strip()))
+
 try:
     tasks = json.load(open(tasks_path))
 except Exception:
@@ -944,7 +954,8 @@ d = json.load(open(spath))
 d["completed_steps"] = completed
 d["pending_steps"] = pending
 d["current_step"] = pending[0] if pending else None
-d["total_steps"] = len(items) if items else d.get("total_steps")
+planned_items = [it for it in items if not is_auto_fix(it[1])]
+d["total_steps"] = len(planned_items) if planned_items else d.get("total_steps")
 if items and not pending and d.get("status") not in ("stopped",):
     d["status"] = "completed"
 d["updated_at"] = datetime.datetime.now().astimezone().isoformat()
@@ -958,8 +969,17 @@ if items:
     now = datetime.datetime.now().astimezone().isoformat()
     unlinked_passed = [t for t in issue_tasks if t.get("step") is None and t.get("status") == "passed"]
     changed = False
+    planned_counter = 0
     for idx, (marker, raw_text) in enumerate(items, start=1):
         step_text = raw_text.strip()
+        auto_fix = is_auto_fix(step_text)
+        if not auto_fix:
+            planned_counter += 1
+        # display_step is the position among planned (non-auto-fix) items
+        # only, so it never renumbers when an auto-fix line is inserted
+        # elsewhere in the file - unlike step_index (physical position, used
+        # for execution ordering), which is left exactly as before.
+        display_step = None if auto_fix else planned_counter
         done = is_done(marker, raw_text)
         t = by_text.get(step_text)
         if t is None and done and unlinked_passed:
@@ -968,6 +988,8 @@ if items:
             t = unlinked_passed.pop(0)
             t["step"] = step_text
             t["step_index"] = idx
+            t["auto_fix"] = auto_fix
+            t["display_step"] = display_step
             t["updated_at"] = now
             changed = True
         elif t is None:
@@ -979,6 +1001,7 @@ if items:
                 "pid": None, "exit_code": 0 if done else None, "session_id": None,
                 "notes": None,
                 "step": step_text, "step_index": idx,
+                "auto_fix": auto_fix, "display_step": display_step,
                 "created_at": now, "started_at": None,
                 "ended_at": now if done else None, "updated_at": now,
             }
@@ -987,6 +1010,10 @@ if items:
         else:
             if t.get("step_index") != idx:
                 t["step_index"] = idx
+                changed = True
+            if t.get("auto_fix") != auto_fix or t.get("display_step") != display_step:
+                t["auto_fix"] = auto_fix
+                t["display_step"] = display_step
                 changed = True
             if done and t.get("status") != "passed":
                 t["status"] = "passed"
@@ -1080,18 +1107,30 @@ try:
     all_tasks = json.load(open(sys.argv[2]))
 except Exception:
     all_tasks = []
-steps = sorted(
+all_steps = sorted(
     [t for t in all_tasks if t.get("issue") == sys.argv[3] and t.get("step_index") is not None],
     key=lambda t: t["step_index"],
 )
+steps = [t for t in all_steps if not t.get("auto_fix")]
+auto_fix_steps = [t for t in all_steps if t.get("auto_fix")]
+display = {"passed": "completed", "running": "running", "failed": "failed", "stopped": "stopped"}
 if steps:
     print("Steps ({}):".format(len(steps)))
-    display = {"passed": "completed", "running": "running", "failed": "failed", "stopped": "stopped"}
     step_rows = [
-        (t["step_index"], display.get(t.get("status"), "pending"), t.get("id"), short(t.get("step") or ""))
+        (t.get("display_step", t["step_index"]), display.get(t.get("status"), "pending"), t.get("id"), short(t.get("step") or ""))
         for t in steps
     ]
     table_cols(["#", "Status", "Task Id", "Step"], step_rows)
+if auto_fix_steps:
+    # Internal retries spawned by a failed [BROWSER-CHECK] - not part of the
+    # plan the user reviewed, shown separately so the step count above never
+    # jumps just because one of these fired.
+    print("Auto-fixes ({}, internal):".format(len(auto_fix_steps)))
+    fix_rows = [
+        (display.get(t.get("status"), "pending"), t.get("id"), short(t.get("step") or ""))
+        for t in auto_fix_steps
+    ]
+    table_cols(["Status", "Task Id", "Step"], fix_rows)
 
 blocker_paths = d.get("blocker_paths") or []
 blocker_remarks = d.get("blocker_remarks") or {}
@@ -1139,9 +1178,18 @@ except Exception:
     pass
 
 issue_tasks = [x for x in tasks if x.get("issue") == issue]
-step_indices = sorted({x.get("step_index") for x in issue_tasks if x.get("step_index") is not None})
-total_steps = len(step_indices)
+planned_tasks = [x for x in issue_tasks if x.get("step_index") is not None and not x.get("auto_fix")]
+total_steps = len({x.get("display_step") for x in planned_tasks if x.get("display_step") is not None}) or len(planned_tasks)
 cur_step = t.get("step_index")
+
+if t.get("auto_fix"):
+    step_display = "auto-fix (internal, not one of the {} planned steps)".format(total_steps)
+elif t.get("display_step") is not None:
+    step_display = "{} of {}".format(t.get("display_step"), total_steps)
+elif cur_step is not None:
+    step_display = "{} of {}".format(cur_step, total_steps)
+else:
+    step_display = "-"
 
 model = t.get("model")
 rows = [
@@ -1149,7 +1197,7 @@ rows = [
     ("Job Id", job_id or "(unknown)"),
     ("Issue", issue),
     ("Status", t.get("status")),
-    ("Step", "{} of {}".format(cur_step, total_steps) if cur_step is not None else "-"),
+    ("Step", step_display),
     ("Executor", "{}{}".format(t.get("executor"), "  ({})".format(model) if model else "")),
     ("Log", t.get("log_path")),
 ]
@@ -1214,13 +1262,26 @@ rows = []
 for t in tasks:
     model = t.get("model")
     executor = "{}{}".format(t.get("executor") or "-", " ({})".format(model) if model else "")
+    if t.get("auto_fix"):
+        num = "auto-fix"
+    elif t.get("display_step") is not None:
+        num = t.get("display_step")
+    else:
+        num = t.get("step_index") if t.get("step_index") is not None else "-"
     rows.append((
-        t.get("step_index") if t.get("step_index") is not None else "-",
+        num,
         t.get("id"),
         t.get("status"),
         executor,
         short(t.get("step") or ""),
     ))
+step_tasks = [t for t in tasks if t.get("step_index") is not None]
+planned_count = len([t for t in step_tasks if not t.get("auto_fix")])
+auto_fix_count = len(step_tasks) - planned_count
+print("Steps: {}{}".format(
+    planned_count,
+    "  (+{} internal auto-fix)".format(auto_fix_count) if auto_fix_count else "",
+))
 table(["#", "Task Id", "Status", "Executor", "Step"], rows)
 print("View one:  ogre status --task <task-id>")
 PY

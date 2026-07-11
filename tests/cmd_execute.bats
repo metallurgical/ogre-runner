@@ -365,6 +365,34 @@ print(t[0].get('notes') or '' if t else '')
   [[ "${browser_check_notes}" == *"Mock claude -p output"* ]] || return 1
 }
 
+@test "execute --all: ad-hoc [AUTO-FIX] steps don't inflate the step count status/task-list show the user" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "[BROWSER-CHECK] Verify the modal renders"
+  MOCK_CLAUDE_STATUS=failed run "${OGRE_BIN}" execute 42 --all --mcp-config /tmp/fake-mcp.json
+  [ "${status}" -eq 1 ] || return 1
+  local plan_content
+  plan_content="$(cat .ai/.ogre/plans/issue-42.md)"
+  [[ "${plan_content}" == *"[AUTO-FIX 1/2 fp:"* ]] || return 1
+  [[ "${plan_content}" == *"[AUTO-FIX 2/2 fp:"* ]] || return 1
+
+  # "Steps Total"/"Steps (N):" must stay at the 1 originally-planned item -
+  # the 2 ad-hoc auto-fix attempts are internal retries, not new plan steps
+  # (this is the exact "plan started at 4 steps, suddenly shows 6" confusion
+  # this behavior exists to avoid).
+  run "${OGRE_BIN}" status 42
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" == *"Steps Total"*"1"* ]] || return 1
+  [[ "${output}" == *"Steps (1):"* ]] || return 1
+  [[ "${output}" == *"Auto-fixes (2, internal):"* ]] || return 1
+
+  local job_id
+  job_id="$(state_field 42 job_id)"
+  run "${OGRE_BIN}" task-list "${job_id}"
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" == *"Steps: 1  (+2 internal auto-fix)"* ]] || return 1
+  [[ "${output}" == *"auto-fix"* ]] || return 1
+}
+
 @test "execute --all does not auto-fix a failed step that is not [BROWSER-CHECK] - stops immediately, same as before" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42
   write_plan_with_steps 42 "Just a normal step"

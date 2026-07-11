@@ -382,6 +382,34 @@ Stops, archives, or deletes Ogre runtime data. Does not revert code changes.
 | `--delete` | `/ogre:stop 107 --delete` | Delete the issue's runtime data (after confirmation) |
 | `--list` | `/ogre:stop 107 --list` | Print every runtime file/dir path for the issue without deleting, so the user can pick individually |
 
+### `ogre config`
+
+Internal — no `/ogre:config` slash command yet, run it directly. Shows every key `.ai/.ogre/config.json` actually affects: its dot path, current value, whether that value came from config.json or a hardcoded fallback, and the CLI flag that overrides it for one invocation. Useful because config.json has no schema of its own — a key set in the wrong spot (e.g. top-level instead of inside `"defaults"`) just does nothing, silently.
+
+```bash
+scripts/ogre config
+```
+
+```
+CONFIG.JSON KEY (dot path)         VALUE                SOURCE         OVERRIDE (flag, command)
+defaults.planner.provider          claude               config.json    --planner PROVIDER (ogre feature)
+defaults.planner.model             claude-sonnet-5      config.json    --model MODEL (ogre feature)
+defaults.plan_reviewer.provider    claude               config.json    --reviewer PROVIDER (ogre review-plan)
+defaults.plan_reviewer.model       claude-sonnet-5      config.json    --model MODEL (ogre review-plan)
+defaults.executor.provider         claude               config.json    --executor PROVIDER (ogre execute)
+defaults.executor.model            claude-sonnet-5      config.json    --model MODEL (ogre execute)
+defaults.diff_reviewer.provider    codex                config.json    - (not read by any command yet)
+defaults.diff_reviewer.model       gpt-5.6-sol          config.json    - (not read by any command yet)
+browser_mcp                        (none)               fallback       --mcp-config PATH (ogre execute, [BROWSER-CHECK] steps)
+codex_unsandboxed_browser_check    false                fallback       --codex-unsandboxed-browser-check (ogre execute, codex [BROWSER-CHECK] only)
+```
+
+| Option | Example | Description |
+| :--- | :--- | :--- |
+| `--reset` | `scripts/ogre config --reset` | Back up the current `config.json` to `config.json.bak`, then overwrite it with fresh-install defaults — use when config.json has been hand-edited into a confusing state |
+
+Precedence for every value shown: CLI flag on the command itself wins, then config.json, then the hardcoded fallback (`claude`/`claude-sonnet-5` for planner/reviewer/executor).
+
 ## Notes
 
 - Ogre does not revert code changes.

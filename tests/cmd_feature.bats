@@ -25,6 +25,18 @@ load test_helper
   [[ "$(cat .ai/.ogre/tmp/issue-darkmode/plan-runner.md)" == *"issue-darkmode.md"* ]] || return 1
 }
 
+@test "feature without --browser-check tells the planner to skip [BROWSER-CHECK] tags entirely" {
+  run "${OGRE_BIN}" feature --statement "add dark mode toggle" --name darkmode
+  [ "${status}" -eq 0 ] || return 1
+  [[ "$(cat .ai/.ogre/tmp/issue-darkmode/plan-runner.md)" == *'Do NOT tag any step `[BROWSER-CHECK]`'* ]] || return 1
+}
+
+@test "feature --browser-check lets the planner tag [BROWSER-CHECK] normally (no override rule)" {
+  run "${OGRE_BIN}" feature --statement "add dark mode toggle" --name darkmode --browser-check
+  [ "${status}" -eq 0 ] || return 1
+  [[ "$(cat .ai/.ogre/tmp/issue-darkmode/plan-runner.md)" != *"Do NOT tag any step"* ]] || return 1
+}
+
 @test "feature seeds a per-issue knowledge base from the template" {
   run "${OGRE_BIN}" feature --statement "add dark mode toggle" --name darkmode
   [ "${status}" -eq 0 ] || return 1

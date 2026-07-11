@@ -231,6 +231,7 @@ Use a positional issue number, URL, or local file when you already have one.
 | `--planner claude\|codex` | `/ogre:feature --statement "..." --name forgot-password --planner codex` | Which LLM CLI plans the feature (default: `claude`) |
 | `--model MODEL` | `/ogre:feature --statement "..." --name forgot-password --planner codex --model gpt-5.6-sol` | Model override for the planner |
 | `--reasoning LEVEL` | `/ogre:feature --statement "..." --name forgot-password --planner codex --reasoning high` | Reasoning effort for the planner. Omit it to use the CLI's own default - Ogre never forces one |
+| `--browser-check` | `/ogre:feature --statement "..." --name forgot-password --browser-check` | Opt-in. Without it, the generated plan never tags a step `[BROWSER-CHECK]`, even ones that render/change UI - default assumes you'll verify the feature yourself. Pass it when you want automated browser verification as part of execution (see `[BROWSER-CHECK]` steps below) |
 
 ### `/ogre:add-blocker`
 
@@ -303,7 +304,7 @@ Every generated runner prompt also carries context blocks so a fresh session doe
 
 **Living knowledge base.** Each issue keeps `.ai/.ogre/state/issue-<n>-knowledge.md`, updated in place by every step and read by the next, so fresh sessions start oriented instead of re-discovering facts.
 
-**`[BROWSER-CHECK]` steps.** Steps needing real browser rendering are tagged `[BROWSER-CHECK]`. With the **`claude` executor** they run **isolated like every other step** as long as a browser MCP is available — so main context stays clean. Ogre finds one from any of: the ambient MCP servers shown in `claude mcp list` (e.g. a Playwright MCP), a `"browser_mcp"` path in `.ai/.ogre/config.json`, or `--mcp-config PATH` on `ogre execute`. (Verified: a spawned `claude -p` inherits the ambient MCP and drives a real headless browser.) If **no** browser MCP is detected, the step automatically falls back to `--main` (runs inline in the current session) so it still completes without a manual retrigger — Ogre prints a NOTE saying so and how to keep it isolated. `--main` is otherwise opt-in only; Ogre never forces it except this fallback.
+**`[BROWSER-CHECK]` steps.** Opt-in at planning time: pass `--browser-check` to `/ogre:feature` and steps needing real browser rendering are tagged `[BROWSER-CHECK]`. Without that flag (the default) a plan never has any - you verify the feature yourself. With the **`claude` executor** they run **isolated like every other step** as long as a browser MCP is available — so main context stays clean. Ogre finds one from any of: the ambient MCP servers shown in `claude mcp list` (e.g. a Playwright MCP), a `"browser_mcp"` path in `.ai/.ogre/config.json`, or `--mcp-config PATH` on `ogre execute`. (Verified: a spawned `claude -p` inherits the ambient MCP and drives a real headless browser.) If **no** browser MCP is detected, the step automatically falls back to `--main` (runs inline in the current session) so it still completes without a manual retrigger — Ogre prints a NOTE saying so and how to keep it isolated. `--main` is otherwise opt-in only; Ogre never forces it except this fallback.
 
 ```jsonc
 // .ai/.ogre/config.json — point browser_mcp at an MCP config for claude spawns

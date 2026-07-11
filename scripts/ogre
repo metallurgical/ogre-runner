@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OGRE_VERSION="1.4.9"
+OGRE_VERSION="1.4.10"
 RUNTIME=".ai/.ogre"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -13,8 +13,9 @@ Ogre $OGRE_VERSION
 
 Usage:
   ogre init
-  ogre feature <issue-number|issue-url|issue-file> [--blocks 1,2,url,path] [--plan issue-107.md] [--planner claude|codex] [--model MODEL] [--reasoning LEVEL]
-  ogre feature --statement "free text description" [--name my-feature] [--blocks 1,2,url,path] [--plan NAME.md] [--planner claude|codex] [--model MODEL] [--reasoning LEVEL]
+  ogre feature <issue-number|issue-url|issue-file> [--blocks 1,2,url,path] [--plan issue-107.md] [--planner claude|codex] [--model MODEL] [--reasoning LEVEL] [--browser-check]
+  ogre feature --statement "free text description" [--name my-feature] [--blocks 1,2,url,path] [--plan NAME.md] [--planner claude|codex] [--model MODEL] [--reasoning LEVEL] [--browser-check]
+                                   (--browser-check: opt-in - the generated plan tags steps needing real browser verification with [BROWSER-CHECK]. Default omits the tag entirely; the user verifies the feature themselves)
   ogre add-blocker <issue> <blocker-number|url|path> [--force]
   ogre add-blocker <issue> --statement "free text blocker" [--name blocker-slug] [--force]
   ogre review-plan <issue-or-plan> [--reviewer claude|codex] [--model MODEL] [--reasoning LEVEL]
@@ -1530,7 +1531,7 @@ cmd_init() {
 
 cmd_feature() {
   ensure_runtime
-  local current="" plan_name="" planner="claude" model="claude-sonnet-5" reasoning="" statement="" name=""
+  local current="" plan_name="" planner="claude" model="claude-sonnet-5" reasoning="" statement="" name="" browser_check="false"
   # Blockers are collected as two parallel arrays: block_refs[i] is the
   # blocker reference, block_remarks[i] its (optional) freeform status remark.
   # `--blocks a,b` adds refs with no remark; `--blocker REF --remarks TEXT`
@@ -1561,6 +1562,7 @@ cmd_feature() {
       --reasoning) reasoning="${2:-}"; shift 2 ;;
       --statement) statement="${2:-}"; shift 2 ;;
       --name) name="${2:-}"; shift 2 ;;
+      --browser-check) browser_check="true"; shift ;;
       *) err "Unknown option: $1"; exit 1 ;;
     esac
   done
@@ -1637,6 +1639,17 @@ EOF2
     done
   fi
 
+  # [BROWSER-CHECK] is opt-in per plan (--browser-check), not the default -
+  # some users just want the feature built and verify it themselves; forcing
+  # a browser-check step onto everyone assumes otherwise. Default skips it;
+  # the override below is the only thing that changes the blueprint's normal
+  # tagging instruction (section 6 of execution-blueprint-prompt.md).
+  local browser_check_rule=""
+  if [ "$browser_check" != "true" ]; then
+    browser_check_rule="* Do NOT tag any step \`[BROWSER-CHECK]\` in this plan, regardless of what the blueprint template's step-tagging section says - skip that tag entirely, even for steps that render/change UI. The user will verify this feature in a real browser themselves. (Re-run \`ogre feature\` with \`--browser-check\` if automated browser verification is wanted instead.)
+"
+  fi
+
   runner="$RUNTIME/tmp/issue-$issue/plan-runner.md"
   cat > "$runner" <<EOF2
 # Ogre Planning Runner
@@ -1669,6 +1682,7 @@ $blockers_text
 * Do not modify application files.
 * Do not keep placeholder issue numbers from the template.
 * Use real issue numbers and issue paths from this runner prompt.
+${browser_check_rule}
 EOF2
 
   local blocker_paths_json="[]" bremarks_json="{}"

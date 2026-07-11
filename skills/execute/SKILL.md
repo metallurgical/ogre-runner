@@ -72,6 +72,8 @@ Always report `session_id` and the exact resume command back to the user after a
 
 ## `[BROWSER-CHECK]` Steps
 
+Whether a plan has any `[BROWSER-CHECK]` steps at all is decided at planning time, not execution time: `ogre feature` only tags steps this way when `--browser-check` was passed (see `/ogre:feature`). By default a plan has none, and the user is expected to verify the feature themselves — nothing below applies. Everything in this section only matters for a plan that opted in.
+
 A step tagged `[BROWSER-CHECK]` needs a real rendered browser to verify (visual layout, interactive behavior). **By default these now run ISOLATED like any other step** — Ogre keeps main context clean whenever it can. What happens depends on whether the executor has a browser MCP:
 
 - **Browser MCP available** — `claude` executor only, with a Playwright/browser MCP configured (ambient project/user MCP shown in `claude mcp list`, `browser_mcp` in `.ai/.ogre/config.json`, or `--mcp-config PATH`): the spawned `claude -p` session verifies the step with its own browser tools (verified: it inherits the ambient MCP and drives a real headless browser). Nothing special for you to do — single steps and `--all` chains run straight through, main context untouched. This is the goal state; prefer configuring a browser MCP so browser-check never touches this session. Works for **both executors**: `claude` (ambient MCP / `browser_mcp` / `--mcp-config`) and `codex` (an external Playwright/Puppeteer MCP in `codex mcp list` — Ogre's codex runner forces it over Codex's desktop in-app browser, which can't run headless).

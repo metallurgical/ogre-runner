@@ -28,6 +28,7 @@ Optional flags:
 - `--reasoning LEVEL` (reasoning effort for the planner; omit to use the CLI's own default)
 - `--statement "free text description of the feature"` (use instead of an issue)
 - `--name my-feature` (slug for runtime paths when using `--statement`; default: first ~4 words of the statement + a short uuid suffix, e.g. "need to implement forgot password page" -> `need-to-implement-a1b2c3d4` — the suffix keeps it unique and ties the slug to that specific plan .md even if two features start with similar wording)
+- `--browser-check` — opt-in. Without it, the generated plan never tags a step `[BROWSER-CHECK]`, even ones that render/change UI - the user verifies those themselves. Only pass it when the user actually says they want the feature verified in a real browser as part of execution. Don't ask about this on every `/ogre:feature` call; default (no flag) is correct unless the user brings it up.
 
 ## Behavior
 

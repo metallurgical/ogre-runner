@@ -21,11 +21,11 @@ Usage:
   ogre add-blocker <issue> --statement "free text blocker" [--name blocker-slug] [--force]
   ogre review-plan <issue-or-plan> [--reviewer claude|codex] [--model MODEL] [--reasoning LEVEL]
                                    (--reviewer/--model omitted: falls back to defaults.plan_reviewer in .ai/.ogre/config.json, then claude/claude-sonnet-5)
-  ogre execute <issue-or-plan> [--executor codex|claude] [--model MODEL] [--reasoning LEVEL] [--mcp-config PATH] [--all] [--max-steps N] [--fresh|--resume] [--main|--background] [--yes] [--codex-unsandboxed-browser-check]
+  ogre execute <issue-or-plan> [--executor codex|claude] [--model MODEL] [--reasoning LEVEL] [--mcp-config PATH] [--all] [--max-steps N] [--fresh|--resume] [--main|--background] [--yes]
                                    (--executor/--model omitted: falls back to defaults.executor in .ai/.ogre/config.json, then claude/claude-sonnet-5)
                                    (--reasoning omitted: uses claude/codex's own default effort level - not forced by Ogre)
                                    (--mcp-config PATH: browser MCP for [BROWSER-CHECK] steps, so they run isolated; also settable as "browser_mcp" in .ai/.ogre/config.json)
-                                   (--codex-unsandboxed-browser-check: opt-in - runs a codex [BROWSER-CHECK] step with --dangerously-bypass-approvals-and-sandbox instead of --sandbox workspace-write, because codex's sandbox otherwise blocks the browser subprocess entirely. Removes ALL confinement for that one step only, never on by default; also settable as "codex_unsandboxed_browser_check": true in .ai/.ogre/config.json)
+                                   (codex steps always run with --dangerously-bypass-approvals-and-sandbox: no filesystem/shell/network confinement, no approval prompts. Ogre is a dev-only tool - see README before pointing it at anything you care about)
   ogre execute --job <job-id> [same flags as above]              (same, addressed by job id)
   ogre execute <issue-or-plan> --task <task-id>                  (target one specific seeded step out of order)
   ogre execute <issue-or-plan> --step <n>                        (target step N, 1-based, out of order)
@@ -123,24 +123,6 @@ except Exception: sys.exit(0)
 print(d.get("browser_mcp") or "")' "$cfg"
 }
 
-# config_codex_unsandboxed_browser_check - the optional top-level
-# "codex_unsandboxed_browser_check" boolean field from .ai/.ogre/config.json.
-# Prints "true"/"false". Off by default: opting in means a codex
-# [BROWSER-CHECK] spawn runs with --dangerously-bypass-approvals-and-sandbox
-# instead of --sandbox workspace-write, because codex's sandbox blocks the
-# subprocess spawn a real browser needs (confirmed 2026-07-11 - not a tool
-# approval issue, not a network issue, the sandbox itself denies launching
-# Chromium). That flag removes ALL confinement (filesystem/shell/network) for
-# that one spawn, not just the browser tool, so this is never assumed - the
-# user explicitly accepts that trade for a live browser window under codex.
-config_codex_unsandboxed_browser_check() {
-  local cfg="$RUNTIME/config.json"
-  [ -f "$cfg" ] || { printf 'false'; return 0; }
-  python3 -c 'import json,sys
-try: d = json.load(open(sys.argv[1]))
-except Exception: print("false"); sys.exit(0)
-print("true" if d.get("codex_unsandboxed_browser_check") else "false")' "$cfg"
-}
 
 # config_default_role <role> <field> - reads .defaults.<role>.<field> from
 # .ai/.ogre/config.json (empty if unset/missing/no config file). role is one
@@ -217,21 +199,19 @@ for p in glob.glob(sys.argv[2]):
 ' "$job_id" "$RUNTIME/state/issue-*.json"
 }
 
-# task_create <id> <issue> <type> <executor> <model> <mode> <freshness> <runner> <logpath> <status> [reasoning] [mcp_config] [codex_unsandboxed_browser_check]
-# The three trailing fields are optional and only meaningful for mode=all
+# task_create <id> <issue> <type> <executor> <model> <mode> <freshness> <runner> <logpath> <status> [reasoning] [mcp_config]
+# The two trailing fields are optional and only meaningful for mode=all
 # chain tasks: maybe_resume_stalled_chain (cross-process, no access to the
 # original cmd_execute shell variables) reads them back off the task record
 # to rebuild an equivalent `ogre execute --all --background` invocation when
 # self-healing a dead driver - without them a self-healed resume silently
-# drops --reasoning/--mcp-config/--codex-unsandboxed-browser-check even when
-# the original invocation had them.
+# drops --reasoning/--mcp-config even when the original invocation had them.
 task_create() {
   py_state "$(tasks_path)" "$@" <<'PY'
 import sys, datetime
 path, tid, issue, ttype, executor, model, mode, freshness, runner, logpath, status = sys.argv[1:12]
 reasoning = sys.argv[12] if len(sys.argv) > 12 else ""
 mcp_config = sys.argv[13] if len(sys.argv) > 13 else ""
-codex_unsandboxed_browser_check = sys.argv[14] if len(sys.argv) > 14 else ""
 _lk = lock_state(path)
 try:
     tasks = json.load(open(path))
@@ -244,7 +224,6 @@ tasks.append({
     "status": status, "pid": None, "exit_code": None, "session_id": None,
     "notes": None,
     "reasoning": reasoning or None, "mcp_config": mcp_config or None,
-    "codex_unsandboxed_browser_check": codex_unsandboxed_browser_check == "true",
     "created_at": now, "started_at": None, "ended_at": None, "updated_at": now,
 })
 dump_json(tasks, path)
@@ -495,8 +474,8 @@ print(d.get("job_id") or "")
   # the one whose death (if any) means the chain stopped without finishing.
   # A single-step (non-chained) `execute` never self-resumes and was never
   # supposed to, so this only ever acts on mode=all tasks.
-  local last_tid last_status last_pid executor model reasoning mcp_config codex_unsandboxed_browser_check
-  { read -r last_tid; read -r last_status; read -r last_pid; read -r executor; read -r model; read -r reasoning; read -r mcp_config; read -r codex_unsandboxed_browser_check; } < <(python3 -c '
+  local last_tid last_status last_pid executor model reasoning mcp_config
+  { read -r last_tid; read -r last_status; read -r last_pid; read -r executor; read -r model; read -r reasoning; read -r mcp_config; } < <(python3 -c '
 import json
 try:
     tasks = json.load(open("'"$(tasks_path)"'"))
@@ -509,9 +488,8 @@ if cand:
     for f in ("id", "status", "pid", "executor", "model", "reasoning", "mcp_config"):
         v = t.get(f)
         print("" if v is None else v)
-    print("true" if t.get("codex_unsandboxed_browser_check") else "")
 else:
-    print(""); print(""); print(""); print(""); print(""); print(""); print(""); print("")
+    print(""); print(""); print(""); print(""); print(""); print(""); print("")
 ')
   [ -n "$last_tid" ] || return 0
   [ "$last_status" != "running" ] || return 0
@@ -526,7 +504,6 @@ else:
   [ -n "$model" ] && resume_args+=(--model "$model")
   [ -n "$reasoning" ] && resume_args+=(--reasoning "$reasoning")
   [ -n "$mcp_config" ] && resume_args+=(--mcp-config "$mcp_config")
-  [ "$codex_unsandboxed_browser_check" = "true" ] && resume_args+=(--codex-unsandboxed-browser-check)
   "$SCRIPT_DIR/ogre" "${resume_args[@]}" \
     || err "Auto-resume for issue $issue failed to start - resume it yourself: $SCRIPT_DIR/ogre execute --job $job_id --all --background"
 }
@@ -2093,7 +2070,7 @@ cmd_execute() {
   #   new        - default: foreground, brand-new codex/claude session, isolated from main context
   #   main       - run inline in the current Claude Code session (no subprocess spawned)
   #   background - same isolation as "new" but detached/non-blocking
-  local target="" executor="" model="" reasoning="" mode="next" freshness="fresh" iso="new" job_id="" task_id="" step_n="" assume_yes="false" max_steps="3" retry="false" mcp_config="" codex_unsandboxed_browser_check="false"
+  local target="" executor="" model="" reasoning="" mode="next" freshness="fresh" iso="new" job_id="" task_id="" step_n="" assume_yes="false" max_steps="3" retry="false" mcp_config=""
   if [ $# -gt 0 ] && [[ ! "$1" =~ ^-- ]]; then
     target="$1"; shift
   fi
@@ -2106,7 +2083,6 @@ cmd_execute() {
       --model) model="${2:-}"; shift 2 ;;
       --reasoning) reasoning="${2:-}"; shift 2 ;;
       --mcp-config) mcp_config="${2:-}"; shift 2 ;;
-      --codex-unsandboxed-browser-check) codex_unsandboxed_browser_check="true"; shift ;;
       --max-steps) max_steps="${2:-3}"; shift 2 ;;
       --retry) retry="true"; shift ;;
       --all) mode="all"; shift ;;
@@ -2133,7 +2109,6 @@ cmd_execute() {
   # automatic path just works. codex relies on its own ~/.codex/config.toml
   # mcp_servers (this flag/field does not apply to codex).
   [ -n "$mcp_config" ] || mcp_config="$(config_browser_mcp)"
-  [ "$codex_unsandboxed_browser_check" = "true" ] || codex_unsandboxed_browser_check="$(config_codex_unsandboxed_browser_check)"
   # For a codex executor, [BROWSER-CHECK] steps must be steered to the external
   # Playwright MCP: Codex's bundled browser plugin otherwise routes browser
   # work to its desktop-app in-app browser (node_repl/browser-client), which
@@ -2165,14 +2140,6 @@ cmd_execute() {
   fi
 
   local plan issue runner logdir logpath tid spath
-  # Set true only for the single-step (non --all) path, when the specifically
-  # targeted task's own text is tagged [BROWSER-CHECK] - --task/--step can
-  # pick a step out of order, so this must reflect the actual picked task,
-  # not next_step_is_browser_check()'s plan-sequential "current_step" (which
-  # --all mode uses instead, re-checked fresh per chain link). Read by
-  # run_link_foreground/run_link_background_body to scope the codex
-  # unsandboxed-browser-check bypass to only the step that actually needs it.
-  local target_is_browser_check="false"
   plan="$(get_plan_path "$target")"
   [ -f "$plan" ] || { err "Plan not found: $plan"; exit 1; }
   issue="$(slug_from_issue "$plan")"
@@ -2189,9 +2156,7 @@ cmd_execute() {
   # step, but its own text embeds the original failed item's text (which
   # contains "[BROWSER-CHECK]") inside its reason snippet, so the substring
   # match below would otherwise misfire on it too - wrongly forcing it through
-  # the browser-MCP gate and, for codex, wrongly running it fully unsandboxed
-  # via --dangerously-bypass-approvals-and-sandbox instead of
-  # --sandbox workspace-write (see link_wants_unsandboxed_browser_check).
+  # the browser-MCP gate.
   next_step_is_browser_check() {
     local next_step
     next_step="$(json_field "$spath" current_step 2>/dev/null)"
@@ -2223,19 +2188,14 @@ cmd_execute() {
       codex)
         # Forcing the external Playwright MCP over Codex's desktop-app in-app
         # browser (node_repl/browser-client/agent.browsers.get("iab")) gets
-        # the tool call routed correctly, but codex's own sandbox then denies
-        # the subprocess spawn a real browser needs (launching Chromium) -
-        # confirmed 2026-07-11 by direct repro; a plain `codex mcp list`
-        # showing playwright is NOT sufficient signal on its own (false
-        # positive - the tool call still gets silently cancelled). The only
-        # way found to make it actually complete is
-        # --dangerously-bypass-approvals-and-sandbox, which removes ALL
-        # sandboxing for that spawn, so it's never assumed here - it's gated
-        # on the explicit opt-in (--codex-unsandboxed-browser-check /
-        # codex_unsandboxed_browser_check in config.json). Without the
-        # opt-in, codex always falls back to --main for [BROWSER-CHECK],
-        # which is correct given it genuinely can't verify it isolated.
-        [ "$codex_unsandboxed_browser_check" = "true" ] || return 1
+        # the tool call routed correctly, but codex's own sandbox otherwise
+        # denies the subprocess spawn a real browser needs (launching
+        # Chromium) - confirmed 2026-07-11 by direct repro; a plain
+        # `codex mcp list` showing playwright is NOT sufficient signal on its
+        # own (false positive - the tool call still gets silently cancelled
+        # under the sandbox). Every codex spawn now runs fully unsandboxed
+        # (--dangerously-bypass-approvals-and-sandbox, see run_link_foreground/
+        # run_link_background_body), so that no longer blocks it here.
         command -v codex >/dev/null 2>&1 || return 1
         codex mcp list </dev/null 2>/dev/null | grep -qiE 'playwright|puppeteer'
         ;;
@@ -2319,7 +2279,7 @@ EOF2
     tid="$(new_task_id)"
     logpath="$logdir/execute-$(date '+%Y%m%d-%H%M%S')-${tid:5:8}.log"
     write_all_runner "$tid" "$logpath"
-    task_create "$tid" "$issue" "execute" "$executor" "$model" "$mode" "$freshness" "$runner" "$logpath" "pending" "$reasoning" "$mcp_config" "$codex_unsandboxed_browser_check"
+    task_create "$tid" "$issue" "execute" "$executor" "$model" "$mode" "$freshness" "$runner" "$logpath" "pending" "$reasoning" "$mcp_config"
   else
     # Default: target exactly one seeded step-task. Explicit --task/--step
     # picks it out of order; otherwise take the lowest step_index pending.
@@ -2452,7 +2412,6 @@ PY
     # if none are available rather than guessing.
     local browser_check_note=""
     if ! printf '%s' "$step_text" | grep -q '^\[AUTO-FIX ' && printf '%s' "$step_text" | grep -qi '\[browser-check\]'; then
-      target_is_browser_check="true"
       browser_check_note="This is a [BROWSER-CHECK] step: verify it by actually rendering the page/app with your browser MCP tools (e.g. Playwright), not just by reading markup/CSS/JS.${browser_force_note:+ $browser_force_note} If it genuinely FAILS (real bug found), do NOT edit its checkbox marker or its own checklist line text in any way - leave that exact line untouched (still \`- [ ] <original text>\`, no added notes, no custom marker like \`[FAILED]\`). Report the failure ONLY via \`ogre task-complete <task-id> --status failed\` with the reason in \`--notes\`."
       if [ "$iso" != "main" ]; then
         if browser_mcp_available; then
@@ -2560,7 +2519,7 @@ PY
     log ""
     log "Mode: --main. Execute the target checklist item(s) from the runner file above directly in this session (no subprocess spawned)."
     log "Alternatively, run it in an isolated session yourself:"
-    log "  codex exec --skip-git-repo-check --sandbox workspace-write ${model:+-m $model} ${reasoning:+-c model_reasoning_effort=$reasoning} - < $runner"
+    log "  codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox ${model:+-m $model} ${reasoning:+-c model_reasoning_effort=$reasoning} - < $runner"
     log ""
     log "Task $tid recorded as pending. Check with: $SCRIPT_DIR/ogre status --task $tid"
     log "When the work is done, mark it: $SCRIPT_DIR/ogre task-complete $tid --status passed|failed"
@@ -2568,7 +2527,10 @@ PY
   fi
 
   case "$executor" in
-    codex) command -v codex >/dev/null 2>&1 || { task_update "$tid" "status=failed"; err "codex CLI not found"; exit 1; } ;;
+    codex)
+      command -v codex >/dev/null 2>&1 || { task_update "$tid" "status=failed"; err "codex CLI not found"; exit 1; }
+      log "WARNING: codex steps run UNSANDBOXED (--dangerously-bypass-approvals-and-sandbox) - no filesystem/shell/network confinement. Ogre is a dev-only tool; do not point it at a production environment. See README."
+      ;;
     claude) command -v claude >/dev/null 2>&1 || { task_update "$tid" "status=failed"; err "claude CLI not found"; exit 1; } ;;
     *) task_update "$tid" "status=failed"; err "Unsupported executor: $executor"; exit 1 ;;
   esac
@@ -2576,34 +2538,17 @@ PY
   # Runs one subprocess link (foreground, blocking) for the given tid/runner/
   # logpath/session id, streaming to both stdout and the log file. Echoes
   # the exit code as the last line of stdout (caller captures it).
-  # True if THIS about-to-run link should use codex's unsandboxed browser-check
-  # bypass: opted in, AND the step this link is actually about to work on is
-  # tagged [BROWSER-CHECK]. --all mode re-checks the plan's live next step
-  # (chain links are spawned one at a time, state is synced between them);
-  # single-step mode uses the specifically targeted task's own text (set once
-  # into target_is_browser_check, since --task/--step can go out of order).
-  link_wants_unsandboxed_browser_check() {
-    [ "$codex_unsandboxed_browser_check" = "true" ] || return 1
-    if [ "$mode" = "all" ]; then
-      next_step_is_browser_check
-    else
-      [ "$target_is_browser_check" = "true" ]
-    fi
-  }
-
   run_link_foreground() {
     local link_tid="$1" link_runner="$2" link_logpath="$3" link_session="$4"
     local rc
     set +e
     case "$executor" in
       codex)
-        local -a codex_args=(exec --skip-git-repo-check)
-        if link_wants_unsandboxed_browser_check; then
-          log "WARNING: running this codex step UNSANDBOXED (--dangerously-bypass-approvals-and-sandbox) - opted in via --codex-unsandboxed-browser-check/config for its [BROWSER-CHECK] step. No filesystem/shell/network confinement for this one spawn."
-          codex_args+=(--dangerously-bypass-approvals-and-sandbox)
-        else
-          codex_args+=(--sandbox workspace-write)
-        fi
+        # Always unsandboxed (--dangerously-bypass-approvals-and-sandbox, not
+        # --sandbox workspace-write): ogre is a dev-only tool, and codex's
+        # sandbox otherwise blocks things like real registry access and
+        # browser subprocess spawns outright. See README for the tradeoff.
+        local -a codex_args=(exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox)
         [ -n "$model" ] && codex_args+=(-m "$model")
         [ -n "$reasoning" ] && codex_args+=(-c "model_reasoning_effort=$reasoning")
         codex "${codex_args[@]}" - < "$link_runner" | tee "$link_logpath"
@@ -2631,13 +2576,7 @@ PY
     local link_tid="$1" link_runner="$2" link_logpath="$3" link_session="$4"
     case "$executor" in
       codex)
-        local -a codex_args=(exec --skip-git-repo-check)
-        if link_wants_unsandboxed_browser_check; then
-          log "WARNING: running this codex step UNSANDBOXED (--dangerously-bypass-approvals-and-sandbox) - opted in via --codex-unsandboxed-browser-check/config for its [BROWSER-CHECK] step. No filesystem/shell/network confinement for this one spawn."
-          codex_args+=(--dangerously-bypass-approvals-and-sandbox)
-        else
-          codex_args+=(--sandbox workspace-write)
-        fi
+        local -a codex_args=(exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox)
         [ -n "$model" ] && codex_args+=(-m "$model")
         [ -n "$reasoning" ] && codex_args+=(-c "model_reasoning_effort=$reasoning")
         codex "${codex_args[@]}" - < "$link_runner" > "$link_logpath" 2>&1
@@ -2985,7 +2924,7 @@ PY
         chain_tid="$(new_task_id)"
         chain_logpath="$logdir/execute-$(date '+%Y%m%d-%H%M%S')-${chain_tid:5:8}.log"
         write_all_runner "$chain_tid" "$chain_logpath"
-        task_create "$chain_tid" "$issue" "execute" "$executor" "$model" "$mode" "$freshness" "$runner" "$chain_logpath" "running" "$reasoning" "$mcp_config" "$codex_unsandboxed_browser_check"
+        task_create "$chain_tid" "$issue" "execute" "$executor" "$model" "$mode" "$freshness" "$runner" "$chain_logpath" "running" "$reasoning" "$mcp_config"
         task_update "$chain_tid" "pid=$driver_pid"
         if [ "$executor" = "claude" ]; then
           chain_session="$(gen_uuid)"
@@ -3034,7 +2973,7 @@ PY
     chain_tid="$(new_task_id)"
     chain_logpath="$logdir/execute-$(date '+%Y%m%d-%H%M%S')-${chain_tid:5:8}.log"
     write_all_runner "$chain_tid" "$chain_logpath"
-    task_create "$chain_tid" "$issue" "execute" "$executor" "$model" "$mode" "$freshness" "$runner" "$chain_logpath" "running" "$reasoning" "$mcp_config" "$codex_unsandboxed_browser_check"
+    task_create "$chain_tid" "$issue" "execute" "$executor" "$model" "$mode" "$freshness" "$runner" "$chain_logpath" "running" "$reasoning" "$mcp_config"
     if [ "$executor" = "claude" ]; then
       chain_session="$(gen_uuid)"
       task_update "$chain_tid" "session_id=$chain_session"
@@ -3457,13 +3396,9 @@ for name, provider_fb, model_fb, override in roles:
 browser_mcp = get("browser_mcp")
 bm_src = "config.json" if "browser_mcp" in d else "fallback"
 bm_shown = json.dumps(browser_mcp)
-codex_unsandboxed = d.get("codex_unsandboxed_browser_check")
-cu_src = "config.json" if "codex_unsandboxed_browser_check" in d else "fallback"
-cu_shown = "true" if codex_unsandboxed else "false"
 
 top_entries = [
-    ('  "browser_mcp": {},'.format(bm_shown), "{} | override: --mcp-config PATH (ogre execute, [BROWSER-CHECK] steps)".format(bm_src)),
-    ('  "codex_unsandboxed_browser_check": {}'.format(cu_shown), "{} | override: --codex-unsandboxed-browser-check (ogre execute, codex [BROWSER-CHECK] only)".format(cu_src)),
+    ('  "browser_mcp": {}'.format(bm_shown), "{} | override: --mcp-config PATH (ogre execute, [BROWSER-CHECK] steps)".format(bm_src)),
 ]
 
 width = max(len(e) for e, _ in role_entries + top_entries)

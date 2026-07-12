@@ -188,24 +188,26 @@ print(t['id'])
   [ "$(state_field 42 status)" = "executing" ] || return 1
 }
 
-@test "execute foreground with --executor codex passes --sandbox workspace-write (default sandbox is read-only, silently no-ops writes)" {
+@test "execute foreground with --executor codex passes --dangerously-bypass-approvals-and-sandbox (always unsandboxed, dev-only tool)" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42
   write_plan_with_steps 42 "Only step"
   local args_file="${TEST_TMP}/codex-args.log"
   MOCK_CODEX_ARGS_FILE="${args_file}" run "${OGRE_BIN}" execute 42 --executor codex
   [ "${status}" -eq 0 ] || return 1
   [ -f "${args_file}" ] || return 1
-  [[ "$(cat "${args_file}")" == *"--sandbox workspace-write"* ]] || return 1
+  [[ "$(cat "${args_file}")" == *"--dangerously-bypass-approvals-and-sandbox"* ]] || return 1
+  [[ "$(cat "${args_file}")" != *"--sandbox workspace-write"* ]] || return 1
 }
 
-@test "execute --background with --executor codex passes --sandbox workspace-write" {
+@test "execute --background with --executor codex passes --dangerously-bypass-approvals-and-sandbox" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42
   write_plan_with_steps 42 "Only step"
   local args_file="${TEST_TMP}/codex-args.log"
   MOCK_CODEX_ARGS_FILE="${args_file}" run "${OGRE_BIN}" execute 42 --executor codex --background
   [ "${status}" -eq 0 ] || return 1
   [ -f "${args_file}" ] || return 1
-  [[ "$(cat "${args_file}")" == *"--sandbox workspace-write"* ]] || return 1
+  [[ "$(cat "${args_file}")" == *"--dangerously-bypass-approvals-and-sandbox"* ]] || return 1
+  [[ "$(cat "${args_file}")" != *"--sandbox workspace-write"* ]] || return 1
 }
 
 @test "execute --reasoning passes --effort to claude" {
@@ -432,12 +434,12 @@ print(t[0].get('notes') or '' if t else '')
   [[ "${plan_content}" != *"AUTO-FIX"* ]] || return 1
 }
 
-@test "execute --all --executor codex retries a failed [BROWSER-CHECK] with ad-hoc [AUTO-FIX] attempts, keeping the unsandboxed bypass scoped to only the [BROWSER-CHECK] attempts, never the [AUTO-FIX] step itself" {
+@test "execute --all --executor codex retries a failed [BROWSER-CHECK] with ad-hoc [AUTO-FIX] attempts, every codex spawn unsandboxed (browser-check AND auto-fix attempts alike)" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42
   write_plan_with_steps 42 "[BROWSER-CHECK] Verify the modal renders"
   local args_file="${TEST_TMP}/codex-args.log"
   MOCK_CODEX_ARGS_FILE="${args_file}" MOCK_CODEX_STATUS=failed \
-    run "${OGRE_BIN}" execute 42 --all --executor codex --codex-unsandboxed-browser-check
+    run "${OGRE_BIN}" execute 42 --all --executor codex
   [ "${status}" -eq 1 ] || return 1
   # Real retries happened: more than just the one initial spawn.
   local call_count
@@ -467,35 +469,29 @@ print(t[0].get('notes') or '' if t else '')
   [ "${browser_check_status}" = "failed" ] || return 1
   [[ "${browser_check_notes}" == *"Last verification failure:"* ]] || return 1
   [[ "${browser_check_notes}" == *"Mock codex exec output"* ]] || return 1
-  # Every spawn ever made must be one of exactly two kinds: an unsandboxed
-  # [BROWSER-CHECK] attempt, or a sandboxed [AUTO-FIX] attempt. A synthesized
-  # [AUTO-FIX ...] line's own reason text embeds the original failed item's
-  # text (which itself contains "[BROWSER-CHECK]") - if next_step_is_browser_
-  # check()'s substring match ever regresses to matching that embedded text,
-  # an [AUTO-FIX] step would wrongly get spawned fully unsandboxed instead of
-  # under --sandbox workspace-write. Assert the invariant directly: bypass and
-  # workspace-write flags must never both be absent, or both be present, on
-  # any single logged invocation line.
+  # Every real exec spawn (browser-check attempts and auto-fix attempts
+  # alike) must carry the unsandboxed bypass, never --sandbox workspace-write -
+  # codex steps are always fully unsandboxed now, regardless of step tag.
   while IFS= read -r line; do
     # Skip "mcp list" calls (the browser-MCP detector, not an exec spawn).
     case "$line" in mcp*) continue ;; esac
     case "$line" in
-      *--dangerously-bypass-approvals-and-sandbox*"--sandbox workspace-write"*|*"--sandbox workspace-write"*--dangerously-bypass-approvals-and-sandbox*)
-        echo "invocation had both bypass and workspace-write: $line"; return 1 ;;
       *--dangerously-bypass-approvals-and-sandbox*) : ;;
-      *"--sandbox workspace-write"*) : ;;
-      *) echo "invocation had neither bypass nor workspace-write: $line"; return 1 ;;
+      *) echo "exec invocation missing the unsandboxed bypass: $line"; return 1 ;;
+    esac
+    case "$line" in
+      *"--sandbox workspace-write"*) echo "exec invocation still sandboxed: $line"; return 1 ;;
     esac
   done < "${args_file}"
   # 5 real "exec" spawns total (the 1st line is codex's own "mcp list"
-  # browser-MCP probe, not a spawn): 3 unsandboxed [BROWSER-CHECK] attempts
-  # (initial, then one retry after each of the 2 AUTO-FIX attempts), and 2
-  # sandboxed [AUTO-FIX] steps themselves.
+  # browser-MCP probe, not a spawn): initial [BROWSER-CHECK] attempt, one
+  # retry after each of the 2 AUTO-FIX attempts, and the 2 AUTO-FIX steps
+  # themselves - all unsandboxed.
   local exec_count bypass_count
   exec_count="$(grep -c '^exec ' "${args_file}")"
   bypass_count="$(grep -c -- "--dangerously-bypass-approvals-and-sandbox" "${args_file}")"
   [ "${exec_count}" -eq 5 ] || return 1
-  [ "${bypass_count}" -eq 3 ] || return 1
+  [ "${bypass_count}" -eq 5 ] || return 1
 }
 
 @test "execute a [BROWSER-CHECK] step with no browser MCP auto-falls back to --main with a notice" {
@@ -520,33 +516,14 @@ print(t[0].get('notes') or '' if t else '')
   [[ "$(cat "${args_file}")" == *"--mcp-config /tmp/fake-mcp.json"* ]] || return 1
 }
 
-@test "execute a [BROWSER-CHECK] step with --executor codex falls back to --main by default, even with a Playwright MCP configured (config presence alone is not sufficient - codex's sandbox blocks the browser subprocess regardless)" {
+@test "execute a [BROWSER-CHECK] step with --executor codex and a Playwright MCP configured runs isolated (codex is always unsandboxed now, no opt-in needed)" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42
   write_plan_with_steps 42 "[BROWSER-CHECK] Verify the modal renders"
-  # Mock `codex mcp list` reports a Playwright MCP, but without the explicit
-  # --codex-unsandboxed-browser-check opt-in this must NOT be treated as
-  # isolable - proven false positive (browser_navigate gets silently
-  # cancelled under codex's default sandbox even when the MCP is listed).
-  run "${OGRE_BIN}" execute 42 --executor codex
-  [ "${status}" -eq 0 ] || return 1
-  [[ "${output}" == *"no browser MCP was detected"* ]] || return 1
-  [[ "${output}" == *"Mode: --main."* ]] || return 1
-}
-
-@test "execute a [BROWSER-CHECK] step with --executor codex and no browser MCP falls back to --main" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
-  write_plan_with_steps 42 "[BROWSER-CHECK] Verify the modal renders"
-  MOCK_CODEX_NO_MCP=1 run "${OGRE_BIN}" execute 42 --executor codex
-  [ "${status}" -eq 0 ] || return 1
-  [[ "${output}" == *"no browser MCP was detected"* ]] || return 1
-  [[ "${output}" == *"Mode: --main."* ]] || return 1
-}
-
-@test "execute a [BROWSER-CHECK] step with --executor codex --codex-unsandboxed-browser-check runs isolated with --dangerously-bypass-approvals-and-sandbox, not --sandbox workspace-write" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
-  write_plan_with_steps 42 "[BROWSER-CHECK] Verify the modal renders"
+  # Mock `codex mcp list` reports a Playwright MCP; codex always runs fully
+  # unsandboxed (--dangerously-bypass-approvals-and-sandbox) now, so the
+  # browser subprocess is no longer blocked and the step runs isolated.
   local args_file="${TEST_TMP}/codex-args.log"
-  MOCK_CODEX_ARGS_FILE="${args_file}" run "${OGRE_BIN}" execute 42 --executor codex --codex-unsandboxed-browser-check
+  MOCK_CODEX_ARGS_FILE="${args_file}" run "${OGRE_BIN}" execute 42 --executor codex
   [ "${status}" -eq 0 ] || return 1
   [[ "${output}" != *"Falling back to --main"* ]] || return 1
   [[ "${output}" == *"running isolated"* ]] || return 1
@@ -558,40 +535,24 @@ print(t[0].get('notes') or '' if t else '')
   grep -qi "in-app browser" .ai/.ogre/tmp/issue-42/run-next.md
 }
 
-@test "execute a [BROWSER-CHECK] step with --codex-unsandboxed-browser-check but no browser MCP still falls back to --main (opt-in alone isn't enough, still needs a real playwright MCP)" {
+@test "execute a [BROWSER-CHECK] step with --executor codex and no browser MCP falls back to --main" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42
   write_plan_with_steps 42 "[BROWSER-CHECK] Verify the modal renders"
-  MOCK_CODEX_NO_MCP=1 run "${OGRE_BIN}" execute 42 --executor codex --codex-unsandboxed-browser-check
+  MOCK_CODEX_NO_MCP=1 run "${OGRE_BIN}" execute 42 --executor codex
   [ "${status}" -eq 0 ] || return 1
   [[ "${output}" == *"no browser MCP was detected"* ]] || return 1
   [[ "${output}" == *"Mode: --main."* ]] || return 1
 }
 
-@test "execute a non-browser-check step with --executor codex --codex-unsandboxed-browser-check stays sandboxed (bypass only applies to the actual [BROWSER-CHECK] step)" {
+@test "execute a non-browser-check step with --executor codex also runs unsandboxed (bypass applies to every codex step, not just [BROWSER-CHECK])" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42
   write_plan_with_steps 42 "Plain step, no browser check"
   local args_file="${TEST_TMP}/codex-args.log"
-  MOCK_CODEX_ARGS_FILE="${args_file}" run "${OGRE_BIN}" execute 42 --executor codex --codex-unsandboxed-browser-check
-  [ "${status}" -eq 0 ] || return 1
-  [ -f "${args_file}" ] || return 1
-  [[ "$(cat "${args_file}")" == *"--sandbox workspace-write"* ]] || return 1
-  [[ "$(cat "${args_file}")" != *"--dangerously-bypass-approvals-and-sandbox"* ]] || return 1
-}
-
-@test "execute a [BROWSER-CHECK] step uses codex_unsandboxed_browser_check from config.json to run isolated with the bypass" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
-  write_plan_with_steps 42 "[BROWSER-CHECK] Verify the modal renders"
-  python3 - <<'PY'
-import json
-p = ".ai/.ogre/config.json"
-d = json.load(open(p)); d["codex_unsandboxed_browser_check"] = True
-json.dump(d, open(p, "w"), indent=2)
-PY
-  local args_file="${TEST_TMP}/codex-args.log"
   MOCK_CODEX_ARGS_FILE="${args_file}" run "${OGRE_BIN}" execute 42 --executor codex
   [ "${status}" -eq 0 ] || return 1
-  [[ "${output}" == *"running isolated"* ]] || return 1
+  [ -f "${args_file}" ] || return 1
   [[ "$(cat "${args_file}")" == *"--dangerously-bypass-approvals-and-sandbox"* ]] || return 1
+  [[ "$(cat "${args_file}")" != *"--sandbox workspace-write"* ]] || return 1
 }
 
 @test "execute a [BROWSER-CHECK] step uses browser_mcp from config.json to run isolated" {

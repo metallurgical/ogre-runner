@@ -177,7 +177,7 @@ PY
   [ -s "${args_file}" ] || return 1
 }
 
-@test "status auto-resume preserves reasoning/codex-unsandboxed-browser-check from the dead task's own ledger record" {
+@test "status auto-resume preserves reasoning from the dead task's own ledger record, and codex resumes unsandboxed regardless" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42
   write_plan_with_steps 42 "Step one" "[BROWSER-CHECK] Step two"
   run "${OGRE_BIN}" execute 42 --executor codex
@@ -185,10 +185,10 @@ PY
   local job_id
   job_id="$(state_field 42 job_id)"
 
-  # A dead-driver mode=all task that *did* have --reasoning/--codex-unsandboxed-
-  # browser-check set on the original invocation (task_create now persists
-  # these; before the fix they were dropped entirely, so a self-healed resume
-  # always came back sandboxed/default-effort no matter what was passed).
+  # A dead-driver mode=all task that *did* have --reasoning set on the
+  # original invocation (task_create persists this; before the fix it was
+  # dropped entirely, so a self-healed resume always came back at
+  # default-effort no matter what was passed).
   python3 - <<'PY'
 import json, uuid, datetime
 p = ".ai/.ogre/state/tasks.json"
@@ -199,7 +199,7 @@ tasks.append({
     "executor": "codex", "model": None, "mode": "all", "freshness": "fresh",
     "runner": None, "log_path": None, "status": "failed",
     "pid": 99999999, "exit_code": 0, "session_id": None, "notes": None,
-    "reasoning": "low", "mcp_config": None, "codex_unsandboxed_browser_check": True,
+    "reasoning": "low", "mcp_config": None,
     "created_at": now, "started_at": now, "ended_at": now, "updated_at": now,
 })
 json.dump(tasks, open(p, "w"), indent=2)

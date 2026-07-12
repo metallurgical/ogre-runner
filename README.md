@@ -2,6 +2,8 @@
 
 **A Claude Code plugin that turns "implement this feature" into a controlled, resumable, context-safe pipeline: plan it, review it, then execute one step at a time or chain the remaining steps with `--all`, with Claude or Codex doing the work.**
 
+> **⚠️ Development tool only — not for production environments.** When `--executor codex` is used, every codex spawn runs with `--dangerously-bypass-approvals-and-sandbox`: no filesystem, shell, or network confinement, and no approval prompts, for *any* step (not just `[BROWSER-CHECK]`). This is unconditional, not an opt-in flag. Codex's default sandbox otherwise blocks things Ogre needs (real registry/network access, spawning a real browser), so Ogre trades away that confinement entirely rather than half-sandbox individual steps. Only run Ogre with `--executor codex` in a disposable dev environment or a repo you're comfortable giving full local access to — never against production data, secrets, or a machine you don't fully trust the plan/model on. `claude` isolates fine by default and needs no such tradeoff.
+
 ## The problem
 
 Ask Claude Code to implement a non-trivial feature directly in one long chat session, and a few things tend to go wrong:
@@ -294,7 +296,6 @@ Executes one checklist item (or all remaining, with `--all`) from an approved pl
 | `--resume` | `/ogre:execute 107 --resume` | Resume prior context for this step instead of starting fresh |
 | `--main` | `/ogre:execute 107 --main` | Run inline in the current Claude Code session, no subprocess spawned. Opt-in only (Ogre forces it only as the browser-check fallback when no browser MCP is detected); defeats Ogre's context-isolation purpose if habitual |
 | `--mcp-config PATH` | `/ogre:execute 107 --mcp-config ./playwright-mcp.json` | Browser MCP config for the spawned `claude` session, so `[BROWSER-CHECK]` steps run isolated instead of falling back to `--main`. Also settable as `"browser_mcp"` in `.ai/.ogre/config.json` |
-| `--codex-unsandboxed-browser-check` | `/ogre:execute 107 --executor codex --codex-unsandboxed-browser-check` | Opt-in only. Lets a codex `[BROWSER-CHECK]` step actually run isolated with a real browser, at the cost of spawning that one step with `--dangerously-bypass-approvals-and-sandbox` instead of `--sandbox workspace-write` - no filesystem/shell/network confinement for that spawn. Also settable as `"codex_unsandboxed_browser_check": true` in `.ai/.ogre/config.json`. See the Codex section below for why this exists |
 | `--background` | `/ogre:execute 107 --background` | Same isolation as default (new session) but detached/non-blocking |
 | `--yes` | `/ogre:execute 107 --yes` | Required to proceed non-interactively when the step/job was previously `stopped`, or jumping to an out-of-order step whose earlier steps aren't `passed`. Only pass after explicit user confirmation |
 
@@ -307,14 +308,14 @@ Every runner prompt also includes the issue's **knowledge base** (`.ai/.ogre/sta
 | Executor | Runs isolated (real browser) if... | Otherwise |
 | :--- | :--- | :--- |
 | `claude` | a browser MCP is found — ambient `claude mcp list`, `browser_mcp` in config.json, or `--mcp-config` | falls back to `--main`, with a NOTE explaining why |
-| `codex` | `--codex-unsandboxed-browser-check` (or the config.json equivalent) is set **and** a browser MCP is present — codex's own sandbox otherwise blocks launching a real browser | falls back to `--main`, with a NOTE explaining why |
+| `codex` | a browser MCP is present (codex is always unsandboxed now, so its own sandbox no longer blocks launching a real browser) | falls back to `--main`, with a NOTE explaining why |
 
 ```jsonc
 // .ai/.ogre/config.json
-{ "browser_mcp": "/path/to/playwright-mcp.json", "codex_unsandboxed_browser_check": true }
+{ "browser_mcp": "/path/to/playwright-mcp.json" }
 ```
 
-The codex flag removes **all** sandboxing (filesystem/shell/network) but only for the spawn covering that one `[BROWSER-CHECK]` step — every other step keeps its normal sandbox.
+**⚠️ Every codex step runs fully unsandboxed** (`--dangerously-bypass-approvals-and-sandbox`) — no filesystem, shell, or network confinement, no approval prompts, for every spawn, not just `[BROWSER-CHECK]` steps. See the warning at the top of this README before using `--executor codex`.
 
 **Auto-fix on a failed `[BROWSER-CHECK]`** (automatic in `--all`/`--background`, no flag needed). A browser-check step can't edit files, so a real bug it finds would otherwise be a dead end. Instead Ogre inserts up to 2 ad-hoc `[AUTO-FIX n/2]` steps (full edit rights, same safety rules as any step) before re-checking, each in its own fresh session so the re-check is genuinely independent. Still failing after 2 → chain stops for real, step marked `failed`. Every attempt stays visible in the plan file; the originally planned steps are never touched.
 
@@ -398,8 +399,7 @@ Prints `config.json`'s actual nested shape (not a flattened dot-path list), each
     "executor": { "provider": "claude", "model": "claude-sonnet-5" },       # config.json | override: --executor PROVIDER / --model MODEL (ogre execute)
     "diff_reviewer": { "provider": "claude", "model": "claude-sonnet-5" }   # config.json | not read by any command yet
   },
-  "browser_mcp": null,                                                     # fallback | override: --mcp-config PATH (ogre execute, [BROWSER-CHECK] steps)
-  "codex_unsandboxed_browser_check": false                                 # fallback | override: --codex-unsandboxed-browser-check (ogre execute, codex [BROWSER-CHECK] only)
+  "browser_mcp": null                                                      # fallback | override: --mcp-config PATH (ogre execute, [BROWSER-CHECK] steps)
 }
 ```
 
@@ -415,7 +415,7 @@ Precedence for every value shown: CLI flag on the command itself wins, then conf
 - Ogre runtime state is file-based, so Claude and Codex can resume by reading `.ai/.ogre/state/` and `.ai/.ogre/plans/`.
 - Default execution is one checklist item at a time.
 - Use `--all` only when you deliberately want Ogre to chain through every remaining step automatically.
-- Spawned executor sessions run with permissions fully bypassed (`claude -p --permission-mode bypassPermissions`, `codex exec --sandbox workspace-write`) - no interactive approval, by design, since nothing can prompt a headless subprocess.
+- Spawned executor sessions run with permissions fully bypassed (`claude -p --permission-mode bypassPermissions`, `codex exec --dangerously-bypass-approvals-and-sandbox`) - no interactive approval, by design, since nothing can prompt a headless subprocess. For codex this also means no sandbox confinement at all - see the warning at the top of this README.
 - `/plugin marketplace update` alone does not update your install - only a version bump does. Update, then `/reload-plugins` (or reinstall) to actually pick up a new release.
 
 ## Suggested `.gitignore`

@@ -6,12 +6,20 @@ load test_helper
   [[ "${output}" == *"Unknown option: --bogus"* ]] || return 1
 }
 
-@test "config with no config.json shows every hardcoded fallback" {
+@test "config with no config.json creates it with explicit defaults (config.json-sourced, not fallback)" {
   run "${OGRE_BIN}" config
   [ "${status}" -eq 0 ] || return 1
-  [[ "${output}" == *'"planner": { "provider": "claude", "model": "claude-sonnet-5" }'*"fallback"* ]] || return 1
-  [[ "${output}" == *'"executor": { "provider": "claude", "model": "claude-sonnet-5" }'*"fallback"* ]] || return 1
-  [[ "${output}" == *'"codex_unsandboxed_browser_check": false'*"fallback"* ]] || return 1
+  [[ "${output}" == *'"planner": { "provider": "claude", "model": "claude-sonnet-5" },        # config.json'* ]] || return 1
+  [[ "${output}" == *'"executor": { "provider": "claude", "model": "claude-sonnet-5" },       # config.json'* ]] || return 1
+}
+
+@test "config shows the hardcoded fallback for a role missing from an existing config.json's defaults" {
+  mkdir -p .ai/.ogre
+  printf '{}' > .ai/.ogre/config.json
+  run "${OGRE_BIN}" config
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" == *'"planner": { "provider": "claude", "model": "claude-sonnet-5" },        # fallback'* ]] || return 1
+  [[ "${output}" == *'"executor": { "provider": "claude", "model": "claude-sonnet-5" },       # fallback'* ]] || return 1
 }
 
 @test "config reflects a value set in config.json, distinct from the fallback" {
@@ -20,13 +28,11 @@ load test_helper
 import json
 d = json.load(open('.ai/.ogre/config.json'))
 d['defaults']['executor'] = {'provider': 'codex', 'model': 'gpt-5.5'}
-d['codex_unsandboxed_browser_check'] = True
 json.dump(d, open('.ai/.ogre/config.json', 'w'))
 "
   run "${OGRE_BIN}" config
   [ "${status}" -eq 0 ] || return 1
   [[ "${output}" == *'"executor": { "provider": "codex", "model": "gpt-5.5" }'*"config.json"* ]] || return 1
-  [[ "${output}" == *'"codex_unsandboxed_browser_check": true'*"config.json"* ]] || return 1
 }
 
 @test "config shows the config.json path" {

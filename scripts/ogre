@@ -217,11 +217,21 @@ for p in glob.glob(sys.argv[2]):
 ' "$job_id" "$RUNTIME/state/issue-*.json"
 }
 
-# task_create <id> <issue> <type> <executor> <model> <mode> <freshness> <runner> <logpath> <status>
+# task_create <id> <issue> <type> <executor> <model> <mode> <freshness> <runner> <logpath> <status> [reasoning] [mcp_config] [codex_unsandboxed_browser_check]
+# The three trailing fields are optional and only meaningful for mode=all
+# chain tasks: maybe_resume_stalled_chain (cross-process, no access to the
+# original cmd_execute shell variables) reads them back off the task record
+# to rebuild an equivalent `ogre execute --all --background` invocation when
+# self-healing a dead driver - without them a self-healed resume silently
+# drops --reasoning/--mcp-config/--codex-unsandboxed-browser-check even when
+# the original invocation had them.
 task_create() {
   py_state "$(tasks_path)" "$@" <<'PY'
 import sys, datetime
 path, tid, issue, ttype, executor, model, mode, freshness, runner, logpath, status = sys.argv[1:12]
+reasoning = sys.argv[12] if len(sys.argv) > 12 else ""
+mcp_config = sys.argv[13] if len(sys.argv) > 13 else ""
+codex_unsandboxed_browser_check = sys.argv[14] if len(sys.argv) > 14 else ""
 _lk = lock_state(path)
 try:
     tasks = json.load(open(path))
@@ -233,6 +243,8 @@ tasks.append({
     "mode": mode, "freshness": freshness, "runner": runner, "log_path": logpath,
     "status": status, "pid": None, "exit_code": None, "session_id": None,
     "notes": None,
+    "reasoning": reasoning or None, "mcp_config": mcp_config or None,
+    "codex_unsandboxed_browser_check": codex_unsandboxed_browser_check == "true",
     "created_at": now, "started_at": None, "ended_at": None, "updated_at": now,
 })
 dump_json(tasks, path)
@@ -483,8 +495,8 @@ print(d.get("job_id") or "")
   # the one whose death (if any) means the chain stopped without finishing.
   # A single-step (non-chained) `execute` never self-resumes and was never
   # supposed to, so this only ever acts on mode=all tasks.
-  local last_tid last_status last_pid executor model
-  { read -r last_tid; read -r last_status; read -r last_pid; read -r executor; read -r model; } < <(python3 -c '
+  local last_tid last_status last_pid executor model reasoning mcp_config codex_unsandboxed_browser_check
+  { read -r last_tid; read -r last_status; read -r last_pid; read -r executor; read -r model; read -r reasoning; read -r mcp_config; read -r codex_unsandboxed_browser_check; } < <(python3 -c '
 import json
 try:
     tasks = json.load(open("'"$(tasks_path)"'"))
@@ -494,11 +506,12 @@ cand = [t for t in tasks if t.get("issue") == "'"$issue"'" and t.get("mode") == 
 cand.sort(key=lambda t: t.get("created_at") or "")
 if cand:
     t = cand[-1]
-    for f in ("id", "status", "pid", "executor", "model"):
+    for f in ("id", "status", "pid", "executor", "model", "reasoning", "mcp_config"):
         v = t.get(f)
         print("" if v is None else v)
+    print("true" if t.get("codex_unsandboxed_browser_check") else "")
 else:
-    print(""); print(""); print(""); print(""); print("")
+    print(""); print(""); print(""); print(""); print(""); print(""); print(""); print("")
 ')
   [ -n "$last_tid" ] || return 0
   [ "$last_status" != "running" ] || return 0
@@ -511,6 +524,9 @@ else:
   local -a resume_args=(execute --job "$job_id" --all --background)
   [ -n "$executor" ] && resume_args+=(--executor "$executor")
   [ -n "$model" ] && resume_args+=(--model "$model")
+  [ -n "$reasoning" ] && resume_args+=(--reasoning "$reasoning")
+  [ -n "$mcp_config" ] && resume_args+=(--mcp-config "$mcp_config")
+  [ "$codex_unsandboxed_browser_check" = "true" ] && resume_args+=(--codex-unsandboxed-browser-check)
   "$SCRIPT_DIR/ogre" "${resume_args[@]}" \
     || err "Auto-resume for issue $issue failed to start - resume it yourself: $SCRIPT_DIR/ogre execute --job $job_id --all --background"
 }
@@ -2303,7 +2319,7 @@ EOF2
     tid="$(new_task_id)"
     logpath="$logdir/execute-$(date '+%Y%m%d-%H%M%S')-${tid:5:8}.log"
     write_all_runner "$tid" "$logpath"
-    task_create "$tid" "$issue" "execute" "$executor" "$model" "$mode" "$freshness" "$runner" "$logpath" "pending"
+    task_create "$tid" "$issue" "execute" "$executor" "$model" "$mode" "$freshness" "$runner" "$logpath" "pending" "$reasoning" "$mcp_config" "$codex_unsandboxed_browser_check"
   else
     # Default: target exactly one seeded step-task. Explicit --task/--step
     # picks it out of order; otherwise take the lowest step_index pending.
@@ -2969,7 +2985,7 @@ PY
         chain_tid="$(new_task_id)"
         chain_logpath="$logdir/execute-$(date '+%Y%m%d-%H%M%S')-${chain_tid:5:8}.log"
         write_all_runner "$chain_tid" "$chain_logpath"
-        task_create "$chain_tid" "$issue" "execute" "$executor" "$model" "$mode" "$freshness" "$runner" "$chain_logpath" "running"
+        task_create "$chain_tid" "$issue" "execute" "$executor" "$model" "$mode" "$freshness" "$runner" "$chain_logpath" "running" "$reasoning" "$mcp_config" "$codex_unsandboxed_browser_check"
         task_update "$chain_tid" "pid=$driver_pid"
         if [ "$executor" = "claude" ]; then
           chain_session="$(gen_uuid)"
@@ -3018,7 +3034,7 @@ PY
     chain_tid="$(new_task_id)"
     chain_logpath="$logdir/execute-$(date '+%Y%m%d-%H%M%S')-${chain_tid:5:8}.log"
     write_all_runner "$chain_tid" "$chain_logpath"
-    task_create "$chain_tid" "$issue" "execute" "$executor" "$model" "$mode" "$freshness" "$runner" "$chain_logpath" "running"
+    task_create "$chain_tid" "$issue" "execute" "$executor" "$model" "$mode" "$freshness" "$runner" "$chain_logpath" "running" "$reasoning" "$mcp_config" "$codex_unsandboxed_browser_check"
     if [ "$executor" = "claude" ]; then
       chain_session="$(gen_uuid)"
       task_update "$chain_tid" "session_id=$chain_session"

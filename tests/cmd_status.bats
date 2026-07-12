@@ -177,6 +177,50 @@ PY
   [ -s "${args_file}" ] || return 1
 }
 
+@test "status auto-resume preserves reasoning/codex-unsandboxed-browser-check from the dead task's own ledger record" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "Step one" "[BROWSER-CHECK] Step two"
+  run "${OGRE_BIN}" execute 42 --executor codex
+  [ "${status}" -eq 0 ] || return 1
+  local job_id
+  job_id="$(state_field 42 job_id)"
+
+  # A dead-driver mode=all task that *did* have --reasoning/--codex-unsandboxed-
+  # browser-check set on the original invocation (task_create now persists
+  # these; before the fix they were dropped entirely, so a self-healed resume
+  # always came back sandboxed/default-effort no matter what was passed).
+  python3 - <<'PY'
+import json, uuid, datetime
+p = ".ai/.ogre/state/tasks.json"
+tasks = json.load(open(p))
+now = datetime.datetime.now().astimezone().isoformat()
+tasks.append({
+    "id": "task-{}".format(uuid.uuid4()), "issue": "42", "type": "execute",
+    "executor": "codex", "model": None, "mode": "all", "freshness": "fresh",
+    "runner": None, "log_path": None, "status": "failed",
+    "pid": 99999999, "exit_code": 0, "session_id": None, "notes": None,
+    "reasoning": "low", "mcp_config": None, "codex_unsandboxed_browser_check": True,
+    "created_at": now, "started_at": now, "ended_at": now, "updated_at": now,
+})
+json.dump(tasks, open(p, "w"), indent=2)
+PY
+
+  local args_file="${TEST_TMP}/codex-args.log"
+  MOCK_CODEX_ARGS_FILE="${args_file}" run "${OGRE_BIN}" status 42
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" == *"looks stalled"* ]] || return 1
+  [[ "${output}" == *"Auto-resuming"* ]] || return 1
+
+  local waited=0
+  while [ ! -s "${args_file}" ] && [ "${waited}" -lt 20 ]; do
+    sleep 0.2
+    waited=$((waited + 1))
+  done
+  [ -s "${args_file}" ] || return 1
+  [[ "$(cat "${args_file}")" == *"-c model_reasoning_effort=low"* ]] || return 1
+  [[ "$(cat "${args_file}")" == *"--dangerously-bypass-approvals-and-sandbox"* ]] || return 1
+}
+
 @test "status does not touch a stopped issue even with a dead-pid mode=all task and steps pending" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42
   write_plan_with_steps 42 "Step one" "Step two"

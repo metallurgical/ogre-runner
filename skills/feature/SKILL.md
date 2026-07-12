@@ -51,6 +51,7 @@ Optional flags:
 5. Write the final plan to:
    - `.ai/.ogre/plans/issue-<number>.md` or the custom plan path.
 6. Run `${CLAUDE_PLUGIN_ROOT}/scripts/ogre status <issue>` and show that Job Summary again, same format as step 2 (verbatim code block, one field per line). The plan now exists, so this second summary will differ from the first: `Plan` drops `(not written yet)`, `Steps Completed/Remaining/Total` are populated, `Review plan`/`Execute next` rows appear, and a `Steps (N):` checklist table is printed below it. Don't skip this just because you already showed a summary in step 2 — that one was necessarily incomplete.
+   - This verbatim requirement (both step 2 and step 6) holds even under a response-compression mode (caveman, terse/brief settings, etc). Those modes govern your own prose, not tool output you're instructed to reproduce verbatim — never fold the Job Summary table or Steps checklist into a one-line paraphrase like "Plan ready: N steps - ..." to satisfy a brevity mode.
 7. Do not implement code.
 8. Do not modify application files.
 

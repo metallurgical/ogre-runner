@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OGRE_VERSION="1.4.18"
+OGRE_VERSION="1.4.19"
 RUNTIME=".ai/.ogre"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -936,6 +936,29 @@ PY
   log "State written: $path (job_id: $job_id)"
 }
 
+# update_role_state <issue> <role> <provider> <model> - persist the actually
+# resolved (flag-wins-else-config) reviewer/executor into state.json every
+# time review-plan/execute really runs. write_state only fires once, at
+# `ogre feature` time, seeding a guess for reviewer/executor before either has
+# ever been invoked - if left untouched after that, state.json silently drifts
+# from reality the moment a later --reviewer/--executor flag or an updated
+# config.json default picks something else, and `ogre status` then reports a
+# provider that never actually ran. No-ops if state.json doesn't exist yet.
+update_role_state() {
+  local issue="$1" role="$2" provider="$3" model="$4" spath
+  spath="$(state_path "$issue")"
+  [ -f "$spath" ] || return 0
+  py_state "$spath" "$role" "$provider" "$model" "$(now_iso)" <<'PY'
+import sys
+spath, role, provider, model, updated_at = sys.argv[1:6]
+_lk = lock_state(spath)
+d = json.load(open(spath))
+d[role] = {"provider": provider, "model": model}
+d["updated_at"] = updated_at
+dump_json(d, spath)
+PY
+}
+
 # True (exit 0) if execution appears to have already started for this issue -
 # blockers must not be added after that point since the checklist/state is
 # already in motion against the old blocker list.
@@ -1791,7 +1814,17 @@ EOF2
   local blocker_paths_json="[]" bremarks_json="{}"
   [ ${#bpaths[@]} -gt 0 ] && blocker_paths_json="$(json_array "${bpaths[@]}")"
   [ ${#remark_pairs[@]} -gt 0 ] && bremarks_json="$(blocker_remarks_json "${remark_pairs[@]}")"
-  write_state "$issue" "planning" "$plan" "$planner" "$model" "claude" "claude-sonnet-5" "claude" "claude-sonnet-5" "$blocker_paths_json" "$bremarks_json"
+  # Seed reviewer/executor from config.json (same fallback the real
+  # review-plan/execute commands use) rather than a hardcoded "claude" -
+  # neither role has run yet at feature-creation time, so this is only ever a
+  # starting guess; update_role_state overwrites it with the real value the
+  # first time review-plan/execute actually runs.
+  local seed_reviewer seed_reviewer_model seed_executor seed_executor_model
+  seed_reviewer="$(config_default_role plan_reviewer provider)"; [ -n "$seed_reviewer" ] || seed_reviewer="claude"
+  seed_reviewer_model="$(config_default_role plan_reviewer model)"; [ -n "$seed_reviewer_model" ] || seed_reviewer_model="claude-sonnet-5"
+  seed_executor="$(config_default_role executor provider)"; [ -n "$seed_executor" ] || seed_executor="claude"
+  seed_executor_model="$(config_default_role executor model)"; [ -n "$seed_executor_model" ] || seed_executor_model="claude-sonnet-5"
+  write_state "$issue" "planning" "$plan" "$planner" "$model" "$seed_reviewer" "$seed_reviewer_model" "$seed_executor" "$seed_executor_model" "$blocker_paths_json" "$bremarks_json"
 
   log ""
   print_job_summary "$issue"
@@ -2004,6 +2037,8 @@ cmd_review_plan() {
   plan="$(get_plan_path "$target")"
   [ -f "$plan" ] || { err "Plan not found: $plan"; exit 1; }
   issue="$(slug_from_issue "$plan")"
+  ensure_state_from_plan "$issue" || true
+  update_role_state "$issue" reviewer "$reviewer" "$model"
   review_dir="$RUNTIME/reviews/issue-$issue"
   review_path="$review_dir/plan-review.md"
   runner="$RUNTIME/tmp/issue-$issue/plan-review-runner.md"
@@ -2126,6 +2161,7 @@ cmd_execute() {
   [ -f "$plan" ] || { err "Plan not found: $plan"; exit 1; }
   issue="$(slug_from_issue "$plan")"
   sync_state_from_plan "$issue"
+  update_role_state "$issue" executor "$executor" "$model"
   seed_knowledge "$issue"  # lazily seed for jobs created before knowledge bases existed
   spath="$(state_path "$issue")"
   logdir="$RUNTIME/logs/issue-$issue"

@@ -25,6 +25,21 @@ load test_helper
   [[ "$(cat .ai/.ogre/tmp/issue-darkmode/plan-runner.md)" == *"issue-darkmode.md"* ]] || return 1
 }
 
+@test "feature seeds reviewer/executor from config.json defaults instead of a hardcoded claude" {
+  "${OGRE_BIN}" init
+  python3 -c "
+import json
+d = json.load(open('.ai/.ogre/config.json'))
+d['defaults']['plan_reviewer'] = {'provider': 'codex', 'model': 'gpt-5.6-sol'}
+d['defaults']['executor'] = {'provider': 'codex', 'model': 'gpt-5.6-sol'}
+json.dump(d, open('.ai/.ogre/config.json', 'w'))
+"
+  run "${OGRE_BIN}" feature --statement "add dark mode toggle" --name darkmode
+  [ "${status}" -eq 0 ] || return 1
+  [[ "$(state_field darkmode reviewer)" == *"codex"* ]] || return 1
+  [[ "$(state_field darkmode executor)" == *"codex"* ]] || return 1
+}
+
 @test "feature without --browser-check tells the planner to skip [BROWSER-CHECK] tags entirely" {
   run "${OGRE_BIN}" feature --statement "add dark mode toggle" --name darkmode
   [ "${status}" -eq 0 ] || return 1

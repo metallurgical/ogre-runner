@@ -45,6 +45,30 @@ load test_helper
   [[ "${output}" == *"Unsupported executor: bogus"* ]] || return 1
 }
 
+@test "execute persists the resolved executor into state.json, overwriting the value seeded at feature-creation" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step"
+  [[ "$(state_field 42 executor)" == *"claude"* ]] || return 1
+  run "${OGRE_BIN}" execute 42 --executor codex
+  [ "${status}" -eq 0 ] || return 1
+  [[ "$(state_field 42 executor)" == *"codex"* ]] || return 1
+}
+
+@test "execute --executor flag wins over config.json default when persisting state.json's executor" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step"
+  python3 -c "
+import json
+d = json.load(open('.ai/.ogre/config.json'))
+d['defaults']['executor'] = {'provider': 'codex', 'model': 'gpt-5.6-sol'}
+json.dump(d, open('.ai/.ogre/config.json', 'w'))
+"
+  run "${OGRE_BIN}" execute 42 --executor claude
+  [ "${status}" -eq 0 ] || return 1
+  [[ "$(state_field 42 executor)" == *"claude"* ]] || return 1
+  [[ "$(state_field 42 executor)" != *"codex"* ]] || return 1
+}
+
 @test "execute errors when the claude CLI is missing (default executor)" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42
   write_plan_with_steps 42 "First step"

@@ -23,6 +23,7 @@ Follow:
 * Do not add unrelated refactors.
 * Do not change behavior outside the issue scope.
 * Do not add packages unless the plan explicitly says so.
+* If a shell-command wrapper is configured to auto-prefix your commands (e.g. `rtk`), do not let it wrap long-running/streaming commands - such proxies can hang forever if the wrapped command spawns any background/daemon descendant that inherits its stdout/stderr pipes (confirmed upstream bug, rtk-ai/rtk#2829, unmerged as of rtk 0.43.0). This includes install/build/dev-server commands for `npm`, `pnpm`, `yarn`, `bun`, `deno`, `composer`, `pip`, and `docker` (e.g. `npm install`, `npm ci`, `pnpm install`, `yarn install`, `bun install`, `deno install`, `composer install`, `composer update`, `pip install`, `docker build`, `npm run dev`, `vite`/`webpack` dev servers). Run those specific commands fully raw (no wrapper prefix at all) instead - the wrapper's own passthrough mode (e.g. `rtk proxy`) shares the same buggy code path and is not a safe fallback.
 * Preserve existing project style.
 * Prefer the smallest safe change.
 * Stop if blocker dependency is missing or incompatible.

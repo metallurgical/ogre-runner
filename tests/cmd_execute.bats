@@ -87,6 +87,18 @@ json.dump(d, open('.ai/.ogre/config.json', 'w'))
   [[ "${output}" == *"codex CLI not found"* ]] || return 1
 }
 
+@test "execute errors (no prompt/hang) when codex CLI is missing and stdin/stdout aren't a real tty (bats, CI)" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  write_plan_with_steps 42 "First step"
+  # bats' `run` captures stdout to a file, so -t 1 is false here regardless of
+  # stdin - this exercises the same non-interactive fail path a CI runner or a
+  # driving Claude Code session (no tty) would hit, never the read -p prompt.
+  run env PATH="/usr/bin:/bin" "${OGRE_BIN}" execute 42 --executor codex --background
+  [ "${status}" -eq 1 ] || return 1
+  [[ "${output}" == *"codex CLI not found"* ]] || return 1
+  [[ "${output}" == *"Re-run with --executor claude, or install codex first."* ]] || return 1
+}
+
 @test "execute --main prints instructions and does not spawn a subprocess" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42
   write_plan_with_steps 42 "First step"

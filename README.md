@@ -294,7 +294,7 @@ Executes one checklist item (or all remaining, with `--all`) from an approved pl
 | `--max-steps N` | `/ogre:execute 107 --all --max-steps 5` | Hard cap on checklist items per chained session (default: 3). Self-assessed context estimates are unreliable, so the cap is the authoritative limit. Many tiny/trivial steps (e.g. scaffolding dozens of near-identical files)? Raise this so they batch into one session instead of one spawn per step |
 | `--fresh` | `/ogre:execute 107 --fresh` | Force a brand-new context for this step (default) |
 | `--resume` | `/ogre:execute 107 --resume` | Resume prior context for this step instead of starting fresh |
-| `--main` | `/ogre:execute 107 --main` | Run inline in the current Claude Code session, no subprocess spawned. Opt-in only (Ogre forces it only as the browser-check fallback when no browser MCP is detected); defeats Ogre's context-isolation purpose if habitual |
+| `--main` | `/ogre:execute 107 --main` | Run inline in the current Claude Code session, no subprocess spawned. Opt-in only (Ogre auto-falls back to it only in single-step mode, as the browser-check fallback when no browser MCP is detected - `--all`/`--background` stop instead of falling back, see `[BROWSER-CHECK]` steps below); defeats Ogre's context-isolation purpose if habitual |
 | `--mcp-config PATH` | `/ogre:execute 107 --mcp-config ./playwright-mcp.json` | Browser MCP config for the spawned `claude` session, so `[BROWSER-CHECK]` steps run isolated instead of falling back to `--main`. Also settable as `"browser_mcp"` in `.ai/.ogre/config.json` |
 | `--background` | `/ogre:execute 107 --background` | Same isolation as default (new session) but detached/non-blocking |
 | `--yes` | `/ogre:execute 107 --yes` | Required to proceed non-interactively when the step/job was previously `stopped`, or jumping to an out-of-order step whose earlier steps aren't `passed`. Only pass after explicit user confirmation |
@@ -307,8 +307,15 @@ Every runner prompt also includes the issue's **knowledge base** (`.ai/.ogre/sta
 
 | Executor | Runs isolated (real browser) if... | Otherwise |
 | :--- | :--- | :--- |
-| `claude` | a browser MCP is found — ambient `claude mcp list`, `browser_mcp` in config.json, or `--mcp-config` | falls back to `--main`, with a NOTE explaining why |
-| `codex` | a browser MCP is present (codex is always unsandboxed now, so its own sandbox no longer blocks launching a real browser) | falls back to `--main`, with a NOTE explaining why |
+| `claude` | a browser MCP is found — ambient `claude mcp list`, `browser_mcp` in config.json, or `--mcp-config` | single-step: auto-falls back to `--main`, with a NOTE explaining why. `--all`/`--background`: **stops the chain instead** (see below) |
+| `codex` | a browser MCP is present (codex is always unsandboxed now, so its own sandbox no longer blocks launching a real browser) | single-step: auto-falls back to `--main`, with a NOTE explaining why. `--all`/`--background`: **stops the chain instead** (see below) |
+
+No browser MCP configured and the next step is `[BROWSER-CHECK]`? Behavior depends on mode:
+
+* **Single-step** (`/ogre:execute 107`, no `--all`): silently falls back to `--main` and logs a NOTE - the step still completes automatically, no manual retrigger needed.
+* **`--all` / `--background`**: does *not* fall back automatically. The chain exits with an error telling you to either finish that one step with `--main` then resume `--all`, or configure a browser MCP first. This applies both when the chain first launches on a `[BROWSER-CHECK]` step, and when a chain link finishes and hands off to the next one.
+
+So passing `--browser-check` to `/ogre:feature` without a browser MCP configured won't silently skip or fail the check in `--all` mode - it halts the chain at that exact step until you resolve it.
 
 ```jsonc
 // .ai/.ogre/config.json

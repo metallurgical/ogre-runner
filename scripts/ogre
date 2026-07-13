@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OGRE_VERSION="1.4.24"
+OGRE_VERSION="1.4.25"
 RUNTIME=".ai/.ogre"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -1799,8 +1799,8 @@ $blockers_text
 * Create planning output only.
 * Do not implement code.
 * Do not modify application files.
-* Do not keep placeholder issue numbers from the template.
-* Use real issue numbers and issue paths from this runner prompt.
+* Do not keep placeholder issue numbers/paths from the planning template - use the real issue path given above under "Current Issue" instead.
+* This may be a freeform \`--statement\` with no numeric issue number (just a slug and a local file) - that is normal, not a sign the issue is missing or needs escalation. Treat its full text as the complete problem statement.
 ${browser_check_rule}
 EOF2
 
@@ -1995,7 +1995,7 @@ $passed_section
 * Revise planning output only.
 * Do not implement code.
 * Do not modify application files.
-* Use real issue numbers and issue paths from this runner prompt.
+* Use the real issue/blocker paths given above under "Current Issue"/"Blocking Issues" - a freeform \`--statement\` issue has no numeric number and that is normal, not a sign anything is missing.
 EOF2
 
   log ""
@@ -2100,6 +2100,37 @@ cmd_execute() {
   # .ai/.ogre/config.json; else the hardcoded claude default.
   [ -n "$executor" ] || executor="$(config_default_role executor provider)"
   [ -n "$executor" ] || executor="claude"
+  # Fail fast on a missing codex CLI, before any plan/task-ledger work happens
+  # (the later per-spawn check at case "$executor" in codex) only runs after
+  # the runner file and ledger task already exist). Only claude is checked
+  # here implicitly by being unreachable: this plugin runs inside Claude Code
+  # itself, so a claude CLI is assumed present.
+  # Interactive terminal only (real tty on both stdin and stdout - stdout
+  # alone covers non-interactive callers like bats' `run`, which captures
+  # stdout to a file even if stdin happens to be a tty) and never for
+  # --background (self-heal/detached relaunches must never block on stdin
+  # that nobody is watching): offer to switch to claude instead of just
+  # failing. Anything else - no tty, or --background - keeps the old loud
+  # fail with no prompt and no silent swap.
+  if [ "$executor" = "codex" ] && ! command -v codex >/dev/null 2>&1; then
+    err "codex CLI not found on PATH, but --executor codex was requested."
+    if [ -t 0 ] && [ -t 1 ] && [ "$iso" != "background" ]; then
+      read -r -p "Switch to --executor claude instead? [y/N] " codex_missing_reply
+      case "$codex_missing_reply" in
+        [Yy]*)
+          executor="claude"
+          log "Switched executor: codex -> claude (codex CLI not found)."
+          ;;
+        *)
+          err "Aborting. Install codex, or re-run with --executor claude."
+          exit 1
+          ;;
+      esac
+    else
+      err "Re-run with --executor claude, or install codex first."
+      exit 1
+    fi
+  fi
   # Browser MCP for [BROWSER-CHECK] steps: --mcp-config flag wins, else the
   # optional browser_mcp field in .ai/.ogre/config.json. When set, it is passed
   # to spawned `claude` sessions (--mcp-config) so a browser-check step can

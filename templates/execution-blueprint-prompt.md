@@ -2,9 +2,9 @@
 
 ## Context
 
-* Current issue: GitHub issue will be provided by the runner prompt.
+* Current issue: the issue/feature description will be provided by the runner prompt - a GitHub/GitLab/Bitbucket issue, a local file, or a freeform `--statement`. A freeform statement has no numeric issue number; that is expected, not a sign the issue is missing - treat the runner prompt's "Current Issue" content as the complete problem statement regardless of source.
 * Blocked by:
-  * GitHub issue will be provided by the runner prompt.
+  * Same as above, if any blockers were provided by the runner prompt.
 * Attached: `repo_map.md`
 
 ## Task

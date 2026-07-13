@@ -89,7 +89,7 @@ json.dump(d, open('.ai/.ogre/config.json', 'w'))
 }
 
 @test "review-plan updates state.json's reviewer field, overwriting the value seeded at feature-creation" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "Do the thing"
   [[ "$(state_field 42 reviewer)" == *"claude"* ]] || return 1
   run "${OGRE_BIN}" review-plan 42 --reviewer codex --model gpt-5.6-sol

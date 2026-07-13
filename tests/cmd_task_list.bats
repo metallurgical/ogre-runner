@@ -13,7 +13,7 @@ load test_helper
 }
 
 @test "task-list shows every seeded step for the job" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step" "Second step"
   local job_id
   job_id="$(state_field 42 job_id)"
@@ -27,7 +27,7 @@ load test_helper
 }
 
 @test "task-list with no tasks yet says so" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   local job_id
   job_id="$(state_field 42 job_id)"
 

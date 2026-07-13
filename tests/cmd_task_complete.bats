@@ -13,7 +13,7 @@ load test_helper
 }
 
 @test "task-complete rejects an invalid --status value" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step"
   "${OGRE_BIN}" task-list "$(state_field 42 job_id)" >/dev/null
   local tid
@@ -25,7 +25,7 @@ load test_helper
 }
 
 @test "task-complete defaults to passed and updates the ledger" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step"
   "${OGRE_BIN}" task-list "$(state_field 42 job_id)" >/dev/null
   local tid
@@ -38,7 +38,7 @@ load test_helper
 }
 
 @test "task-complete --notes records findings on the task and shows them in the summary" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step"
   "${OGRE_BIN}" task-list "$(state_field 42 job_id)" >/dev/null
   local tid
@@ -52,7 +52,7 @@ load test_helper
 }
 
 @test "concurrent task-complete calls all land (ledger writes serialize, no lost updates)" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "Step 1" "Step 2" "Step 3" "Step 4" "Step 5" "Step 6" "Step 7" "Step 8"
   "${OGRE_BIN}" task-list "$(state_field 42 job_id)" >/dev/null
   local tids tid
@@ -73,7 +73,7 @@ load test_helper
 }
 
 @test "task-complete --status failed --exit-code records both fields" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step"
   "${OGRE_BIN}" task-list "$(state_field 42 job_id)" >/dev/null
   local tid

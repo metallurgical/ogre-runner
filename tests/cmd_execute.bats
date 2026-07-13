@@ -38,7 +38,7 @@ load test_helper
 }
 
 @test "execute rejects an unsupported executor" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step"
   run "${OGRE_BIN}" execute 42 --executor bogus
   [ "${status}" -eq 1 ] || return 1
@@ -46,7 +46,7 @@ load test_helper
 }
 
 @test "execute persists the resolved executor into state.json, overwriting the value seeded at feature-creation" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step"
   [[ "$(state_field 42 executor)" == *"claude"* ]] || return 1
   run "${OGRE_BIN}" execute 42 --executor codex
@@ -55,7 +55,7 @@ load test_helper
 }
 
 @test "execute --executor flag wins over config.json default when persisting state.json's executor" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step"
   python3 -c "
 import json
@@ -70,7 +70,7 @@ json.dump(d, open('.ai/.ogre/config.json', 'w'))
 }
 
 @test "execute errors when the claude CLI is missing (default executor)" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step"
   # Real PATH minus the mocks dir - codex/claude mocks are the only ones on PATH we control.
   run env PATH="/usr/bin:/bin" "${OGRE_BIN}" execute 42
@@ -79,7 +79,7 @@ json.dump(d, open('.ai/.ogre/config.json', 'w'))
 }
 
 @test "execute errors when the codex CLI is missing" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step"
   # Real PATH minus the mocks dir - codex/claude mocks are the only ones on PATH we control.
   run env PATH="/usr/bin:/bin" "${OGRE_BIN}" execute 42 --executor codex
@@ -88,7 +88,7 @@ json.dump(d, open('.ai/.ogre/config.json', 'w'))
 }
 
 @test "execute errors (no prompt/hang) when codex CLI is missing and stdin/stdout aren't a real tty (bats, CI)" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step"
   # bats' `run` captures stdout to a file, so -t 1 is false here regardless of
   # stdin - this exercises the same non-interactive fail path a CI runner or a
@@ -100,7 +100,7 @@ json.dump(d, open('.ai/.ogre/config.json', 'w'))
 }
 
 @test "execute --main prints instructions and does not spawn a subprocess" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step"
   run "${OGRE_BIN}" execute 42 --main
   [ "${status}" -eq 0 ] || return 1
@@ -112,7 +112,7 @@ json.dump(d, open('.ai/.ogre/config.json', 'w'))
 }
 
 @test "execute foreground default (claude) runs the lowest pending step and marks it passed" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step" "Second step"
   run "${OGRE_BIN}" execute 42
   [ "${status}" -eq 0 ] || return 1
@@ -131,7 +131,7 @@ print(t['id'])
 }
 
 @test "execute foreground prints the job summary automatically after finishing a step" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step" "Second step"
   run "${OGRE_BIN}" execute 42
   [ "${status}" -eq 0 ] || return 1
@@ -143,7 +143,7 @@ print(t['id'])
 }
 
 @test "execute prints a Boom line only once the whole job is completed" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "Only step"
   run "${OGRE_BIN}" execute 42
   [ "${status}" -eq 0 ] || return 1
@@ -151,7 +151,7 @@ print(t['id'])
 }
 
 @test "execute --background prints the finish summary and Boom line once the job completes" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "Only step"
   run "${OGRE_BIN}" execute 42 --background
   [ "${status}" -eq 0 ] || return 1
@@ -162,7 +162,7 @@ print(t['id'])
 }
 
 @test "execute foreground with --executor claude passes --permission-mode bypassPermissions (headless -p has no TTY to prompt)" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "Only step"
   local args_file="${TEST_TMP}/claude-args.log"
   MOCK_CLAUDE_ARGS_FILE="${args_file}" run "${OGRE_BIN}" execute 42
@@ -172,7 +172,7 @@ print(t['id'])
 }
 
 @test "execute --background with --executor claude passes --permission-mode bypassPermissions" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "Only step"
   local args_file="${TEST_TMP}/claude-args.log"
   MOCK_CLAUDE_ARGS_FILE="${args_file}" run "${OGRE_BIN}" execute 42 --background
@@ -182,7 +182,7 @@ print(t['id'])
 }
 
 @test "execute foreground with --executor codex runs the lowest pending step and marks it passed" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step" "Second step"
   run "${OGRE_BIN}" execute 42 --executor codex
   [ "${status}" -eq 0 ] || return 1
@@ -201,7 +201,7 @@ print(t['id'])
 }
 
 @test "execute foreground with --executor codex passes --dangerously-bypass-approvals-and-sandbox (always unsandboxed, dev-only tool)" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "Only step"
   local args_file="${TEST_TMP}/codex-args.log"
   MOCK_CODEX_ARGS_FILE="${args_file}" run "${OGRE_BIN}" execute 42 --executor codex
@@ -212,7 +212,7 @@ print(t['id'])
 }
 
 @test "execute --background with --executor codex passes --dangerously-bypass-approvals-and-sandbox" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "Only step"
   local args_file="${TEST_TMP}/codex-args.log"
   MOCK_CODEX_ARGS_FILE="${args_file}" run "${OGRE_BIN}" execute 42 --executor codex --background
@@ -223,7 +223,7 @@ print(t['id'])
 }
 
 @test "execute --reasoning passes --effort to claude" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "Only step"
   local args_file="${TEST_TMP}/claude-args.log"
   MOCK_CLAUDE_ARGS_FILE="${args_file}" run "${OGRE_BIN}" execute 42 --reasoning high
@@ -232,7 +232,7 @@ print(t['id'])
 }
 
 @test "execute --reasoning passes -c model_reasoning_effort= to codex" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "Only step"
   local args_file="${TEST_TMP}/codex-args.log"
   MOCK_CODEX_ARGS_FILE="${args_file}" run "${OGRE_BIN}" execute 42 --executor codex --reasoning low
@@ -241,14 +241,14 @@ print(t['id'])
 }
 
 @test "execute without --reasoning omits the effort flag entirely (uses the CLI's own default, not forced by Ogre)" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "Only step"
   local claude_args_file="${TEST_TMP}/claude-args.log"
   MOCK_CLAUDE_ARGS_FILE="${claude_args_file}" run "${OGRE_BIN}" execute 42
   [ "${status}" -eq 0 ] || return 1
   [[ "$(cat "${claude_args_file}")" != *"--effort"* ]] || return 1
 
-  "${OGRE_BIN}" feature --statement "base feature" --name 43
+  "${OGRE_BIN}" feature --statement "base feature" --name 43 --main
   write_plan_with_steps 43 "Only step"
   local codex_args_file="${TEST_TMP}/codex-args.log"
   MOCK_CODEX_ARGS_FILE="${codex_args_file}" run "${OGRE_BIN}" execute 43 --executor codex
@@ -257,7 +257,7 @@ print(t['id'])
 }
 
 @test "execute foreground fails closed when codex exits 0 but never calls task-complete" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step"
   export MOCK_CODEX_SKIP_COMPLETE=1
   run "${OGRE_BIN}" execute 42 --executor codex
@@ -273,7 +273,7 @@ print(t['id'])
 }
 
 @test "execute leaves a ledger-passed step out of pending_steps even if its plan checkbox was never ticked" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step" "Second step"
   run "${OGRE_BIN}" execute 42
   [ "${status}" -eq 0 ] || return 1
@@ -287,7 +287,7 @@ print(t['id'])
 }
 
 @test "execute foreground with a failing codex run marks the task failed and exits non-zero" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step"
   export MOCK_CODEX_EXIT=7
   run "${OGRE_BIN}" execute 42 --executor codex
@@ -303,7 +303,7 @@ print(t['id'])
 }
 
 @test "execute falls back a [BROWSER-CHECK] step to --main (out-of-order --step) when no browser MCP" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step" "[BROWSER-CHECK] Verify the page renders correctly"
   # Mock `claude mcp list` reports no browser MCP, so the browser-check step
   # can't run isolated -> auto-fall back to --main (still completes here).
@@ -325,7 +325,7 @@ print(t['id'])
 }
 
 @test "execute --main runs a [BROWSER-CHECK] step fine (no CLI subprocess involved)" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "[BROWSER-CHECK] Verify the page renders correctly"
   run "${OGRE_BIN}" execute 42 --main
   [ "${status}" -eq 0 ] || return 1
@@ -333,7 +333,7 @@ print(t['id'])
 }
 
 @test "execute --all stops when next step is [BROWSER-CHECK] and no browser MCP is detected" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "[BROWSER-CHECK] Verify the page renders correctly" "Second step"
   # No browser_mcp configured and the mock `claude mcp list` reports none, so
   # the chain can't verify a browser-check step in isolation -> it stops.
@@ -350,7 +350,7 @@ print(t['id'])
 }
 
 @test "execute --all does NOT stop on [BROWSER-CHECK] when a browser MCP is configured" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "[BROWSER-CHECK] Verify the page renders correctly" "Second step"
   # A configured browser MCP means the spawned session can verify it in
   # isolation, so the up-front guard must NOT fire. --main keeps the mock from
@@ -362,7 +362,7 @@ print(t['id'])
 }
 
 @test "execute --all retries a failed [BROWSER-CHECK] with ad-hoc [AUTO-FIX] attempts, capped at 2, then marks it failed with a reason" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "[BROWSER-CHECK] Verify the modal renders"
   local args_file="${TEST_TMP}/claude-args.log"
   MOCK_CLAUDE_ARGS_FILE="${args_file}" MOCK_CLAUDE_STATUS=failed \
@@ -404,7 +404,7 @@ print(t[0].get('notes') or '' if t else '')
 }
 
 @test "execute --all: ad-hoc [AUTO-FIX] steps don't inflate the step count status/task-list show the user" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "[BROWSER-CHECK] Verify the modal renders"
   MOCK_CLAUDE_STATUS=failed run "${OGRE_BIN}" execute 42 --all --mcp-config /tmp/fake-mcp.json
   [ "${status}" -eq 1 ] || return 1
@@ -432,7 +432,7 @@ print(t[0].get('notes') or '' if t else '')
 }
 
 @test "execute --all does not auto-fix a failed step that is not [BROWSER-CHECK] - stops immediately, same as before" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "Just a normal step"
   local args_file="${TEST_TMP}/claude-args.log"
   MOCK_CLAUDE_ARGS_FILE="${args_file}" MOCK_CLAUDE_STATUS=failed \
@@ -447,7 +447,7 @@ print(t[0].get('notes') or '' if t else '')
 }
 
 @test "execute --all --executor codex retries a failed [BROWSER-CHECK] with ad-hoc [AUTO-FIX] attempts, every codex spawn unsandboxed (browser-check AND auto-fix attempts alike)" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "[BROWSER-CHECK] Verify the modal renders"
   local args_file="${TEST_TMP}/codex-args.log"
   MOCK_CODEX_ARGS_FILE="${args_file}" MOCK_CODEX_STATUS=failed \
@@ -507,7 +507,7 @@ print(t[0].get('notes') or '' if t else '')
 }
 
 @test "execute a [BROWSER-CHECK] step with no browser MCP auto-falls back to --main with a notice" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "[BROWSER-CHECK] Verify the modal renders"
   run "${OGRE_BIN}" execute 42
   [ "${status}" -eq 0 ] || return 1
@@ -517,7 +517,7 @@ print(t[0].get('notes') or '' if t else '')
 }
 
 @test "execute a [BROWSER-CHECK] step with --mcp-config runs isolated and passes --mcp-config to claude" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "[BROWSER-CHECK] Verify the modal renders"
   local args_file="${TEST_TMP}/claude-args.log"
   MOCK_CLAUDE_ARGS_FILE="${args_file}" run "${OGRE_BIN}" execute 42 --mcp-config /tmp/fake-mcp.json
@@ -529,7 +529,7 @@ print(t[0].get('notes') or '' if t else '')
 }
 
 @test "execute a [BROWSER-CHECK] step with --executor codex and a Playwright MCP configured runs isolated (codex is always unsandboxed now, no opt-in needed)" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "[BROWSER-CHECK] Verify the modal renders"
   # Mock `codex mcp list` reports a Playwright MCP; codex always runs fully
   # unsandboxed (--dangerously-bypass-approvals-and-sandbox) now, so the
@@ -548,7 +548,7 @@ print(t[0].get('notes') or '' if t else '')
 }
 
 @test "execute a [BROWSER-CHECK] step with --executor codex and no browser MCP falls back to --main" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "[BROWSER-CHECK] Verify the modal renders"
   MOCK_CODEX_NO_MCP=1 run "${OGRE_BIN}" execute 42 --executor codex
   [ "${status}" -eq 0 ] || return 1
@@ -557,7 +557,7 @@ print(t[0].get('notes') or '' if t else '')
 }
 
 @test "execute a non-browser-check step with --executor codex also runs unsandboxed (bypass applies to every codex step, not just [BROWSER-CHECK])" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "Plain step, no browser check"
   local args_file="${TEST_TMP}/codex-args.log"
   MOCK_CODEX_ARGS_FILE="${args_file}" run "${OGRE_BIN}" execute 42 --executor codex
@@ -568,7 +568,7 @@ print(t[0].get('notes') or '' if t else '')
 }
 
 @test "execute a [BROWSER-CHECK] step uses browser_mcp from config.json to run isolated" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "[BROWSER-CHECK] Verify the modal renders"
   python3 - <<'PY'
 import json
@@ -584,7 +584,7 @@ PY
 }
 
 @test "execute --all --main is unaffected by [BROWSER-CHECK] (real browser tools available inline)" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "[BROWSER-CHECK] Verify the page renders correctly"
   run "${OGRE_BIN}" execute 42 --all --main
   [ "${status}" -eq 0 ] || return 1
@@ -592,7 +592,7 @@ PY
 }
 
 @test "execute --executor claude assigns a session id up front" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step"
   run "${OGRE_BIN}" execute 42 --executor claude
   [ "${status}" -eq 0 ] || return 1
@@ -601,7 +601,7 @@ PY
 }
 
 @test "execute --task targets a specific step out of order" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step" "Second step"
   "${OGRE_BIN}" task-list "$(state_field 42 job_id)" >/dev/null
   local tid2
@@ -617,7 +617,7 @@ print(t['id'])
 }
 
 @test "execute --step targets a specific step number" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step" "Second step"
   run "${OGRE_BIN}" execute 42 --step 2 --yes
   [ "${status}" -eq 0 ] || return 1
@@ -632,7 +632,7 @@ print(t['id'])
 }
 
 @test "execute --task/--step out of order without --yes refuses non-interactively" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step" "Second step"
   run bash -c "'${OGRE_BIN}' execute 42 --step 2 </dev/null"
   [ "${status}" -eq 1 ] || return 1
@@ -640,7 +640,7 @@ print(t['id'])
 }
 
 @test "execute with no matching --task/--step errors" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step"
   run "${OGRE_BIN}" execute 42 --task task-does-not-exist
   [ "${status}" -eq 1 ] || return 1
@@ -648,7 +648,7 @@ print(t['id'])
 }
 
 @test "execute reports no pending steps left once everything has passed" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "Only step"
   "${OGRE_BIN}" execute 42
   run "${OGRE_BIN}" execute 42
@@ -657,7 +657,7 @@ print(t['id'])
 }
 
 @test "execute --background runs detached and the task eventually passes" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step"
   run "${OGRE_BIN}" execute 42 --background
   [ "${status}" -eq 0 ] || return 1
@@ -669,7 +669,7 @@ print(t['id'])
 }
 
 @test "execute --background puts the driver subshell in its own process group, not the launching shell's" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step"
   local launcher_pgid
   launcher_pgid="$(ps -o pgid= -p $$ | tr -d ' ')"
@@ -691,7 +691,7 @@ print(t['id'])
 }
 
 @test "execute on a previously-stopped task warns and requires confirmation" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step"
   "${OGRE_BIN}" task-list "$(state_field 42 job_id)" >/dev/null
   local tid
@@ -712,7 +712,7 @@ print(t['id'])
 @test "task-complete --notes records to the ledger but no longer injects into the runner" {
   # Cross-step knowledge now travels through the per-issue knowledge base, not
   # the ledger note. --notes stays a per-task ledger marker only.
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step" "Second step"
   "${OGRE_BIN}" task-list "$(state_field 42 job_id)" >/dev/null
   local tid1
@@ -731,7 +731,7 @@ print(next(t for t in tasks if t.get('step_index') == 1)['id'])
 }
 
 @test "execute --all runner embeds the default hard cap of 3 items per session" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step"
   run "${OGRE_BIN}" execute 42 --all --main
   [ "${status}" -eq 0 ] || return 1
@@ -739,7 +739,7 @@ print(next(t for t in tasks if t.get('step_index') == 1)['id'])
 }
 
 @test "execute --all --max-steps overrides the per-session cap" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step"
   run "${OGRE_BIN}" execute 42 --all --max-steps 5 --main
   [ "${status}" -eq 0 ] || return 1
@@ -747,7 +747,7 @@ print(next(t for t in tasks if t.get('step_index') == 1)['id'])
 }
 
 @test "execute rejects a non-positive or non-numeric --max-steps" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step"
   run "${OGRE_BIN}" execute 42 --all --max-steps 0
   [ "${status}" -eq 1 ] || return 1
@@ -760,7 +760,7 @@ print(next(t for t in tasks if t.get('step_index') == 1)['id'])
 @test "execute injects repo drift (new commits + dirty tree) into the runner prompt" {
   git init -q .
   git -c user.email=t@t.t -c user.name=t commit -q --allow-empty -m "baseline"
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step"
   sleep 1 # drift window anchors on the plan's mtime; keep the commit clearly after it
   echo x > drifted.txt
@@ -776,7 +776,7 @@ print(next(t for t in tasks if t.get('step_index') == 1)['id'])
 }
 
 @test "execute runner has no drift section outside a git repo" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step"
   run "${OGRE_BIN}" execute 42 --main
   [ "${status}" -eq 0 ] || return 1
@@ -792,7 +792,7 @@ print(next(t for t in tasks if t.get('step_index') == 1)['id'])
 }
 
 @test "execute on a normally-created job carries no backfill warning" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step"
   run "${OGRE_BIN}" execute 42 --main
   [ "${status}" -eq 0 ] || return 1
@@ -800,7 +800,7 @@ print(next(t for t in tasks if t.get('step_index') == 1)['id'])
 }
 
 @test "execute --retry with no failed step errors" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step"
   run "${OGRE_BIN}" execute 42 --retry
   [ "${status}" -eq 1 ] || return 1
@@ -808,7 +808,7 @@ print(next(t for t in tasks if t.get('step_index') == 1)['id'])
 }
 
 @test "execute --retry rejects --all" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step"
   run "${OGRE_BIN}" execute 42 --retry --all
   [ "${status}" -eq 1 ] || return 1
@@ -816,7 +816,7 @@ print(next(t for t in tasks if t.get('step_index') == 1)['id'])
 }
 
 @test "execute --retry re-targets the failed step and injects the failed attempt's log tail" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step" "Second step"
   export MOCK_CODEX_STATUS=failed
   run "${OGRE_BIN}" execute 42 --executor codex
@@ -840,7 +840,7 @@ print(next(t for t in tasks if t.get('step_index') == 1)['id'])
 }
 
 @test "execute lazily seeds a knowledge base for a job created before it existed" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   rm -f .ai/.ogre/state/issue-42-knowledge.md # simulate a pre-knowledge job
   write_plan_with_steps 42 "First step"
   run "${OGRE_BIN}" execute 42 --main
@@ -849,7 +849,7 @@ print(next(t for t in tasks if t.get('step_index') == 1)['id'])
 }
 
 @test "execute injects the knowledge base into the runner once it has real content" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step"
   # Record a real verified contract in the knowledge base.
   python3 - <<'PY'
@@ -868,7 +868,7 @@ PY
 }
 
 @test "execute does not inject an all-placeholder knowledge base" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step"
   run "${OGRE_BIN}" execute 42 --main
   [ "${status}" -eq 0 ] || return 1
@@ -876,7 +876,7 @@ PY
 }
 
 @test "execute runner instructs the executor to update the knowledge base" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step"
   run "${OGRE_BIN}" execute 42 --main
   [ "${status}" -eq 0 ] || return 1
@@ -885,7 +885,7 @@ PY
 }
 
 @test "execute --all --background: link 2's ledger row gets the driver pid so a mid-chain driver death is detectable" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step" "Second step"
 
   # Override the shared mock claude just for this test: 1st invocation
@@ -964,7 +964,7 @@ print(rows[-1]['id'] if rows else '')
 }
 
 @test "execute --background: a caught signal to the driver is logged (forensics for the still-unexplained mid-chain deaths)" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "Only step"
   run "${OGRE_BIN}" execute 42 --background
   [ "${status}" -eq 0 ] || return 1

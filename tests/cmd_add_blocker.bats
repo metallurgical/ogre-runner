@@ -13,14 +13,14 @@ load test_helper
 }
 
 @test "add-blocker without blocker or --statement errors" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   run "${OGRE_BIN}" add-blocker 42
   [ "${status}" -eq 1 ] || return 1
   [[ "${output}" == *"Provide a blocker issue number/url/path, or --statement"* ]] || return 1
 }
 
 @test "add-blocker --statement records the blocker and resets status to planning" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   run "${OGRE_BIN}" add-blocker 42 --statement "needs auth first" --name authblock
   [ "${status}" -eq 0 ] || return 1
   [ -f ".ai/.ogre/issues/issue-authblock.md" ] || return 1
@@ -30,14 +30,14 @@ load test_helper
 }
 
 @test "add-blocker with numeric blocker fetches via mocked gh" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   run "${OGRE_BIN}" add-blocker 42 7
   [ "${status}" -eq 0 ] || return 1
   [[ "$(cat .ai/.ogre/issues/issue-7.md)" == *"Mock GitHub Issue"* ]] || return 1
 }
 
 @test "add-blocker --remarks ties the remark to that blocker" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   run "${OGRE_BIN}" add-blocker 42 7 --remarks "Have PR and Merged"
   [ "${status}" -eq 0 ] || return 1
   # remark stored in state, keyed by the blocker's path
@@ -50,7 +50,7 @@ load test_helper
 }
 
 @test "add-blocker without --remarks leaves the blocker unremarked" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   run "${OGRE_BIN}" add-blocker 42 7
   [ "${status}" -eq 0 ] || return 1
   [ "$(python3 -c "import json; print(len(json.load(open('.ai/.ogre/state/issue-42.json')).get('blocker_remarks', {})))")" = "0" ] || return 1
@@ -58,7 +58,7 @@ load test_helper
 }
 
 @test "add-blocker refuses once execution has started, unless --force" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   mkdir -p .ai/.ogre/logs/issue-42
   touch .ai/.ogre/logs/issue-42/execute-20260101-000000-abcdef12.log
 
@@ -72,7 +72,7 @@ load test_helper
 }
 
 @test "add-blocker --force after a step passed flags it to the user and the planner" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "Add reset column" "Wire up controller"
   # Run the first step to a passing state via the mock executor flow.
   "${OGRE_BIN}" execute 42 >/dev/null
@@ -94,7 +94,7 @@ print(next(t for t in tasks if t.get('step_index') == 1)['id'])
 }
 
 @test "add-blocker --force with no passed steps yet shows no stale-step warning" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step"
   # Execution "started" only via a stray log file - no task has passed.
   mkdir -p .ai/.ogre/logs/issue-42
@@ -107,7 +107,7 @@ print(next(t for t in tasks if t.get('step_index') == 1)['id'])
 }
 
 @test "add-blocker rejects a --name containing path traversal or shell metacharacters" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   run "${OGRE_BIN}" add-blocker 42 --statement "blk" --name "../../evil"
   [ "${status}" -eq 1 ] || return 1
   [[ "${output}" == *"Invalid --name"* ]] || return 1

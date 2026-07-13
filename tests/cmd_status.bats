@@ -14,7 +14,7 @@ load test_helper
 }
 
 @test "status for a known issue prints job summary and raw state" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   run "${OGRE_BIN}" status 42
   [ "${status}" -eq 0 ] || return 1
   [[ "${output}" == *"Job Id"* ]] || return 1
@@ -24,7 +24,7 @@ load test_helper
 }
 
 @test "status on a completed issue re-prints the Boom line (not just visible live during --background execute)" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "Only step"
   "${OGRE_BIN}" execute 42 >/dev/null
   run "${OGRE_BIN}" status 42
@@ -33,7 +33,7 @@ load test_helper
 }
 
 @test "status on a not-yet-completed issue has no Boom line" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step" "Second step"
   "${OGRE_BIN}" execute 42 >/dev/null
   run "${OGRE_BIN}" status 42
@@ -42,7 +42,7 @@ load test_helper
 }
 
 @test "status --job resolves by job id" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   local job_id
   job_id="$(state_field 42 job_id)"
   run "${OGRE_BIN}" status --job "${job_id}"
@@ -57,7 +57,7 @@ load test_helper
 }
 
 @test "status --tasks lists tasks, optionally filtered by issue" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "Step one" "Step two"
   "${OGRE_BIN}" status 42 >/dev/null # triggers sync_state_from_plan, seeding tasks
 
@@ -78,7 +78,7 @@ load test_helper
 }
 
 @test "status --task shows the task summary and raw record" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "Step one"
   "${OGRE_BIN}" status 42 >/dev/null
 
@@ -105,7 +105,7 @@ load test_helper
 }
 
 @test "status auto-fails a running task whose recorded pid is dead (no exit sentinel)" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step"
   "${OGRE_BIN}" status 42 >/dev/null # seed ledger tasks
   local tid
@@ -130,7 +130,7 @@ PY
 }
 
 @test "status auto-resumes a stalled --all chain: dead driver pid, terminal task, steps still pending" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "Step one" "Step two"
   # Get the issue into "executing" (not "planning") the normal way, and tick
   # step one, so step two is the sole real pending item - mirrors a chain
@@ -178,7 +178,7 @@ PY
 }
 
 @test "status auto-resume preserves reasoning from the dead task's own ledger record, and codex resumes unsandboxed regardless" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "Step one" "[BROWSER-CHECK] Step two"
   run "${OGRE_BIN}" execute 42 --executor codex
   [ "${status}" -eq 0 ] || return 1
@@ -222,7 +222,7 @@ PY
 }
 
 @test "status does not touch a stopped issue even with a dead-pid mode=all task and steps pending" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "Step one" "Step two"
   run "${OGRE_BIN}" execute 42
   [ "${status}" -eq 0 ] || return 1
@@ -252,7 +252,7 @@ PY
 }
 
 @test "status leaves a running task with a live pid untouched" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step"
   "${OGRE_BIN}" status 42 >/dev/null
   local tid live_pid
@@ -277,7 +277,7 @@ PY
 }
 
 @test "status reaps a codex task via its exit sentinel and captures the session id from the log" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step"
   "${OGRE_BIN}" status 42 >/dev/null # seed ledger tasks
   local tid
@@ -313,7 +313,7 @@ PY
 }
 
 @test "status shows a knowledge-base line and warns when it is bloated" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step"
 
   run "${OGRE_BIN}" status 42
@@ -342,7 +342,7 @@ count_tasks_for_issue() {
 }
 
 @test "status (no args) compacts orphaned tasks whose state file is gone" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "Step one" "Step two"
   "${OGRE_BIN}" status 42 >/dev/null # seeds step tasks for issue 42
   [ "$(count_tasks_for_issue 42)" -ge 2 ] || return 1
@@ -356,11 +356,11 @@ count_tasks_for_issue() {
 }
 
 @test "status (no args) keeps a live issue's tasks while dropping orphans" {
-  "${OGRE_BIN}" feature --statement "live one" --name 99
+  "${OGRE_BIN}" feature --statement "live one" --name 99 --main
   write_plan_with_steps 99 "Step one"
   "${OGRE_BIN}" status 99 >/dev/null
 
-  "${OGRE_BIN}" feature --statement "will orphan" --name 42
+  "${OGRE_BIN}" feature --statement "will orphan" --name 42 --main
   write_plan_with_steps 42 "Step one"
   "${OGRE_BIN}" status 42 >/dev/null
   rm -f .ai/.ogre/state/issue-42.json   # orphan 42, keep 99 live
@@ -372,7 +372,7 @@ count_tasks_for_issue() {
 }
 
 @test "status (no args) still lists a stopped issue (terminal re-sync skipped)" {
-  "${OGRE_BIN}" feature --statement "base feature" --name 42
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   "${OGRE_BIN}" stop 42 >/dev/null
   run "${OGRE_BIN}" status
   [ "${status}" -eq 0 ] || return 1

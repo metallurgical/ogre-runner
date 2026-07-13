@@ -16,6 +16,12 @@
 #   MOCK_CODEX_NO_MCP=1                - `codex mcp list` reports no browser MCP
 #                                        (default: reports a Playwright MCP, so
 #                                         [BROWSER-CHECK] isolation is exercised)
+#   MOCK_CODEX_WRITE_FILE               - if set, a placeholder is written
+#                                        there before task-complete - stands
+#                                        in for a real planner/reviewer
+#                                        actually producing its output file
+#                                        (plan/review path), which this mock
+#                                        otherwise never touches.
 set -euo pipefail
 [ -n "${MOCK_CODEX_ARGS_FILE:-}" ] && printf '%s\n' "$*" >> "${MOCK_CODEX_ARGS_FILE}"
 # `codex mcp list` - the browser-MCP detector for [BROWSER-CHECK] isolation.
@@ -26,6 +32,10 @@ if [ "${1:-}" = "mcp" ]; then
 fi
 runner="$(cat)" # capture stdin (the runner file) instead of draining it
 tid="$(printf '%s\n' "$runner" | sed -n 's/.*Task id: `\(task-[^`]*\)`.*/\1/p' | head -n1)"
+if [ -n "${MOCK_CODEX_WRITE_FILE:-}" ]; then
+  mkdir -p "$(dirname "${MOCK_CODEX_WRITE_FILE}")"
+  echo "# Mock output" > "${MOCK_CODEX_WRITE_FILE}"
+fi
 echo "session id: mock-codex-session-1234"
 echo "Mock codex exec output"
 if [ "${MOCK_CODEX_EXIT:-0}" = "0" ] && [ -z "${MOCK_CODEX_SKIP_COMPLETE:-}" ] && [ -n "${tid}" ]; then

@@ -1641,9 +1641,127 @@ cmd_init() {
   log "Ogre runtime initialized at $RUNTIME"
 }
 
+# finalize_role_status <tid> <rc> <expected_output_file> - fail-closed
+# completion check for a one-shot plan/review/replan task, mirroring
+# cmd_execute's finalize_link_status (rc==0 alone never proves success -
+# the domain signal is the subprocess's own `ogre task-complete` self-report)
+# with one addition: a self-reported "passed" is downgraded to "failed" if
+# the expected output file was never actually written - a model can't claim
+# success without producing the file.
+finalize_role_status() {
+  local tid="$1" rc="$2" expected_output_file="$3"
+  local current_status
+  current_status="$(task_field "$tid" status)"
+  if [ "$current_status" = "passed" ] && [ -n "$expected_output_file" ] && [ ! -s "$expected_output_file" ]; then
+    task_update "$tid" "status=failed" "exit_code=$rc" "notes=Reported passed but $expected_output_file was never written"
+    return
+  fi
+  if [ "$current_status" = "passed" ] || [ "$current_status" = "failed" ]; then
+    task_update "$tid" "exit_code=$rc"
+  else
+    task_update "$tid" "status=failed" "exit_code=$rc"
+  fi
+}
+
+# spawn_role_foreground <tid> <runner> <logpath> <session_id> <executor>
+# <model> <reasoning> <mcp_config> <expected_output_file> - single-shot,
+# blocking counterpart to cmd_execute's run_link_foreground (no chain loop -
+# a plan/review/replan is always exactly one subprocess call). Streams to
+# stdout and the log file. Returns the subprocess's own exit code - a bare
+# (non-`|| true`) call at the caller matches cmd_execute's own convention:
+# a real subprocess crash (nonzero rc) aborts the caller immediately via
+# `set -e` with that raw exit code; rc==0 lets the caller inspect the
+# ledger's own status afterward instead.
+spawn_role_foreground() {
+  local tid="$1" runner="$2" logpath="$3" session_id="$4"
+  local executor="$5" model="$6" reasoning="$7" mcp_config="$8" expected_output_file="$9"
+  local rc
+  set +e
+  case "$executor" in
+    codex)
+      local -a codex_args=(exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox)
+      [ -n "$model" ] && codex_args+=(-m "$model")
+      [ -n "$reasoning" ] && codex_args+=(-c "model_reasoning_effort=$reasoning")
+      codex "${codex_args[@]}" - < "$runner" | tee "$logpath"
+      ;;
+    claude)
+      local -a claude_args=(-p --permission-mode bypassPermissions --session-id "$session_id")
+      [ -n "$model" ] && claude_args+=(--model "$model")
+      [ -n "$reasoning" ] && claude_args+=(--effort "$reasoning")
+      [ -n "$mcp_config" ] && claude_args+=(--mcp-config "$mcp_config")
+      claude "${claude_args[@]}" < "$runner" | tee "$logpath"
+      ;;
+  esac
+  rc=$?
+  set -e
+  finalize_role_status "$tid" "$rc" "$expected_output_file"
+  if [ "$executor" = "codex" ]; then
+    local codex_sid
+    codex_sid="$(grep -m1 '^session id: ' "$logpath" 2>/dev/null | sed 's/^session id: //')"
+    [ -n "$codex_sid" ] && task_update "$tid" "session_id=$codex_sid"
+  fi
+  return "$rc"
+}
+
+# spawn_role_background <tid> <issue> <logdir> <runner> <logpath>
+# <session_id> <executor> <model> <reasoning> <mcp_config>
+# <expected_output_file> - detached counterpart to spawn_role_foreground.
+# Mirrors cmd_execute's background scaffolding (disown, own process group
+# via `set -m`, signal-trap forensic logging, exit-sentinel + pid files that
+# reap_task/maybe_resume_stalled_plan rely on) but without execute's --all
+# chain loop, since a plan/review/replan is never chained. Returns
+# immediately; the ledger row is left `status=running` with a live `pid`.
+spawn_role_background() {
+  local tid="$1" issue="$2" logdir="$3" runner="$4" logpath="$5" session_id="$6"
+  local executor="$7" model="$8" reasoning="$9" mcp_config="${10}" expected_output_file="${11}"
+  task_update "$tid" "status=running"
+  local exitfile="$RUNTIME/tmp/issue-$issue/$tid.exit"
+  local pidfile="$RUNTIME/tmp/issue-$issue/$tid.pid"
+  local driverlog="$logdir/background-driver-$tid.log"
+  set -m
+  (
+    trap 'echo "$(date "+%Y-%m-%dT%H:%M:%S%z") DRIVER_SIGNAL HUP"; exit 129' HUP
+    trap 'echo "$(date "+%Y-%m-%dT%H:%M:%S%z") DRIVER_SIGNAL TERM"; exit 143' TERM
+    trap 'echo "$(date "+%Y-%m-%dT%H:%M:%S%z") DRIVER_SIGNAL INT"; exit 130' INT
+    trap 'echo "$(date "+%Y-%m-%dT%H:%M:%S%z") DRIVER_EXIT rc=$?"' EXIT
+    local rc
+    case "$executor" in
+      codex)
+        local -a codex_args=(exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox)
+        [ -n "$model" ] && codex_args+=(-m "$model")
+        [ -n "$reasoning" ] && codex_args+=(-c "model_reasoning_effort=$reasoning")
+        codex "${codex_args[@]}" - < "$runner" > "$logpath" 2>&1
+        ;;
+      claude)
+        local -a claude_args=(-p --permission-mode bypassPermissions --session-id "$session_id")
+        [ -n "$model" ] && claude_args+=(--model "$model")
+        [ -n "$reasoning" ] && claude_args+=(--effort "$reasoning")
+        [ -n "$mcp_config" ] && claude_args+=(--mcp-config "$mcp_config")
+        claude "${claude_args[@]}" < "$runner" > "$logpath" 2>&1
+        ;;
+    esac
+    rc=$?
+    finalize_role_status "$tid" "$rc" "$expected_output_file"
+    if [ "$executor" = "codex" ]; then
+      local codex_sid
+      codex_sid="$(grep -m1 '^session id: ' "$logpath" 2>/dev/null | sed 's/^session id: //')"
+      [ -n "$codex_sid" ] && task_update "$tid" "session_id=$codex_sid"
+    fi
+    echo "$rc" > "$exitfile"
+  ) > "$driverlog" 2>&1 &
+  local pid=$!
+  set +m
+  echo "$pid" > "$pidfile"
+  disown "$pid" 2>/dev/null || true
+  task_update "$tid" "pid=$pid"
+  log "Task $tid started in background (pid $pid)."
+  log "Driver log: $driverlog"
+  log "Check with: ogre status --task $tid"
+}
+
 cmd_feature() {
   ensure_runtime
-  local current="" plan_name="" planner="" model="" reasoning="" statement="" name="" browser_check="false"
+  local current="" plan_name="" planner="" model="" reasoning="" statement="" name="" browser_check="false" iso="new"
   # Blockers are collected as two parallel arrays: block_refs[i] is the
   # blocker reference, block_remarks[i] its (optional) freeform status remark.
   # `--blocks a,b` adds refs with no remark; `--blocker REF --remarks TEXT`
@@ -1675,6 +1793,8 @@ cmd_feature() {
       --statement) statement="${2:-}"; shift 2 ;;
       --name) name="${2:-}"; shift 2 ;;
       --browser-check) browser_check="true"; shift ;;
+      --main) iso="main"; shift ;;
+      --background) iso="background"; shift ;;
       *) err "Unknown option: $1"; exit 1 ;;
     esac
   done
@@ -1769,6 +1889,15 @@ EOF2
 "
   fi
 
+  local tid="" completion_rule="" task_id_line=""
+  if [ "$iso" != "main" ]; then
+    tid="$(new_task_id)"
+    task_id_line="* Task id: \`$tid\`
+"
+    completion_rule="* Mandatory last step: once \`$plan\` is fully written, run \`$SCRIPT_DIR/ogre task-complete $tid --status passed\` if the plan is complete and usable, or \`--status failed\` if you could not produce one. Use that exact path - \`ogre\` alone is not guaranteed to be on PATH.
+"
+  fi
+
   runner="$RUNTIME/tmp/issue-$issue/plan-runner.md"
   cat > "$runner" <<EOF2
 # Ogre Planning Runner
@@ -1792,7 +1921,7 @@ $blockers_text
 ## Output
 
 * Write the final execution plan to \`$plan\`.
-
+${task_id_line}
 ## Rules
 
 * Follow the planning template exactly.
@@ -1801,7 +1930,7 @@ $blockers_text
 * Do not modify application files.
 * Do not keep placeholder issue numbers/paths from the planning template - use the real issue path given above under "Current Issue" instead.
 * This may be a freeform \`--statement\` with no numeric issue number (just a slug and a local file) - that is normal, not a sign the issue is missing or needs escalation. Treat its full text as the complete problem statement.
-${browser_check_rule}
+${browser_check_rule}${completion_rule}
 EOF2
 
   local blocker_paths_json="[]" bremarks_json="{}"
@@ -1824,7 +1953,39 @@ EOF2
   log ""
   log "Planning runner created: $runner"
   log "Planner: $planner ${model:+($model)}${reasoning:+ [reasoning: $reasoning]}"
-  log "Next inside Claude Code: read $runner and create the plan."
+
+  if [ "$iso" = "main" ]; then
+    log "Next inside Claude Code: read $runner and create the plan."
+    return
+  fi
+
+  case "$planner" in
+    codex) command -v codex >/dev/null 2>&1 || { err "codex CLI not found"; exit 1; } ;;
+    claude) command -v claude >/dev/null 2>&1 || { err "claude CLI not found"; exit 1; } ;;
+    *) err "Unsupported planner: $planner"; exit 1 ;;
+  esac
+
+  local plan_logpath session_id=""
+  plan_logpath="$logdir/plan-$(date '+%Y%m%d-%H%M%S')-${tid:5:8}.log"
+  [ "$planner" = "claude" ] && session_id="$(gen_uuid)"
+  task_create "$tid" "$issue" "plan" "$planner" "$model" "$iso" "fresh" "$runner" "$plan_logpath" "pending" "$reasoning" ""
+  [ -n "$session_id" ] && task_update "$tid" "session_id=$session_id"
+
+  if [ "$iso" = "background" ]; then
+    spawn_role_background "$tid" "$issue" "$logdir" "$runner" "$plan_logpath" "$session_id" "$planner" "$model" "$reasoning" "" "$plan"
+    return
+  fi
+
+  task_update "$tid" "status=running"
+  spawn_role_foreground "$tid" "$runner" "$plan_logpath" "$session_id" "$planner" "$model" "$reasoning" "" "$plan"
+  local final_status rc
+  final_status="$(task_field "$tid" status)"
+  [ "$final_status" = "passed" ] && rc=0 || rc=1
+  log ""
+  log "Task $tid finished: $final_status"
+  log ""
+  print_job_summary "$issue"
+  exit "$rc"
 }
 
 cmd_add_blocker() {

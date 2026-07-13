@@ -508,6 +508,70 @@ else:
     || err "Auto-resume for issue $issue failed to start - resume it yourself: $SCRIPT_DIR/ogre execute --job $job_id --all --background"
 }
 
+# maybe_resume_stalled_plan <issue> - self-heal counterpart to
+# maybe_resume_stalled_chain, for a one-shot plan/review/replan --background
+# task instead of an --all execute chain. Looks at the most recent
+# plan/review/replan task for this issue launched with mode=background; if
+# reap_task already flipped it to "failed" via its dead-pid branch (no exit
+# sentinel - the process vanished without reporting) and the expected output
+# file still doesn't exist, relaunch the identical call. Idempotent the same
+# way maybe_resume_stalled_chain is: the relaunch's own new task shows up
+# "running" with a live pid immediately, so a status call moments later sees
+# that and does nothing.
+maybe_resume_stalled_plan() {
+  local issue="$1"
+  local tid ttype executor model reasoning mcp_config runner logpath session_id pid_status
+  { read -r tid; read -r ttype; read -r executor; read -r model; read -r reasoning; read -r mcp_config; read -r runner; read -r logpath; read -r session_id; read -r pid_status; } < <(python3 -c '
+import json
+try:
+    tasks = json.load(open("'"$(tasks_path)"'"))
+except Exception:
+    tasks = []
+cand = [t for t in tasks if t.get("issue") == "'"$issue"'" and t.get("type") in ("plan", "review", "replan") and t.get("mode") == "background"]
+cand.sort(key=lambda t: t.get("created_at") or "")
+if cand:
+    t = cand[-1]
+    for f in ("id", "type", "executor", "model", "reasoning", "mcp_config", "runner", "log_path", "session_id", "status"):
+        print(t.get(f) or "")
+else:
+    print("\n" * 9)
+')
+  [ -n "$tid" ] || return 0
+  [ "$pid_status" = "failed" ] || return 0
+
+  local expected_output
+  case "$ttype" in
+    # get_plan_path is the wrong tool here: it assumes the plan file already
+    # exists (its fallback heuristic guesses wrong otherwise) - state.json's
+    # own plan_path field is the real configured destination regardless of
+    # whether the file has been written yet, which is exactly the question
+    # this function exists to answer.
+    plan|replan) expected_output="$(json_field "$(state_path "$issue")" plan_path)" ;;
+    review) expected_output="$RUNTIME/reviews/issue-$issue/plan-review.md" ;;
+    *) return 0 ;;
+  esac
+  [ -n "$expected_output" ] || return 0
+  [ -s "$expected_output" ] && return 0
+
+  log "Task $tid ($ttype) was running in background but its process died without finishing - relaunching."
+  local new_tid new_logpath new_session="" new_runner
+  new_tid="$(new_task_id)"
+  mkdir -p "$RUNTIME/logs/issue-$issue"
+  new_logpath="$RUNTIME/logs/issue-$issue/${ttype}-$(date '+%Y%m%d-%H%M%S')-${new_tid:5:8}.log"
+  [ "$executor" = "claude" ] && new_session="$(gen_uuid)"
+  # The dead task's own runner file has its OLD tid baked into its "Task id:"
+  # and "run ogre task-complete <tid>" lines - reusing it verbatim would make
+  # the relaunched subprocess self-report against the wrong (already-dead,
+  # already-terminal) ledger row. Rewrite those references onto the new tid
+  # instead of regenerating the runner from scratch (task ids are unique
+  # `task-<uuid>` strings, so a global substitution is safe).
+  new_runner="$RUNTIME/tmp/issue-$issue/${ttype}-resume-${new_tid}.md"
+  sed "s/$tid/$new_tid/g" "$runner" > "$new_runner"
+  task_create "$new_tid" "$issue" "$ttype" "$executor" "$model" "background" "fresh" "$new_runner" "$new_logpath" "pending" "$reasoning" "$mcp_config"
+  [ -n "$new_session" ] && task_update "$new_tid" "session_id=$new_session"
+  spawn_role_background "$new_tid" "$issue" "$RUNTIME/logs/issue-$issue" "$new_runner" "$new_logpath" "$new_session" "$executor" "$model" "$reasoning" "$mcp_config" "$expected_output"
+}
+
 tasks_list() {
   local issue_filter="${1:-}"
   reap_all_tasks
@@ -3374,6 +3438,7 @@ _status_render() {
       reap_all_tasks
       sync_state_from_plan "$issue"
       maybe_resume_stalled_chain "$issue"
+      maybe_resume_stalled_plan "$issue"
       seed_knowledge "$issue"
       print_job_summary "$issue"
       local kpath
@@ -3412,7 +3477,7 @@ _status_render() {
       fstatus="$(json_field "$spath" status 2>/dev/null || true)"
       case "$fstatus" in
         completed|stopped) ;;
-        *) sync_state_from_plan "$fissue"; maybe_resume_stalled_chain "$fissue" ;;
+        *) sync_state_from_plan "$fissue"; maybe_resume_stalled_chain "$fissue"; maybe_resume_stalled_plan "$fissue" ;;
       esac
       print_job_summary "$fissue"
       log ""

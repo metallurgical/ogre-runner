@@ -379,3 +379,56 @@ count_tasks_for_issue() {
   [[ "${output}" == *"42"* ]] || return 1
   [[ "${output}" == *"stopped"* ]] || return 1
 }
+
+@test "status self-heals a dead background plan driver (no exit sentinel) by relaunching it" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
+  mkdir -p .ai/.ogre/tmp/issue-42
+  local runner=".ai/.ogre/tmp/issue-42/plan-runner.md"
+  local dead_tid="task-11111111-1111-1111-1111-111111111111"
+  # Realistic runner content: a real one always embeds "Task id: `<tid>`"
+  # (mocks/claude and mocks/codex parse this line to know which ledger task
+  # to self-report against) - the relaunch logic under test rewrites this
+  # line onto the new task's id, so it must be present and match the dead
+  # task's own id for that rewrite to have anything real to substitute.
+  {
+    echo "# Ogre Planning Runner"
+    echo "* Task id: \`${dead_tid}\`"
+  } > "${runner}"
+
+  # Simulate the driver-death signature directly (same technique the --all
+  # chain self-heal test above uses): a mode=background "plan" task, terminal
+  # failed status, a pid that can never be alive, no exit sentinel, no live
+  # process behind it - exactly what reap_task leaves behind when a spawned
+  # background planner dies without reporting.
+  python3 - "${dead_tid}" <<'PY'
+import json, datetime, sys
+tid = sys.argv[1]
+p = ".ai/.ogre/state/tasks.json"
+tasks = json.load(open(p))
+now = datetime.datetime.now().astimezone().isoformat()
+tasks.append({
+    "id": tid, "issue": "42", "type": "plan",
+    "executor": "claude", "model": "claude-sonnet-5", "mode": "background", "freshness": "fresh",
+    "runner": ".ai/.ogre/tmp/issue-42/plan-runner.md", "log_path": None, "status": "failed",
+    "pid": 99999999, "exit_code": None, "session_id": None, "notes": None,
+    "created_at": now, "started_at": now, "ended_at": now, "updated_at": now,
+})
+json.dump(tasks, open(p, "w"), indent=2)
+PY
+
+  export MOCK_CLAUDE_WRITE_FILE="$(pwd)/.ai/.ogre/plans/issue-42.md"
+  run "${OGRE_BIN}" status 42
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" == *"was running in background but its process died"* ]] || return 1
+
+  local new_tid
+  new_tid="$(python3 -c "
+import json
+tasks = json.load(open('.ai/.ogre/state/tasks.json'))
+plan_tasks = [t for t in tasks if t.get('type') == 'plan']
+plan_tasks.sort(key=lambda t: t.get('created_at') or '')
+print(plan_tasks[-1]['id'])
+")"
+  wait_for_task_status "${new_tid}" passed 10 || return 1
+  [ -f ".ai/.ogre/plans/issue-42.md" ] || return 1
+}

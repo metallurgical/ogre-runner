@@ -10,7 +10,7 @@
       "name": "ogre",
       "source": "./",
       "description": "Issue-to-plan-to-execution workflow helper for Claude Code + Codex with runtime state under .ai/.ogre.",
-      "version": "1.4.22",
+      "version": "1.4.23",
       "author": {
         "name": "Norlihazmey Ghazali",
         "email": "norlihazmey.ghazali@gmail.com"

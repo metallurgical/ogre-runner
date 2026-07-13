@@ -5,7 +5,7 @@ description: Show every .ai/.ogre/config.json key Ogre actually reads (dot path,
 
 # /ogre:config
 
-Use this skill when the user wants to inspect `.ai/.ogre/config.json` — what it currently affects, whether a value is really being read or silently ignored — or wants to reset it back to a clean/fresh-install state (e.g. after hand-editing it into a confusing state, or because they want to remove a `codex_unsandboxed_browser_check`/`browser_mcp` override they no longer want).
+Use this skill when the user wants to inspect `.ai/.ogre/config.json` — what it currently affects, whether a value is really being read or silently ignored — or wants to reset it back to a clean/fresh-install state (e.g. after hand-editing it into a confusing state, or because they want to remove a `browser_mcp` override they no longer want).
 
 ## Concepts
 
@@ -36,13 +36,12 @@ Prints `config.json`'s actual nested JSON shape (not a flattened list), each lin
     "executor": { "provider": "claude", "model": "claude-sonnet-5" },       # config.json | override: --executor PROVIDER / --model MODEL (ogre execute)
     "diff_reviewer": { "provider": "claude", "model": "claude-sonnet-5" }   # config.json | not read by any command yet
   },
-  "browser_mcp": null,                                                     # fallback | override: --mcp-config PATH (ogre execute, [BROWSER-CHECK] steps)
-  "codex_unsandboxed_browser_check": false                                 # fallback | override: --codex-unsandboxed-browser-check (ogre execute, codex [BROWSER-CHECK] only)
+  "browser_mcp": null                                                      # fallback | override: --mcp-config PATH (ogre execute, [BROWSER-CHECK] steps)
 }
 ```
 
 ### Reset (`--reset`)
 
-Backs up the current `config.json` to `config.json.bak` (never silently discarded), then overwrites `config.json` with the fresh-install defaults — same file `ensure_runtime` would write for a brand-new project. This removes any custom `browser_mcp` path and `codex_unsandboxed_browser_check` override, and resets `defaults.*` back to `claude`/`claude-sonnet-5` across the board.
+Backs up the current `config.json` to `config.json.bak` (never silently discarded), then overwrites `config.json` with the fresh-install defaults — same file `ensure_runtime` would write for a brand-new project. This removes any custom `browser_mcp` path override, and resets `defaults.*` back to `claude`/`claude-sonnet-5` across the board.
 
-Tell the user what got backed up and where, so they can restore an intentional override (e.g. `codex_unsandboxed_browser_check: true`) from `config.json.bak` if the reset was more than they wanted.
+Tell the user what got backed up and where, so they can restore an intentional override (e.g. a custom `browser_mcp`) from `config.json.bak` if the reset was more than they wanted.

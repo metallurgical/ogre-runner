@@ -29,6 +29,8 @@ Optional flags:
 - `--statement "free text description of the feature"` (use instead of an issue)
 - `--name my-feature` (slug for runtime paths when using `--statement`; default: first ~4 words of the statement + a short uuid suffix, e.g. "need to implement forgot password page" -> `need-to-implement-a1b2c3d4` — the suffix keeps it unique and ties the slug to that specific plan .md even if two features start with similar wording)
 - `--browser-check` — opt-in. Without it, the generated plan never tags a step `[BROWSER-CHECK]`, even ones that render/change UI - the user verifies those themselves. Only pass it when the user actually says they want the feature verified in a real browser as part of execution. Don't ask about this on every `/ogre:feature` call; default (no flag) is correct unless the user brings it up.
+- `--main` — run planning inline in this session instead of spawning an isolated subprocess (loses context isolation; only pass when the user explicitly wants that).
+- `--background` — spawn the isolated subprocess detached; returns immediately instead of waiting for the plan to finish.
 
 ## Behavior
 
@@ -44,16 +46,14 @@ Optional flags:
    - `.ai/.ogre/tmp/`
    - `.ai/.ogre/prompts/`
    - It also prints a **Job Summary** (Job Id, Issue, Status, Plan path, Commands) right after creation. Show this block **verbatim in a code block, one field per line** — do not paraphrase it into a sentence like "New job: \<slug\>" and do not drop fields (job_id and Plan path in particular must always be visible). At this point the plan doesn't exist yet, so Review/Execute are correctly absent from the command list; that's expected, not a bug.
-3. Read the generated planning runner:
-   - `.ai/.ogre/tmp/issue-<number>/plan-runner.md`
-4. Create the plan exactly as requested by that runner.
-   - If `--planner codex` and Codex has no repo access of its own, you may need to assemble the template + issue + repo context into one prompt and pipe it into `codex exec -` yourself. Do this **without writing the assembled prompt to disk first** — pipe it straight through, e.g. `{ cat .ai/.ogre/prompts/execution-blueprint-prompt.md; echo; cat .ai/.ogre/issues/issue-<n>.md; } | codex exec -`. Carry through any `--model`/`--reasoning` the user gave: `-m <model>` / `-c model_reasoning_effort=<level>`. Don't create extra files like `codex-plan-input.md`/`codex-raw-output.txt` under `.ai/.ogre/tmp/` — only `plan-runner.md` belongs there.
-5. Write the final plan to:
-   - `.ai/.ogre/plans/issue-<number>.md` or the custom plan path.
-6. Run `${CLAUDE_PLUGIN_ROOT}/scripts/ogre status <issue>` and show that Job Summary again, same format as step 2 (verbatim code block, one field per line). The plan now exists, so this second summary will differ from the first: `Plan` drops `(not written yet)`, `Steps Completed/Remaining/Total` are populated, `Review plan`/`Execute next` rows appear, and a `Steps (N):` checklist table is printed below it. Don't skip this just because you already showed a summary in step 2 — that one was necessarily incomplete.
-   - This verbatim requirement (both step 2 and step 6) holds even under a response-compression mode (caveman, terse/brief settings, etc). Those modes govern your own prose, not tool output you're instructed to reproduce verbatim — never fold the Job Summary table or Steps checklist into a one-line paraphrase like "Plan ready: N steps - ..." to satisfy a brevity mode.
-7. Do not implement code.
-8. Do not modify application files.
+3. By default the helper spawns an isolated planner subprocess itself and blocks until it finishes (same isolation model as `ogre execute`) - you do not read the runner or write the plan yourself. Wait for the command to return, then read its "Task ... finished: passed|failed" line.
+   - Pass `--background` to return immediately instead of waiting - report the task id to the user and tell them to check `ogre status <issue>` later; do not poll in a loop yourself.
+   - Pass `--main` only if the user explicitly wants the planning done inline in this session (spends this session's own context, loses isolation) - in that case, and only then, read `.ai/.ogre/tmp/issue-<number>/plan-runner.md` yourself and create the plan exactly as it requests, same as before this flag existed. If `--planner codex` and Codex has no repo access of its own, you may need to assemble the template + issue + repo context into one prompt and pipe it into `codex exec -` yourself. Do this **without writing the assembled prompt to disk first** — pipe it straight through, e.g. `{ cat .ai/.ogre/prompts/execution-blueprint-prompt.md; echo; cat .ai/.ogre/issues/issue-<n>.md; } | codex exec -`. Carry through any `--model`/`--reasoning` the user gave: `-m <model>` / `-c model_reasoning_effort=<level>`. Don't create extra files like `codex-plan-input.md`/`codex-raw-output.txt` under `.ai/.ogre/tmp/` — only `plan-runner.md` belongs there. Write the final plan to `.ai/.ogre/plans/issue-<number>.md` or the custom plan path.
+4. If the run failed (or `--background` is still running), do not treat the plan as ready - check `.ai/.ogre/logs/issue-<number>/` for the planner's own log before deciding what to do next.
+5. Run `${CLAUDE_PLUGIN_ROOT}/scripts/ogre status <issue>` and show that Job Summary again, same format as step 2 (verbatim code block, one field per line). The plan now exists, so this second summary will differ from the first: `Plan` drops `(not written yet)`, `Steps Completed/Remaining/Total` are populated, `Review plan`/`Execute next` rows appear, and a `Steps (N):` checklist table is printed below it. Don't skip this just because you already showed a summary in step 2 — that one was necessarily incomplete.
+   - This verbatim requirement (both step 2 and step 5) holds even under a response-compression mode (caveman, terse/brief settings, etc). Those modes govern your own prose, not tool output you're instructed to reproduce verbatim — never fold the Job Summary table or Steps checklist into a one-line paraphrase like "Plan ready: N steps - ..." to satisfy a brevity mode.
+6. Do not implement code.
+7. Do not modify application files.
 
 ## Existing Issue Behavior
 

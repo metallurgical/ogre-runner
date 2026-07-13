@@ -13,13 +13,15 @@ Ogre $OGRE_VERSION
 
 Usage:
   ogre init
-  ogre feature <issue-number|issue-url|issue-file> [--blocks 1,2,url,path] [--plan issue-107.md] [--planner claude|codex] [--model MODEL] [--reasoning LEVEL] [--browser-check]
-  ogre feature --statement "free text description" [--name my-feature] [--blocks 1,2,url,path] [--plan NAME.md] [--planner claude|codex] [--model MODEL] [--reasoning LEVEL] [--browser-check]
+  ogre feature <issue-number|issue-url|issue-file> [--blocks 1,2,url,path] [--plan issue-107.md] [--planner claude|codex] [--model MODEL] [--reasoning LEVEL] [--browser-check] [--main|--background]
+  ogre feature --statement "free text description" [--name my-feature] [--blocks 1,2,url,path] [--plan NAME.md] [--planner claude|codex] [--model MODEL] [--reasoning LEVEL] [--browser-check] [--main|--background]
                                    (--browser-check: opt-in - the generated plan tags steps needing real browser verification with [BROWSER-CHECK]. Default omits the tag entirely; the user verifies the feature themselves)
                                    (--planner/--model omitted: falls back to defaults.planner in .ai/.ogre/config.json, then claude/claude-sonnet-5)
-  ogre add-blocker <issue> <blocker-number|url|path> [--force]
-  ogre add-blocker <issue> --statement "free text blocker" [--name blocker-slug] [--force]
-  ogre review-plan <issue-or-plan> [--reviewer claude|codex] [--model MODEL] [--reasoning LEVEL]
+                                   (default spawns an isolated planner subprocess, same isolation model as ogre execute; --main runs inline in the current session, --background detaches)
+  ogre add-blocker <issue> <blocker-number|url|path> [--planner claude|codex] [--model MODEL] [--reasoning LEVEL] [--force] [--main|--background]
+  ogre add-blocker <issue> --statement "free text blocker" [--name blocker-slug] [--planner claude|codex] [--model MODEL] [--reasoning LEVEL] [--force] [--main|--background]
+                                   (--planner/--model omitted: falls back to whichever planner ogre feature already seeded for this issue)
+  ogre review-plan <issue-or-plan> [--reviewer claude|codex] [--model MODEL] [--reasoning LEVEL] [--main|--background]
                                    (--reviewer/--model omitted: falls back to defaults.plan_reviewer in .ai/.ogre/config.json, then claude/claude-sonnet-5)
   ogre execute <issue-or-plan> [--executor codex|claude] [--model MODEL] [--reasoning LEVEL] [--mcp-config PATH] [--all] [--max-steps N] [--fresh|--resume] [--main|--background] [--yes]
                                    (--executor/--model omitted: falls back to defaults.executor in .ai/.ogre/config.json, then claude/claude-sonnet-5)

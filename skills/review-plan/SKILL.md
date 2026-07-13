@@ -20,21 +20,19 @@ Optional flags:
 - `--reviewer claude|codex`
 - `--model MODEL`
 - `--reasoning LEVEL` (reasoning effort for the reviewer; omit to use the CLI's own default)
+- `--main` — run the review inline in this session instead of spawning an isolated subprocess (loses context isolation; only pass when the user explicitly wants that).
+- `--background` — spawn the isolated subprocess detached; returns immediately instead of waiting for the review to finish.
 
 ## Behavior
 
 1. Run:
    - `${CLAUDE_PLUGIN_ROOT}/scripts/ogre review-plan <issue-or-plan> [flags]`
-2. Read the generated runner:
-   - `.ai/.ogre/tmp/issue-<number>/plan-review-runner.md`
-3. If reviewer is `claude`, perform the review directly.
-4. If reviewer is `codex`, either:
-   - use `codex exec -m MODEL -c model_reasoning_effort=LEVEL - < runner` (omit `-c model_reasoning_effort=...` if the user gave no `--reasoning`), or
-   - ask the user to run it through `codex-plugin-cc` if they prefer same Claude Code TUI.
-5. Write output to:
-   - `.ai/.ogre/reviews/issue-<number>/plan-review.md`
-6. Do not edit code.
-7. Do not rewrite the plan unless the user explicitly asks.
+2. By default the helper spawns an isolated reviewer subprocess itself and blocks until it finishes (same isolation model as `ogre execute`) - you do not read the runner or perform the review yourself. Wait for the command to return, then read its "Task ... finished: passed|failed" line.
+   - Pass `--background` to return immediately instead of waiting - report the task id to the user and tell them to check `ogre status <issue>` later; do not poll in a loop yourself.
+   - Pass `--main` only if the user explicitly wants the review done inline in this session (spends this session's own context, loses isolation) - in that case, and only then, read `.ai/.ogre/tmp/issue-<number>/plan-review-runner.md` yourself: if reviewer is `claude`, perform the review directly; if reviewer is `codex`, either use `codex exec -m MODEL -c model_reasoning_effort=LEVEL - < runner` (omit `-c model_reasoning_effort=...` if the user gave no `--reasoning`), or ask the user to run it through `codex-plugin-cc` if they prefer same Claude Code TUI. Write output to `.ai/.ogre/reviews/issue-<number>/plan-review.md`.
+3. If the run failed (or `--background` is still running), do not treat the review as ready - check `.ai/.ogre/logs/issue-<number>/` for the reviewer's own log before deciding what to do next.
+4. Do not edit code.
+5. Do not rewrite the plan unless the user explicitly asks.
 
 ## Review Focus
 

@@ -219,6 +219,8 @@ Starts a new workflow and generates the planning runner. It also creates the `.a
 
 Use a positional issue number, URL, or local file when you already have one.
 
+By default the planner runs in an isolated `claude -p`/`codex exec` subprocess, same model as `/ogre:execute` (foreground, blocking, main session's context untouched). `--main` opts back into running it inline in the current session (spends this session's own context); `--background` spawns the same isolated subprocess detached. `ogre status <issue>` self-heals a `--background` planner that died mid-run, same as it does for a stalled `--all` execute chain.
+
 | Option | Example | Description |
 | :--- | :--- | :--- |
 | `--statement "..."` | `/ogre:feature --statement "need a forgot-password page"` | Freeform feature text, no issue needed at all |
@@ -234,6 +236,8 @@ Use a positional issue number, URL, or local file when you already have one.
 | `--model MODEL` | `/ogre:feature --statement "..." --name forgot-password --planner codex --model gpt-5.6-sol` | Model override for the planner |
 | `--reasoning LEVEL` | `/ogre:feature --statement "..." --name forgot-password --planner codex --reasoning high` | Reasoning effort for the planner. Omit it to use the CLI's own default - Ogre never forces one |
 | `--browser-check` | `/ogre:feature --statement "..." --name forgot-password --browser-check` | Opt-in. Without it, the generated plan never tags a step `[BROWSER-CHECK]`, even ones that render/change UI - default assumes you'll verify the feature yourself. Pass it when you want automated browser verification as part of execution (see `[BROWSER-CHECK]` steps below) |
+| `--main` | `/ogre:feature --statement "..." --name forgot-password --main` | Run planning inline in the current session instead of spawning an isolated subprocess. Opt-in only; defeats context-isolation if habitual |
+| `--background` | `/ogre:feature --statement "..." --name forgot-password --background` | Spawn the isolated subprocess detached instead of blocking; check progress with `ogre status <issue>` |
 
 ### `/ogre:add-blocker`
 
@@ -243,7 +247,7 @@ Attaches a new blocker to an issue already tracked by Ogre, and forces the plan 
 /ogre:add-blocker 107 --statement "must also invalidate old reset tokens"
 ```
 
-Accepts the same input types as `/ogre:feature` for the blocker itself:
+Accepts the same input types as `/ogre:feature` for the blocker itself. Re-planning uses the same isolated-subprocess-by-default model as `/ogre:feature`/`/ogre:execute` (`--main`/`--background` apply the same way), defaulting to whichever planner `/ogre:feature` already seeded for this issue if `--planner`/`--model`/`--reasoning` aren't passed:
 
 | Option | Example | Description |
 | :--- | :--- | :--- |
@@ -256,6 +260,9 @@ Accepts the same input types as `/ogre:feature` for the blocker itself:
 | `--name SLUG` | `/ogre:add-blocker 107 --statement "..." --name invalidate-tokens` | Slug for the blocker's file, only used with `--statement` |
 | `--remarks "..."` | `/ogre:add-blocker 107 108 --remarks "PR under review"` | Freeform status note tied to this blocker (e.g. merged / under review / blocking). Prepended to the blocker's file and shown to the planner; omit to store the blocker with no remark |
 | `--force` | `/ogre:add-blocker 107 108 --force` | Override the "execution already started" refusal (skips retroactive revision of completed steps; surface this warning to the user, never pass silently) |
+| `--planner claude\|codex` / `--model MODEL` / `--reasoning LEVEL` | `/ogre:add-blocker 107 108 --planner codex` | Which LLM CLI re-plans; defaults to the issue's already-seeded planner |
+| `--main` | `/ogre:add-blocker 107 108 --main` | Run re-planning inline in the current session instead of spawning an isolated subprocess |
+| `--background` | `/ogre:add-blocker 107 108 --background` | Spawn the isolated subprocess detached instead of blocking |
 
 ### `/ogre:review-plan`
 
@@ -271,6 +278,10 @@ Reviews a generated plan for hallucinations, missing validation, risky assumptio
 | `--reviewer claude\|codex` | `/ogre:review-plan 107 --reviewer codex` | Which LLM CLI reviews the plan (default: `claude`) |
 | `--model MODEL` | `/ogre:review-plan 107 --reviewer codex --model gpt-5.6-sol` | Model override for the reviewer |
 | `--reasoning LEVEL` | `/ogre:review-plan 107 --reviewer codex --reasoning high` | Reasoning effort for the reviewer. Omit it to use the CLI's own default - Ogre never forces one |
+| `--main` | `/ogre:review-plan 107 --main` | Run the review inline in the current session instead of spawning an isolated subprocess |
+| `--background` | `/ogre:review-plan 107 --background` | Spawn the isolated subprocess detached instead of blocking |
+
+Same isolated-subprocess-by-default model as `/ogre:feature`/`/ogre:execute`: default spawns and blocks, `--main` opts back into inline, `--background` detaches.
 
 ### `/ogre:execute`
 

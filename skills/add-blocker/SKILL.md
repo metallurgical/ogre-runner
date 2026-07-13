@@ -17,19 +17,24 @@ Use this skill when the user wants to add a blocker to an issue Ogre is already 
   - Freeform statement via `--statement "..."` (no issue/URL/file needed)
 - Optional `--name blocker-slug` (only used with `--statement`).
 - Optional `--remarks "..."` — a freeform note on this blocker's status (e.g. `"PR merged"`, `"under review"`, `"blocking, not started"`). It's tied to this specific blocker and travels with it into planning. Omit it and the blocker is stored plain, with no remark. If the user mentions a status when adding the blocker, capture it here.
+- Optional `--planner claude|codex`, `--model MODEL`, `--reasoning LEVEL` — defaults to whichever planner `/ogre:feature` already seeded for this issue if omitted.
+- `--main` — revise the plan inline in this session instead of spawning an isolated subprocess (loses context isolation; only pass when the user explicitly wants that).
+- `--background` — spawn the isolated subprocess detached; returns immediately instead of waiting for the revision to finish.
 
 ## Behavior
 
-1. Run: `${CLAUDE_PLUGIN_ROOT}/scripts/ogre add-blocker <issue> <blocker> [--statement "..."] [--name slug] [--remarks "status note"]`
+1. Run: `${CLAUDE_PLUGIN_ROOT}/scripts/ogre add-blocker <issue> <blocker> [--statement "..."] [--name slug] [--remarks "status note"] [flags]`
 2. The helper:
    - Fetches/writes the blocker into `.ai/.ogre/issues/`.
    - Appends it to `blocker_paths` in `.ai/.ogre/state/issue-<issue>.json`.
    - If `--remarks` given: stores it in `blocker_remarks` (keyed by the blocker's path), prepends it as a header to the blocker's `.md` file, and shows it inline next to the blocker in the planning runner — so the planner sees the status without you restating it.
    - Resets state status to `planning`.
    - Regenerates `.ai/.ogre/tmp/issue-<issue>/plan-runner.md` as a **revision** runner: it points at the existing plan and instructs the planner to update it for the new blocker, not start over.
-3. Read that runner and revise the plan file in place, keeping sections the new blocker doesn't affect.
-   - If feeding Codex manually (no repo access of its own), pipe the assembled prompt straight into `codex exec -` — don't write it to disk first. Only `plan-runner.md` belongs under `.ai/.ogre/tmp/issue-<issue>/`.
-4. Do not implement code.
+   - By default spawns an isolated re-planner subprocess itself and blocks until it finishes (same isolation model as `ogre execute`/`ogre feature`) - you do not read the runner or revise the plan yourself. Wait for the command to return, then read its "Task ... finished: passed|failed" line.
+3. Pass `--background` to return immediately instead of waiting - report the task id to the user and tell them to check `ogre status <issue>` later; do not poll in a loop yourself.
+4. Pass `--main` only if the user explicitly wants the revision done inline in this session (spends this session's own context, loses isolation) - in that case, and only then, read that runner and revise the plan file in place yourself, keeping sections the new blocker doesn't affect. If feeding Codex manually (no repo access of its own), pipe the assembled prompt straight into `codex exec -` — don't write it to disk first. Only `plan-runner.md` belongs under `.ai/.ogre/tmp/issue-<issue>/`.
+5. If the run failed (or `--background` is still running), do not treat the revision as ready - check `.ai/.ogre/logs/issue-<issue>/` for the planner's own log before deciding what to do next.
+6. Do not implement code.
 
 ## Guardrail: execution must not have started
 

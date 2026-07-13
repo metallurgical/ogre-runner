@@ -1999,7 +1999,7 @@ cmd_add_blocker() {
   spath="$(state_path "$issue")"
   [ -f "$spath" ] || { err "No Ogre state found for issue $issue. Run 'ogre feature' first."; exit 1; }
 
-  local blocker="" statement="" name="" force="false" remarks=""
+  local blocker="" statement="" name="" force="false" remarks="" planner="" model="" reasoning="" iso="new"
   if [ $# -gt 0 ] && [[ "$1" != --* ]]; then
     blocker="$1"; shift
   fi
@@ -2009,11 +2009,37 @@ cmd_add_blocker() {
       --name) name="${2:-}"; shift 2 ;;
       --remarks) remarks="${2:-}"; shift 2 ;;
       --force) force="true"; shift ;;
+      --planner) planner="${2:-}"; shift 2 ;;
+      --model) model="${2:-}"; shift 2 ;;
+      --reasoning) reasoning="${2:-}"; shift 2 ;;
+      --main) iso="main"; shift ;;
+      --background) iso="background"; shift ;;
       *) err "Unknown option: $1"; exit 1 ;;
     esac
   done
   [ -n "$blocker" ] || [ -n "$statement" ] || { err "Provide a blocker issue number/url/path, or --statement \"free text\""; exit 1; }
   [ -n "$name" ] && validate_slug "$name" "--name"
+  # planner/model default to whatever role ogre feature already seeded for
+  # this issue (state.json's "planner" is a nested {provider,model} object,
+  # not a flat field - json_field only does a flat .get(), hence the inline
+  # read here instead).
+  if [ -z "$planner" ] || [ -z "$model" ]; then
+    local seeded_planner seeded_planner_model
+    { read -r seeded_planner; read -r seeded_planner_model; } < <(python3 -c '
+import json
+try:
+    d = json.load(open("'"$spath"'"))
+except Exception:
+    d = {}
+p = d.get("planner") or {}
+print(p.get("provider") or "")
+print(p.get("model") or "")
+')
+    [ -n "$planner" ] || planner="$seeded_planner"
+    [ -n "$model" ] || model="$seeded_planner_model"
+  fi
+  [ -n "$planner" ] || planner="claude"
+  [ -n "$model" ] || model="claude-sonnet-5"
 
   local forced_after_start="false"
   if execution_started "$issue"; then
@@ -2122,6 +2148,15 @@ $passed_text"
     fi
   fi
 
+  local tid="" completion_rule="" task_id_line=""
+  if [ "$iso" != "main" ]; then
+    tid="$(new_task_id)"
+    task_id_line="* Task id: \`$tid\`
+"
+    completion_rule="* Mandatory last step: once \`$plan\` is fully revised, run \`$SCRIPT_DIR/ogre task-complete $tid --status passed\` if the revision is complete, or \`--status failed\` if you could not finish it. Use that exact path - \`ogre\` alone is not guaranteed to be on PATH.
+"
+  fi
+
   runner="$RUNTIME/tmp/issue-$issue/plan-runner.md"
   cat > "$runner" <<EOF2
 # Ogre Planning Runner (Blocker Update)
@@ -2149,7 +2184,7 @@ $passed_section
 * Revise the plan at \`$plan\` to account for the newly added blocker(s).
 * Re-check every existing assumption against the updated blocker list.
 * Keep sections the new blocker does not affect.
-
+${task_id_line}
 ## Rules
 
 * Follow the planning template exactly.
@@ -2157,13 +2192,44 @@ $passed_section
 * Do not implement code.
 * Do not modify application files.
 * Use the real issue/blocker paths given above under "Current Issue"/"Blocking Issues" - a freeform \`--statement\` issue has no numeric number and that is normal, not a sign anything is missing.
+${completion_rule}
 EOF2
 
   log ""
   log "Blocker added: $bpath"
   log "State status reset to 'planning' for issue $issue."
   log "Re-planning runner created: $runner"
-  log "Next inside Claude Code: read $runner and revise the plan at $plan."
+
+  if [ "$iso" = "main" ]; then
+    log "Next inside Claude Code: read $runner and revise the plan at $plan."
+    return
+  fi
+
+  case "$planner" in
+    codex) command -v codex >/dev/null 2>&1 || { err "codex CLI not found"; exit 1; } ;;
+    claude) command -v claude >/dev/null 2>&1 || { err "claude CLI not found"; exit 1; } ;;
+    *) err "Unsupported planner: $planner"; exit 1 ;;
+  esac
+
+  local replan_logpath session_id=""
+  replan_logpath="$logdir/replan-$(date '+%Y%m%d-%H%M%S')-${tid:5:8}.log"
+  [ "$planner" = "claude" ] && session_id="$(gen_uuid)"
+  task_create "$tid" "$issue" "replan" "$planner" "$model" "$iso" "fresh" "$runner" "$replan_logpath" "pending" "$reasoning" ""
+  [ -n "$session_id" ] && task_update "$tid" "session_id=$session_id"
+
+  if [ "$iso" = "background" ]; then
+    spawn_role_background "$tid" "$issue" "$logdir" "$runner" "$replan_logpath" "$session_id" "$planner" "$model" "$reasoning" "" "$plan"
+    return
+  fi
+
+  task_update "$tid" "status=running"
+  spawn_role_foreground "$tid" "$runner" "$replan_logpath" "$session_id" "$planner" "$model" "$reasoning" "" "$plan"
+  local final_status rc
+  final_status="$(task_field "$tid" status)"
+  [ "$final_status" = "passed" ] && rc=0 || rc=1
+  log ""
+  log "Task $tid finished: $final_status"
+  exit "$rc"
 }
 
 cmd_review_plan() {

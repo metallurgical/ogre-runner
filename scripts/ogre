@@ -2168,7 +2168,7 @@ EOF2
 
 cmd_review_plan() {
   ensure_runtime
-  local target="${1:-}" reviewer="" model="" reasoning=""
+  local target="${1:-}" reviewer="" model="" reasoning="" iso="new"
   [ -n "$target" ] || { err "Missing issue or plan path"; usage; exit 1; }
   shift || true
   while [ $# -gt 0 ]; do
@@ -2176,6 +2176,8 @@ cmd_review_plan() {
       --reviewer) reviewer="${2:-}"; shift 2 ;;
       --model) model="${2:-}"; shift 2 ;;
       --reasoning) reasoning="${2:-}"; shift 2 ;;
+      --main) iso="main"; shift ;;
+      --background) iso="background"; shift ;;
       *) err "Unknown option: $1"; exit 1 ;;
     esac
   done
@@ -2198,6 +2200,15 @@ cmd_review_plan() {
   runner="$RUNTIME/tmp/issue-$issue/plan-review-runner.md"
   mkdir -p "$review_dir" "$RUNTIME/tmp/issue-$issue"
 
+  local tid="" completion_rule="" task_id_line=""
+  if [ "$iso" != "main" ]; then
+    tid="$(new_task_id)"
+    task_id_line="* Task id: \`$tid\`
+"
+    completion_rule="* Mandatory last step: once \`$review_path\` is fully written, run \`$SCRIPT_DIR/ogre task-complete $tid --status passed\` if the review is complete, or \`--status failed\` if you could not produce one. Use that exact path - \`ogre\` alone is not guaranteed to be on PATH.
+"
+  fi
+
   cat > "$runner" <<EOF2
 # Ogre Plan Review Runner
 
@@ -2212,17 +2223,49 @@ Review this implementation plan against the repository/codebase:
 Write the review to:
 
 * \`$review_path\`
-
+${task_id_line}
 Rules:
 
 * Do not edit code.
 * Return only problems and suggested corrections.
 * If there are no blocking issues, say so clearly.
+${completion_rule}
 EOF2
 
   log "Plan review runner created: $runner"
   log "Reviewer: $reviewer ${model:+($model)}${reasoning:+ [reasoning: $reasoning]}"
   log "Review output: $review_path"
+
+  if [ "$iso" = "main" ]; then
+    return
+  fi
+
+  case "$reviewer" in
+    codex) command -v codex >/dev/null 2>&1 || { err "codex CLI not found"; exit 1; } ;;
+    claude) command -v claude >/dev/null 2>&1 || { err "claude CLI not found"; exit 1; } ;;
+    *) err "Unsupported reviewer: $reviewer"; exit 1 ;;
+  esac
+
+  local review_logpath session_id="" review_logdir="$RUNTIME/logs/issue-$issue"
+  mkdir -p "$review_logdir"
+  review_logpath="$review_logdir/review-$(date '+%Y%m%d-%H%M%S')-${tid:5:8}.log"
+  [ "$reviewer" = "claude" ] && session_id="$(gen_uuid)"
+  task_create "$tid" "$issue" "review" "$reviewer" "$model" "$iso" "fresh" "$runner" "$review_logpath" "pending" "$reasoning" ""
+  [ -n "$session_id" ] && task_update "$tid" "session_id=$session_id"
+
+  if [ "$iso" = "background" ]; then
+    spawn_role_background "$tid" "$issue" "$review_logdir" "$runner" "$review_logpath" "$session_id" "$reviewer" "$model" "$reasoning" "" "$review_path"
+    return
+  fi
+
+  task_update "$tid" "status=running"
+  spawn_role_foreground "$tid" "$runner" "$review_logpath" "$session_id" "$reviewer" "$model" "$reasoning" "" "$review_path"
+  local final_status rc
+  final_status="$(task_field "$tid" status)"
+  [ "$final_status" = "passed" ] && rc=0 || rc=1
+  log ""
+  log "Task $tid finished: $final_status"
+  exit "$rc"
 }
 
 cmd_execute() {

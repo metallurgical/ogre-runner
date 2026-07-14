@@ -25,6 +25,8 @@ Optional flags:
 
 ## Behavior
 
+**Hard requirement, every completion message this skill produces, no exception:** must literally contain a `Job Id:` line and a `Review:` line (the `.ai/.ogre/reviews/issue-<number>/plan-review.md` path) with their real values. A terse summary sentence is fine, even under caveman/ultra/terse mode — but it must not be the *only* thing shown; the `Job Id:`/`Review:` lines still have to appear alongside it, every time.
+
 1. Run:
    - `${CLAUDE_PLUGIN_ROOT}/scripts/ogre review-plan <issue-or-plan> [flags]`
 2. By default the helper spawns an isolated reviewer subprocess itself and blocks until it finishes (same isolation model as `ogre execute`) - you do not read the runner or perform the review yourself. Wait for the command to return, then read its "Task ... finished: passed|failed" line.

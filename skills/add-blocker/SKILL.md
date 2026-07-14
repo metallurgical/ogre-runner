@@ -23,7 +23,7 @@ Use this skill when the user wants to add a blocker to an issue Ogre is already 
 
 ## Behavior
 
-**Hard requirement, every completion message this skill produces, no exception:** must literally contain a `Job Id:` line and a `Plan:` line with their real values. A terse summary sentence is fine, even under caveman/ultra/terse mode — but it must not be the *only* thing shown; the `Job Id:`/`Plan:` lines still have to appear alongside it, every time.
+**Hard requirement, every completion message this skill produces, no exception:** must literally contain `Job Id:`, `Issue:` (number + name), `Plan:`, and `Steps:` lines with their real values. A terse summary sentence is fine, even under caveman/ultra/terse mode — but it must not be the *only* thing shown; the `Job Id:`/`Issue:`/`Plan:`/`Steps:` lines still have to appear alongside it, every time.
 
 1. Run: `${CLAUDE_PLUGIN_ROOT}/scripts/ogre add-blocker <issue> <blocker> [--statement "..."] [--name slug] [--remarks "status note"] [flags]`
 2. The helper:

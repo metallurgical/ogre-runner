@@ -25,7 +25,7 @@ Optional flags:
 
 ## Behavior
 
-**Hard requirement, every completion message this skill produces, no exception:** must literally contain a `Job Id:` line and a `Review:` line (the `.ai/.ogre/reviews/issue-<number>/plan-review.md` path) with their real values. A terse summary sentence is fine, even under caveman/ultra/terse mode — but it must not be the *only* thing shown; the `Job Id:`/`Review:` lines still have to appear alongside it, every time.
+**Hard requirement, every completion message this skill produces, no exception:** must literally contain `Job Id:`, `Issue:` (number + name), `Review:` (the `.ai/.ogre/reviews/issue-<number>/plan-review.md` path), and `Steps:` (step count of the plan being reviewed) lines with their real values. A terse summary sentence is fine, even under caveman/ultra/terse mode — but it must not be the *only* thing shown; the `Job Id:`/`Issue:`/`Review:`/`Steps:` lines still have to appear alongside it, every time.
 
 1. Run:
    - `${CLAUDE_PLUGIN_ROOT}/scripts/ogre review-plan <issue-or-plan> [flags]`

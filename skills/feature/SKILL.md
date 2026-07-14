@@ -34,7 +34,7 @@ Optional flags:
 
 ## Behavior
 
-**Hard requirement, every completion message this skill produces, no exception:** must literally contain a `Job Id:` line and a `Plan:` line with their real values. A terse summary sentence is fine (e.g. "Plan ready, 8 steps, issue 118 (Laporan Trend Analysis). Next: ogre review-plan 118 or ogre execute 118.") — even under caveman/ultra/terse mode — but it must not be the *only* thing shown; the `Job Id:`/`Plan:` lines still have to appear alongside it, every time.
+**Hard requirement, every completion message this skill produces, no exception:** must literally contain `Job Id:`, `Issue:` (number + name), `Plan:`, and `Steps:` lines with their real values. A terse summary sentence is fine (e.g. "Plan ready, 8 steps, issue 118 (Laporan Trend Analysis). Next: ogre review-plan 118 or ogre execute 118.") — even under caveman/ultra/terse mode — but it must not be the *only* thing shown; the `Job Id:`/`Issue:`/`Plan:`/`Steps:` lines still have to appear alongside it, every time.
 
 1. Run the Ogre helper from the plugin:
    - `${CLAUDE_PLUGIN_ROOT}/scripts/ogre feature <issue> [flags]`

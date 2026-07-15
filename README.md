@@ -337,6 +337,35 @@ So passing `--browser-check` to `/ogre:feature` without a browser MCP configured
 
 **Auto-fix on a failed `[BROWSER-CHECK]`** (automatic in `--all`/`--background`, no flag needed). A browser-check step can't edit files, so a real bug it finds would otherwise be a dead end. Instead Ogre inserts up to 2 ad-hoc `[AUTO-FIX n/2]` steps (full edit rights, same safety rules as any step) before re-checking, each in its own fresh session so the re-check is genuinely independent. Still failing after 2 → chain stops for real, step marked `failed`. Every attempt stays visible in the plan file; the originally planned steps are never touched.
 
+### `/ogre:rescue`
+
+A standalone hotfix/task runner - no plan, no job, no issue involved. For when going through `/ogre:feature` → `/ogre:review-plan` → `/ogre:execute` would be overkill for what you actually want done right now:
+
+```
+/ogre:rescue "fix error in login backend"
+/ogre:rescue --statement "implement forgot password page" --rescuer codex
+```
+
+| Option | Example | Description |
+| :--- | :--- | :--- |
+| `<task>` (positional) | `/ogre:rescue "fix login bug"` | Freeform task description |
+| `--statement "..."` | `/ogre:rescue --statement "fix login bug"` | Same as the positional form |
+| `--rescuer claude\|codex` | `/ogre:rescue "..." --rescuer codex` | Which LLM CLI does the work (default: falls back to `defaults.executor` in `.ai/.ogre/config.json`, then `claude` - a rescuer reuses the `executor` config role) |
+| `--model MODEL` | `/ogre:rescue "..." --rescuer codex --model gpt-5.6-sol` | Model override for the rescuer |
+| `--reasoning LEVEL` | `/ogre:rescue "..." --rescuer codex --reasoning high` | Reasoning effort for the rescuer. Omit it to use the CLI's own default - Ogre never forces one |
+| `--name SLUG` | `/ogre:rescue "..." --name login-fix` | Slug for this rescue's log/tmp paths (`.ai/.ogre/{tmp,logs}/issue-rescue-<slug>/`). Default: derived from the first few words of the task text plus a short uuid, same scheme as `/ogre:feature --statement`'s auto-name |
+| `--main` | `/ogre:rescue "..." --main` | Run inline in the current Claude Code session instead of spawning an isolated subprocess. Opt-in only; no task id is tracked in this mode since there's no subprocess to track |
+| `--background` | `/ogre:rescue "..." --background` | Spawn the isolated subprocess detached instead of blocking |
+
+Same isolated-subprocess-by-default model as `/ogre:execute` (foreground, blocking, new codex/claude session unless `--main`/`--background` say otherwise) - but always exactly one subprocess call, never a chain (no `--all`, `--task`/`--step`, or `--retry`). No `state/issue-<x>.json` is ever written; track a run via the task id it prints instead:
+
+```
+ogre status --task <id>
+ogre stop --task <id>
+```
+
+Stays on whatever git branch is already checked out - it does not create or switch branches on its own.
+
 ### `/ogre:status`
 
 Shows job/task progress from `.ai/.ogre` state. Also self-heals a `--all --background` chain whose driver process died outright with steps still pending (no crash trace, just gone) - detects the dead pid on the last chain task and auto-relaunches `--all --background` with the same executor/model. Never touches an issue you explicitly `stop`ped.

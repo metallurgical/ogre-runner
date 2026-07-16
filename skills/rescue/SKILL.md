@@ -21,9 +21,9 @@ Accept the task description either as a plain positional argument or via `--stat
 Optional flags (same shape as `/ogre:execute`'s):
 
 - `--rescuer claude|codex` - who does the work. Omitted: falls back to
-  `defaults.executor` in `.ai/.ogre/config.json`, then `claude`. This reuses the
-  `executor` config role deliberately - a rescuer is doing executor-shaped work,
-  just against a freeform task instead of a plan step.
+  `defaults.rescuer` in `.ai/.ogre/config.json`, then `claude`. `rescuer` is its
+  own config role, separate from `defaults.executor` - a project can pin a
+  different CLI/model for one-off rescues than for plan execution.
 - `--model MODEL`
 - `--reasoning LEVEL` - reasoning effort for the rescuer (`claude -p` gets
   `--effort LEVEL`, `codex exec` gets `-c model_reasoning_effort=LEVEL`). Omit it to

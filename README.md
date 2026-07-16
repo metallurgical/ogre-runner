@@ -350,7 +350,7 @@ A standalone hotfix/task runner - no plan, no job, no issue involved. For when g
 | :--- | :--- | :--- |
 | `<task>` (positional) | `/ogre:rescue "fix login bug"` | Freeform task description |
 | `--statement "..."` | `/ogre:rescue --statement "fix login bug"` | Same as the positional form |
-| `--rescuer claude\|codex` | `/ogre:rescue "..." --rescuer codex` | Which LLM CLI does the work (default: falls back to `defaults.executor` in `.ai/.ogre/config.json`, then `claude` - a rescuer reuses the `executor` config role) |
+| `--rescuer claude\|codex` | `/ogre:rescue "..." --rescuer codex` | Which LLM CLI does the work (default: falls back to `defaults.rescuer` in `.ai/.ogre/config.json`, then `claude` - its own config role, separate from `defaults.executor`) |
 | `--model MODEL` | `/ogre:rescue "..." --rescuer codex --model gpt-5.6-sol` | Model override for the rescuer |
 | `--reasoning LEVEL` | `/ogre:rescue "..." --rescuer codex --reasoning high` | Reasoning effort for the rescuer. Omit it to use the CLI's own default - Ogre never forces one |
 | `--name SLUG` | `/ogre:rescue "..." --name login-fix` | Slug for this rescue's log/tmp paths (`.ai/.ogre/{tmp,logs}/issue-rescue-<slug>/`). Default: derived from the first few words of the task text plus a short uuid, same scheme as `/ogre:feature --statement`'s auto-name |
@@ -444,6 +444,7 @@ Prints `config.json`'s actual nested shape (not a flattened dot-path list), each
     "planner": { "provider": "claude", "model": "claude-sonnet-5" },        # config.json | override: --planner PROVIDER / --model MODEL (ogre feature)
     "plan_reviewer": { "provider": "claude", "model": "claude-sonnet-5" },  # config.json | override: --reviewer PROVIDER / --model MODEL (ogre review-plan)
     "executor": { "provider": "claude", "model": "claude-sonnet-5" },       # config.json | override: --executor PROVIDER / --model MODEL (ogre execute)
+    "rescuer": { "provider": "claude", "model": "claude-sonnet-5" },       # config.json | override: --rescuer PROVIDER / --model MODEL (ogre rescue)
     "diff_reviewer": { "provider": "claude", "model": "claude-sonnet-5" }   # config.json | not read by any command yet
   },
   "browser_mcp": null                                                      # fallback | override: --mcp-config PATH (ogre execute, [BROWSER-CHECK] steps)

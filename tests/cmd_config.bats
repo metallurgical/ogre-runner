@@ -11,6 +11,21 @@ load test_helper
   [ "${status}" -eq 0 ] || return 1
   [[ "${output}" == *'"planner": { "provider": "claude", "model": "claude-sonnet-5" },        # config.json'* ]] || return 1
   [[ "${output}" == *'"executor": { "provider": "claude", "model": "claude-sonnet-5" },       # config.json'* ]] || return 1
+  [[ "${output}" == *'"rescuer": { "provider": "claude", "model": "claude-sonnet-5" },        # config.json'* ]] || return 1
+}
+
+@test "config's rescuer role is independent of executor - setting one leaves the other at its own default" {
+  "${OGRE_BIN}" init
+  python3 -c "
+import json
+d = json.load(open('.ai/.ogre/config.json'))
+d['defaults']['rescuer'] = {'provider': 'codex', 'model': 'gpt-5.5'}
+json.dump(d, open('.ai/.ogre/config.json', 'w'))
+"
+  run "${OGRE_BIN}" config
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" == *'"rescuer": { "provider": "codex", "model": "gpt-5.5" }'*"config.json"* ]] || return 1
+  [[ "${output}" == *'"executor": { "provider": "claude", "model": "claude-sonnet-5" }'*"config.json"* ]] || return 1
 }
 
 @test "config shows the hardcoded fallback for a role missing from an existing config.json's defaults" {

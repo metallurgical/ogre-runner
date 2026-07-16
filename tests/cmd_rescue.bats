@@ -98,12 +98,12 @@ print(t['id'])
   [[ "${output}" != *"[reasoning:"* ]] || return 1
 }
 
-@test "rescue falls back to config.json's defaults.executor role when --rescuer is omitted" {
+@test "rescue falls back to config.json's defaults.rescuer role when --rescuer is omitted" {
   "${OGRE_BIN}" init
   python3 -c "
 import json
 d = json.load(open('.ai/.ogre/config.json'))
-d['defaults']['executor'] = {'provider': 'codex', 'model': 'gpt-5.6-sol'}
+d['defaults']['rescuer'] = {'provider': 'codex', 'model': 'gpt-5.6-sol'}
 json.dump(d, open('.ai/.ogre/config.json', 'w'))
 "
   run "${OGRE_BIN}" rescue "fix login bug" --name login-fix --main
@@ -116,12 +116,26 @@ json.dump(d, open('.ai/.ogre/config.json', 'w'))
   python3 -c "
 import json
 d = json.load(open('.ai/.ogre/config.json'))
-d['defaults']['executor'] = {'provider': 'codex', 'model': 'gpt-5.6-sol'}
+d['defaults']['rescuer'] = {'provider': 'codex', 'model': 'gpt-5.6-sol'}
 json.dump(d, open('.ai/.ogre/config.json', 'w'))
 "
   run "${OGRE_BIN}" rescue "fix login bug" --rescuer claude --model claude-sonnet-5 --name login-fix --main
   [ "${status}" -eq 0 ] || return 1
   [[ "${output}" == *"Rescuer: claude (claude-sonnet-5)"* ]] || return 1
+}
+
+@test "rescue's defaults.rescuer is independent of defaults.executor" {
+  "${OGRE_BIN}" init
+  python3 -c "
+import json
+d = json.load(open('.ai/.ogre/config.json'))
+d['defaults']['executor'] = {'provider': 'codex', 'model': 'gpt-5.6-sol'}
+json.dump(d, open('.ai/.ogre/config.json', 'w'))
+"
+  run "${OGRE_BIN}" rescue "fix login bug" --name login-fix --main
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" == *"Rescuer: claude"* ]] || return 1
+  [[ "${output}" != *"codex"* ]] || return 1
 }
 
 @test "rescue errors when the claude CLI is missing (default rescuer)" {

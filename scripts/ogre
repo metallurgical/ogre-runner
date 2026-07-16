@@ -25,7 +25,7 @@ Usage:
                                    (--reviewer/--model omitted: falls back to defaults.plan_reviewer in .ai/.ogre/config.json, then claude/claude-sonnet-5)
   ogre rescue "<freeform task>" [--rescuer claude|codex] [--model MODEL] [--reasoning LEVEL] [--name slug] [--main|--background]
                                    (standalone hotfix/task, no plan or issue involved - e.g. "fix error in login backend". Not tied to any ogre feature job.)
-                                   (--rescuer/--model omitted: falls back to defaults.executor in .ai/.ogre/config.json, then claude/claude-sonnet-5)
+                                   (--rescuer/--model omitted: falls back to defaults.rescuer in .ai/.ogre/config.json, then claude/claude-sonnet-5)
                                    (--name slug: override the auto-derived slug used for its state/log/tmp paths, e.g. rescue-<slug>)
                                    (default spawns an isolated rescuer subprocess, same isolation model as ogre execute; --main runs inline in the current session, --background detaches)
                                    (no job/state file is created - track it via "ogre status --task <id>" / "ogre stop --task <id>" using the task id it prints)
@@ -80,11 +80,15 @@ log() { printf '%s\n' "$*"; }
 err() { printf 'ERROR: %s\n' "$*" >&2; }
 
 # write_default_config <path> - the fresh-install config.json, unconditionally
-# overwritten to this. planner/plan_reviewer/executor here are read by
+# overwritten to this. planner/plan_reviewer/executor/rescuer here are read by
 # config_default_role and used as the fallback whenever the matching
-# --planner/--reviewer/--executor (and their --model) flag is omitted on the
-# CLI - CLI flags always win. diff_reviewer has no consumer yet (no command
-# uses that role) - it's reserved, not currently wired to anything.
+# --planner/--reviewer/--executor/--rescuer (and their --model) flag is
+# omitted on the CLI - CLI flags always win. diff_reviewer has no consumer
+# yet (no command uses that role) - it's reserved, not currently wired to
+# anything. rescuer is separate from executor so a project can pin, say,
+# codex for plan execution but keep claude as the default for one-off
+# `ogre rescue` hotfixes (or vice versa) - they're the same shape of role
+# (an LLM CLI doing edit work) but not necessarily the same choice.
 write_default_config() {
   cat > "$1" <<'JSON'
 {
@@ -92,6 +96,7 @@ write_default_config() {
     "planner": { "provider": "claude", "model": "claude-sonnet-5" },
     "plan_reviewer": { "provider": "claude", "model": "claude-sonnet-5" },
     "executor": { "provider": "claude", "model": "claude-sonnet-5" },
+    "rescuer": { "provider": "claude", "model": "claude-sonnet-5" },
     "diff_reviewer": { "provider": "claude", "model": "claude-sonnet-5" }
   },
   "browser_mcp": null
@@ -134,7 +139,7 @@ print(d.get("browser_mcp") or "")' "$cfg"
 
 # config_default_role <role> <field> - reads .defaults.<role>.<field> from
 # .ai/.ogre/config.json (empty if unset/missing/no config file). role is one
-# of planner|plan_reviewer|executor|diff_reviewer; field is provider|model.
+# of planner|plan_reviewer|executor|rescuer|diff_reviewer; field is provider|model.
 # CLI flags always win over this - callers only consult it when the
 # corresponding flag was not passed.
 config_default_role() {
@@ -2440,18 +2445,18 @@ cmd_rescue() {
   done
   [ -n "$statement" ] || { err "Missing task description. Usage: ogre rescue \"<freeform task>\" [--rescuer claude|codex] [--model MODEL] [--reasoning LEVEL] [--name slug] [--main|--background]"; exit 1; }
 
-  # --rescuer/--model win if passed; else fall back to defaults.executor in
-  # .ai/.ogre/config.json (same role as ogre execute - a rescuer IS an
-  # executor, just for a freeform task instead of a plan step); else the
-  # hardcoded claude/claude-sonnet-5 default.
-  [ -n "$rescuer" ] || rescuer="$(config_default_role executor provider)"
+  # --rescuer/--model win if passed; else fall back to defaults.rescuer in
+  # .ai/.ogre/config.json - its own role, separate from defaults.executor, so
+  # a project can pin a different CLI/model for one-off rescues than for plan
+  # execution; else the hardcoded claude/claude-sonnet-5 default.
+  [ -n "$rescuer" ] || rescuer="$(config_default_role rescuer provider)"
   [ -n "$rescuer" ] || rescuer="claude"
   case "$rescuer" in
     codex) command -v codex >/dev/null 2>&1 || { err "codex CLI not found on PATH, but --rescuer codex was requested. Re-run with --rescuer claude, or install codex first."; exit 1; } ;;
     claude) command -v claude >/dev/null 2>&1 || { err "claude CLI not found on PATH."; exit 1; } ;;
     *) err "Unsupported rescuer: $rescuer"; exit 1 ;;
   esac
-  [ -n "$model" ] || model="$(config_default_role executor model)"
+  [ -n "$model" ] || model="$(config_default_role rescuer model)"
   if [ -z "$model" ]; then
     case "$rescuer" in
       codex) model="gpt-5.6-sol" ;;
@@ -3879,6 +3884,7 @@ roles = [
     ("planner",       "claude", "claude-sonnet-5", "--planner PROVIDER / --model MODEL (ogre feature)"),
     ("plan_reviewer", "claude", "claude-sonnet-5", "--reviewer PROVIDER / --model MODEL (ogre review-plan)"),
     ("executor",      "claude", "claude-sonnet-5", "--executor PROVIDER / --model MODEL (ogre execute)"),
+    ("rescuer",       "claude", "claude-sonnet-5", "--rescuer PROVIDER / --model MODEL (ogre rescue)"),
     ("diff_reviewer", "claude", "claude-sonnet-5", None),
 ]
 

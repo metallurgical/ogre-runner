@@ -20,7 +20,7 @@ Use this source plan:
 
 ## Safety
 
-* Stop if the working tree contains unrelated changes that are not part of the plan.
+* If the working tree already has unrelated changes (not part of this plan) when you start - e.g. the user's own hand-edit or hotfix made alongside this step - do not stop and do not revert/touch them. Leave them as-is, do not attribute them to this step's own work, and mention them briefly in your final report and in this step's `--notes`. Only stop for this if a file looks genuinely alarming (a credential/secret, a half-finished destructive edit) rather than an ordinary incidental edit.
 * Stop if validation fails.
 * Stop if a `NEEDS INSPECTION` item cannot be verified from real code.
 * Stop if blocker dependency is missing or incompatible.

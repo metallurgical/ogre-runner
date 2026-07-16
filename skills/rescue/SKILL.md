@@ -92,8 +92,12 @@ the user hasn't already been through that tradeoff this session.
 - Do not add packages unless the task clearly needs them.
 - Preserve existing project style.
 - Prefer the smallest safe change that fully addresses the task.
-- Stop if validation fails, or if the working tree already had unrelated uncommitted
-  changes before this task started - report instead of quietly mixing them in.
+- Stop if validation fails. An already-dirty working tree at start (e.g. the user's
+  own hand-edit/hotfix alongside this task) is NOT itself a reason to stop - leave
+  those changes as-is, don't attribute them to this task, just mention them briefly
+  in the report. Only stop over it if a file looks genuinely alarming (a
+  credential/secret, a half-finished destructive edit), not for an ordinary
+  incidental change.
 - Stays on whatever branch is currently checked out. Rescue does not create or switch
   git branches on its own - if the user wants this done on a separate branch, they
   branch/stash themselves first.

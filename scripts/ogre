@@ -2496,7 +2496,7 @@ Rules:
 * Do not add packages unless strictly required for this task.
 * Preserve existing project style and conventions.
 * Prefer the smallest safe change that fully addresses the task.
-* Before finishing, run \`git status --porcelain\` yourself and confirm every changed/untracked file actually belongs to this task - stop and report instead of finishing if the working tree already had unrelated changes you didn't make.
+* Before finishing, run \`git status --porcelain\` yourself. If the working tree already had unrelated changes you didn't make (e.g. the user's own hand-edit or hotfix made alongside this task), do NOT stop and do NOT revert/touch them - leave them as-is, don't attribute them to this task's own work, and mention them briefly in your final report. Only stop for this if a file looks genuinely alarming (a credential/secret, a half-finished destructive edit) rather than an ordinary incidental edit.
 * Stop and report if validation fails rather than leaving a broken state.
 ${completion_rule}
 Report back: files changed, reason for each, validation commands run, and their result.
@@ -2753,7 +2753,7 @@ Task:
 
 Safety:
 
-* Stop if the working tree contains unrelated changes that are not part of the plan.
+* If the working tree already has unrelated changes (not part of this plan) when you start - e.g. the user's own hand-edit or hotfix made alongside this chain - do NOT stop and do NOT revert/touch them. Leave them exactly as they are, do not attribute them to this step's own work, and mention them briefly in your final report and in this step's \`--notes\` (e.g. "note: app/config.php also had unrelated changes, left as-is"). Only stop for this if a file looks genuinely alarming rather than an ordinary incidental edit (e.g. a credential/secret dropped in, a half-finished destructive edit) - an ordinary unrelated tweak (copy text, an unrelated config default) is never itself a reason to stop.
 * Stop if a \`NEEDS INSPECTION\` item cannot be verified from real code.
 * Stop if blocker dependency is missing or incompatible.
 EOF2
@@ -2978,7 +2978,7 @@ Task:
 
 Safety:
 
-* Stop if the working tree contains unrelated changes that are not part of the plan.
+* If the working tree already has unrelated changes (not part of this plan) when you start - e.g. the user's own hand-edit or hotfix made alongside this step - do NOT stop and do NOT revert/touch them. Leave them exactly as they are, do not attribute them to this step's own work, and mention them briefly in your final report and in this step's \`--notes\` (e.g. "note: app/config.php also had unrelated changes, left as-is"). Only stop for this if a file looks genuinely alarming rather than an ordinary incidental edit (e.g. a credential/secret dropped in, a half-finished destructive edit) - an ordinary unrelated tweak (copy text, an unrelated config default) is never itself a reason to stop.
 * Stop if validation fails.
 * Stop if a \`NEEDS INSPECTION\` item cannot be verified from real code.
 * Stop if blocker dependency is missing or incompatible.

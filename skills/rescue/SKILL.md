@@ -66,9 +66,24 @@ the user hasn't already been through that tradeoff this session.
 
 ## Behavior
 
-1. Run:
+1. Do not grep/read/inspect the target codebase yourself before this call, even to
+   make the task text more precise. Pass the user's request through as `<task>`
+   near-verbatim (light wording cleanup only, e.g. dropping filler words) - do not
+   pad it with file paths, function/variable names, or implementation details you
+   went and looked up first. Doing that research in this session burns main-session
+   context on work the isolated rescuer subprocess is about to redo anyway once it
+   starts - it defeats the entire point of `ogre rescue`'s isolation (see "Default"
+   above: "keeps main conversation context untouched"). The rescuer (claude/codex) is
+   fully capable of finding the right file and reading it itself, in its own
+   throwaway context, with its own full budget for that discovery - that's what the
+   isolated session is *for*. Only exception: the user's own message already gives
+   you a file path/identifier directly (nothing to look up), or the task is
+   ambiguous enough that you must ask the user a clarifying question before you can
+   even form `<task>` - that's a question back to the user, not research into the
+   repo.
+2. Run:
    - `${CLAUDE_PLUGIN_ROOT}/scripts/ogre rescue "<task>" [flags]`
-2. Without `--main`, this call actually spawns codex/claude in a new isolated session -
+3. Without `--main`, this call actually spawns codex/claude in a new isolated session -
    same as `/ogre:execute`'s isolation model.
    - **No `--background` (default)**: the `ogre rescue` call itself blocks at the shell
      level until the subprocess finishes. Never invoke it as a plain synchronous Bash
@@ -92,15 +107,18 @@ the user hasn't already been through that tradeoff this session.
      The harness delivers a completion notification straight to this session the
      moment that loop exits - read the final `ogre status --task <id>` output and
      report pass/fail then. Never poll across separate assistant turns.
-3. If `--main` was passed: the runner file (`.ai/.ogre/tmp/issue-rescue-<slug>/rescue-runner.md`)
+4. If `--main` was passed: the runner file (`.ai/.ogre/tmp/issue-rescue-<slug>/rescue-runner.md`)
    is written but nothing is spawned - read it and do the task yourself, in this
    session, right now. There is no task id to close out afterward in this mode.
-4. Otherwise, nothing further to execute yourself - the isolated session already did
+5. Otherwise, nothing further to execute yourself - the isolated session already did
    the work and self-reported via `ogre task-complete`.
 
 ## Rules
 
 - One freeform task, one subprocess call - not a chain, not a multi-step plan.
+- Do not pre-research the repo (grep/read files) in this session before calling
+  `ogre rescue` - see Behavior step 1. Pass the task through, let the isolated
+  rescuer do its own discovery.
 - Do not invent files, methods, routes, tables, columns, config keys, or APIs.
 - Do not add unrelated refactors or change behavior outside what was asked.
 - Do not add packages unless the task clearly needs them.

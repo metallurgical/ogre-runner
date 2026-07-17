@@ -41,8 +41,10 @@ Optional flags (same shape as `/ogre:execute`'s):
 
 - rescuer: `claude`
 - isolation: **foreground, brand-new codex/claude session** - keeps main conversation
-  context untouched, same model as `/ogre:execute`'s default. Pass `--main` to do it
-  inline instead, or `--background` to detach.
+  context untouched, same model as `/ogre:execute`'s default. The calling session must
+  wrap this in `run_in_background: true` (see Behavior below) so it doesn't block the
+  conversation while it runs. Pass `--main` to do it inline instead, or `--background`
+  to detach.
 
 Codex rescuers run fully unsandboxed, same as every other codex spawn in this plugin
 (`--dangerously-bypass-approvals-and-sandbox`) - see `/ogre:execute`'s note on this if
@@ -66,11 +68,23 @@ the user hasn't already been through that tradeoff this session.
 
 1. Run:
    - `${CLAUDE_PLUGIN_ROOT}/scripts/ogre rescue "<task>" [flags]`
-2. Without `--main`, this call actually spawns codex/claude in a new isolated session
-   and blocks until it finishes (or, with `--background`, returns immediately having
-   started it detached) - same as `/ogre:execute`'s isolation model. Wait for it to
-   finish; report the printed `Task <id> finished: passed|failed`.
-   - **`--background`**: report the task id, then poll it yourself the same way
+2. Without `--main`, this call actually spawns codex/claude in a new isolated session -
+   same as `/ogre:execute`'s isolation model.
+   - **No `--background` (default)**: the `ogre rescue` call itself blocks at the shell
+     level until the subprocess finishes. Never invoke it as a plain synchronous Bash
+     call - always wrap it in **one single Bash tool call with `run_in_background:
+     true`** around that same command, even though it's a single quick task. This keeps
+     the main conversation free the whole run and surfaces it as a trackable/clickable
+     background job in the harness's own job list instead of hard-blocking the turn.
+     The harness delivers one completion notification straight to this session the
+     moment the command exits - read the printed `Task <id> finished: passed|failed`
+     from that output and report it. Do not poll for this case; the notification
+     itself is the signal.
+   - **`--background`**: the `ogre rescue ... --background` call returns almost
+     immediately after starting the detached subprocess, so it doesn't itself need the
+     `run_in_background: true` wrapper - but you do then need to poll for completion,
+     since ogre self-detaches with nothing left for the harness to hold onto. Report
+     the task id, then poll it yourself the same way
      `/ogre:execute --background`'s skill does - **never spawn an `Agent` (fork or
      otherwise) to supervise this.** One single Bash tool call with
      `run_in_background: true` around a real shell loop, e.g.:

@@ -415,7 +415,7 @@ reap_task() {
     task_update "$tid" "status=failed" "exit_code=$code"
     if [ "$executor" = "codex" ] && [ -z "$session_id" ]; then
       local codex_sid
-      codex_sid="$(grep -m1 '^session id: ' "$codex_logpath" 2>/dev/null | sed 's/^session id: //')"
+      codex_sid="$(grep -m1 '^session id: ' "$codex_logpath" 2>/dev/null | sed 's/^session id: //')" || true
       [ -n "$codex_sid" ] && task_update "$tid" "session_id=$codex_sid"
     fi
     rm -f "$exitfile" "$RUNTIME/tmp/issue-$issue/$tid.pid"
@@ -1774,7 +1774,7 @@ spawn_role_foreground() {
   finalize_role_status "$tid" "$rc" "$expected_output_file"
   if [ "$executor" = "codex" ]; then
     local codex_sid
-    codex_sid="$(grep -m1 '^session id: ' "$logpath" 2>/dev/null | sed 's/^session id: //')"
+    codex_sid="$(grep -m1 '^session id: ' "$logpath" 2>/dev/null | sed 's/^session id: //')" || true
     [ -n "$codex_sid" ] && task_update "$tid" "session_id=$codex_sid"
   fi
   return "$rc"
@@ -1821,7 +1821,7 @@ spawn_role_background() {
     finalize_role_status "$tid" "$rc" "$expected_output_file"
     if [ "$executor" = "codex" ]; then
       local codex_sid
-      codex_sid="$(grep -m1 '^session id: ' "$logpath" 2>/dev/null | sed 's/^session id: //')"
+      codex_sid="$(grep -m1 '^session id: ' "$logpath" 2>/dev/null | sed 's/^session id: //')" || true
       [ -n "$codex_sid" ] && task_update "$tid" "session_id=$codex_sid"
     fi
     echo "$rc" > "$exitfile"
@@ -3070,7 +3070,7 @@ PY
     finalize_link_status "$link_tid" "$rc"
     if [ "$executor" = "codex" ]; then
       local codex_sid
-      codex_sid="$(grep -m1 '^session id: ' "$link_logpath" 2>/dev/null | sed 's/^session id: //')"
+      codex_sid="$(grep -m1 '^session id: ' "$link_logpath" 2>/dev/null | sed 's/^session id: //')" || true
       [ -n "$codex_sid" ] && task_update "$link_tid" "session_id=$codex_sid"
     fi
     return "$rc"
@@ -3097,7 +3097,7 @@ PY
     finalize_link_status "$link_tid" "$rc"
     if [ "$executor" = "codex" ]; then
       local codex_sid
-      codex_sid="$(grep -m1 '^session id: ' "$link_logpath" 2>/dev/null | sed 's/^session id: //')"
+      codex_sid="$(grep -m1 '^session id: ' "$link_logpath" 2>/dev/null | sed 's/^session id: //')" || true
       [ -n "$codex_sid" ] && task_update "$link_tid" "session_id=$codex_sid"
     fi
     return "$rc"

@@ -74,8 +74,8 @@ the user hasn't already been through that tradeoff this session.
      level until the subprocess finishes. Never invoke it as a plain synchronous Bash
      call - always wrap it in **one single Bash tool call with `run_in_background:
      true`** around that same command, even though it's a single quick task. This keeps
-     the main conversation free the whole run and surfaces it as a trackable/clickable
-     background job in the harness's own job list instead of hard-blocking the turn.
+     the main conversation free the whole run and makes it visible in `/tasks` instead
+     of hard-blocking the turn.
      The harness delivers one completion notification straight to this session the
      moment the command exits - read the printed `Task <id> finished: passed|failed`
      from that output and report it. Do not poll for this case; the notification

@@ -207,6 +207,12 @@ actual progress.
   above (`run_in_background: true` for the default/foreground case, or the poll loop for
   `--background`) - Monitor watches the log file, it does not replace waiting for the
   task's own completion signal.
+- **Once that completion signal fires (the backgrounded/polled `ogre rescue` call
+  itself finishes), call `TaskStop` on the Monitor's task id right away.** `tail -f`
+  never exits on its own - rescuer finishing writes no EOF, so the armed Monitor just
+  sits there open in the TUI until its timeout (default 300000ms, up to 3600000ms if
+  `persistent` was set) or until the user manually kills it with `(x)`. Closing it out
+  the moment rescue completes is on you, not the user.
 - **Keep the `description` you pass to `Monitor(...)` short (~40 chars) - truncate
   with `...` if the task name runs longer.** That text is the only part of the
   `Monitor event: "<description>"` notification line under your control - the

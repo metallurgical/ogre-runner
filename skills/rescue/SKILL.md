@@ -114,7 +114,10 @@ the user hasn't already been through that tradeoff this session.
      The harness delivers one completion notification straight to this session the
      moment the command exits - read the printed `Task <id> finished: passed|failed`
      from that output and report it. Do not poll for this case; the notification
-     itself is the signal.
+     itself is the signal. **If `--live` was used and a Monitor is armed on the log
+     path (see "Watching a `--live` rescue live" below), `TaskStop` it right here,
+     before reporting** - `tail -f` never exits on its own, so it stays open in the
+     TUI until timeout or a manual `(x)` if you don't.
    - **`--background`**: the `ogre rescue ... --background` call returns almost
      immediately after starting the detached subprocess, so it doesn't itself need the
      `run_in_background: true` wrapper - but you do then need to poll for completion,
@@ -126,7 +129,11 @@ the user hasn't already been through that tradeoff this session.
      `while :; do ${CLAUDE_PLUGIN_ROOT}/scripts/ogre status --task <id> | grep -qE '^\| Status +\| (passed|failed) ' && break; sleep 15; done`.
      The harness delivers a completion notification straight to this session the
      moment that loop exits - read the final `ogre status --task <id>` output and
-     report pass/fail then. Never poll across separate assistant turns.
+     report pass/fail then. Never poll across separate assistant turns. **If `--live`
+     was used and a Monitor is armed on the log path (see "Watching a `--live`
+     rescue live" below), `TaskStop` it right here, before reporting** - `tail -f`
+     never exits on its own, so it stays open in the TUI until timeout or a manual
+     `(x)` if you don't.
 4. If `--main` was passed: the runner file (`.ai/.ogre/tmp/issue-rescue-<slug>/rescue-runner.md`)
    is written but nothing is spawned - read it and do the task yourself, in this
    session, right now. There is no task id to close out afterward in this mode.

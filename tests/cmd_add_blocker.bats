@@ -45,6 +45,16 @@ print(t['id'])
   [ "$(task_json_field "${tid}" status)" = "passed" ] || return 1
 }
 
+@test "add-blocker --live passes --output-format stream-json to a claude re-planner" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
+  export MOCK_CLAUDE_WRITE_FILE="$(pwd)/.ai/.ogre/plans/issue-42.md"
+  local args_file="${TEST_TMP}/claude-args.log"
+  MOCK_CLAUDE_ARGS_FILE="${args_file}" run "${OGRE_BIN}" add-blocker 42 --statement "new blocker" --live
+  [ "${status}" -eq 0 ] || return 1
+  [ -f "${args_file}" ] || return 1
+  [[ "$(cat "${args_file}")" == *"--output-format stream-json --verbose"* ]] || return 1
+}
+
 @test "add-blocker --main preserves inline behavior and creates no ledger task" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   run "${OGRE_BIN}" add-blocker 42 --statement "new blocker" --main

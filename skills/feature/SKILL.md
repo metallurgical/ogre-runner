@@ -31,6 +31,7 @@ Optional flags:
 - `--browser-check` — opt-in. Without it, the generated plan never tags a step `[BROWSER-CHECK]`, even ones that render/change UI - the user verifies those themselves. Only pass it when the user actually says they want the feature verified in a real browser as part of execution. Don't ask about this on every `/ogre:feature` call; default (no flag) is correct unless the user brings it up.
 - `--main` — run planning inline in this session instead of spawning an isolated subprocess (loses context isolation; only pass when the user explicitly wants that).
 - `--background` — spawn the isolated subprocess detached; returns immediately instead of waiting for the plan to finish.
+- `--live` — opt-in, off by default. Runs the planner with `--json`/`--output-format stream-json --verbose` instead of plain text, writing raw JSONL to the log path. Only use when the user explicitly wants to watch the planner's activity live inside this conversation — see `/ogre:rescue`'s "Watching a `--live` rescue live" section for the Monitor+jq recipe that actually surfaces it (same recipe, against `feature`'s own log path).
 
 ## Behavior
 

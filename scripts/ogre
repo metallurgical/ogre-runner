@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OGRE_VERSION="1.4.37"
+OGRE_VERSION="1.4.38"
 RUNTIME=".ai/.ogre"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -13,27 +13,28 @@ Ogre $OGRE_VERSION
 
 Usage:
   ogre init
-  ogre feature <issue-number|issue-url|issue-file> [--blocks 1,2,url,path] [--plan issue-107.md] [--planner claude|codex] [--model MODEL] [--reasoning LEVEL] [--browser-check] [--main|--background]
-  ogre feature --statement "free text description" [--name my-feature] [--blocks 1,2,url,path] [--plan NAME.md] [--planner claude|codex] [--model MODEL] [--reasoning LEVEL] [--browser-check] [--main|--background]
+  ogre feature <issue-number|issue-url|issue-file> [--blocks 1,2,url,path] [--plan issue-107.md] [--planner claude|codex] [--model MODEL] [--reasoning LEVEL] [--browser-check] [--main|--background] [--live]
+  ogre feature --statement "free text description" [--name my-feature] [--blocks 1,2,url,path] [--plan NAME.md] [--planner claude|codex] [--model MODEL] [--reasoning LEVEL] [--browser-check] [--main|--background] [--live]
                                    (--browser-check: opt-in - the generated plan tags steps needing real browser verification with [BROWSER-CHECK]. Default omits the tag entirely; the user verifies the feature themselves)
                                    (--planner/--model omitted: falls back to defaults.planner in .ai/.ogre/config.json, then claude/claude-sonnet-5)
                                    (default spawns an isolated planner subprocess, same isolation model as ogre execute; --main runs inline in the current session, --background detaches)
-  ogre add-blocker <issue> <blocker-number|url|path> [--planner claude|codex] [--model MODEL] [--reasoning LEVEL] [--force] [--main|--background]
-  ogre add-blocker <issue> --statement "free text blocker" [--name blocker-slug] [--planner claude|codex] [--model MODEL] [--reasoning LEVEL] [--force] [--main|--background]
+  ogre add-blocker <issue> <blocker-number|url|path> [--planner claude|codex] [--model MODEL] [--reasoning LEVEL] [--force] [--main|--background] [--live]
+  ogre add-blocker <issue> --statement "free text blocker" [--name blocker-slug] [--planner claude|codex] [--model MODEL] [--reasoning LEVEL] [--force] [--main|--background] [--live]
                                    (--planner/--model omitted: falls back to whichever planner ogre feature already seeded for this issue)
-  ogre review-plan <issue-or-plan> [--reviewer claude|codex] [--model MODEL] [--reasoning LEVEL] [--main|--background]
+  ogre review-plan <issue-or-plan> [--reviewer claude|codex] [--model MODEL] [--reasoning LEVEL] [--main|--background] [--live]
                                    (--reviewer/--model omitted: falls back to defaults.plan_reviewer in .ai/.ogre/config.json, then claude/claude-sonnet-5)
-  ogre rescue "<freeform task>" [--rescuer claude|codex] [--model MODEL] [--reasoning LEVEL] [--name slug] [--main|--background]
+  ogre rescue "<freeform task>" [--rescuer claude|codex] [--model MODEL] [--reasoning LEVEL] [--name slug] [--main|--background] [--live]
                                    (standalone hotfix/task, no plan or issue involved - e.g. "fix error in login backend". Not tied to any ogre feature job.)
                                    (--rescuer/--model omitted: falls back to defaults.rescuer in .ai/.ogre/config.json, then claude/claude-sonnet-5)
                                    (--name slug: override the auto-derived slug used for its state/log/tmp paths, e.g. rescue-<slug>)
                                    (default spawns an isolated rescuer subprocess, same isolation model as ogre execute; --main runs inline in the current session, --background detaches)
                                    (no job/state file is created - track it via "ogre status --task <id>" / "ogre stop --task <id>" using the task id it prints)
-  ogre execute <issue-or-plan> [--executor codex|claude] [--model MODEL] [--reasoning LEVEL] [--mcp-config PATH] [--all] [--max-steps N] [--fresh|--resume] [--main|--background] [--yes]
+  ogre execute <issue-or-plan> [--executor codex|claude] [--model MODEL] [--reasoning LEVEL] [--mcp-config PATH] [--all] [--max-steps N] [--fresh|--resume] [--main|--background] [--yes] [--live]
                                    (--executor/--model omitted: falls back to defaults.executor in .ai/.ogre/config.json, then claude/claude-sonnet-5)
                                    (--reasoning omitted: uses claude/codex's own default effort level - not forced by Ogre)
                                    (--mcp-config PATH: browser MCP for [BROWSER-CHECK] steps, so they run isolated; also settable as "browser_mcp" in .ai/.ogre/config.json)
                                    (codex steps always run with --dangerously-bypass-approvals-and-sandbox: no filesystem/shell/network confinement, no approval prompts. Ogre is a dev-only tool - see README before pointing it at anything you care about)
+                                   (--live: raw JSONL output (--json/--output-format stream-json) instead of human text, so a driving session can arm Monitor on the log for a live in-TUI feed. Same flag/behavior on feature/add-blocker/review-plan/rescue.)
   ogre execute --job <job-id> [same flags as above]              (same, addressed by job id)
   ogre execute <issue-or-plan> --task <task-id>                  (target one specific seeded step out of order)
   ogre execute <issue-or-plan> --step <n>                        (target step N, 1-based, out of order)
@@ -1749,32 +1750,85 @@ finalize_role_status() {
 # a real subprocess crash (nonzero rc) aborts the caller immediately via
 # `set -e` with that raw exit code; rc==0 lets the caller inspect the
 # ledger's own status afterward instead.
+# extract_codex_session_id <logpath> <json_mode> - codex only reveals its own
+# session/thread id in its own output, never up front like claude's
+# --session-id, so it has to be parsed out after the process runs. Plain-text
+# mode prints a human "session id: <uuid>" line; --json mode never prints
+# that line at all (verified against a real `codex exec --json` run) -
+# instead the id is the `thread_id` field on the `thread.started` JSONL
+# event, so json_mode picks a different parse path entirely rather than a
+# regex tweak on the same line shape.
+extract_codex_session_id() {
+  local logpath="$1" json_mode="$2"
+  if [ "$json_mode" = "yes" ]; then
+    # Last match, not first (`break`) - an `--all --live` chain shares one
+    # continuous log across every link (see live_chain below), so the file
+    # can hold several `thread.started` events by the time a later link
+    # finishes; the first one would always resolve to link 1's stale thread
+    # id instead of the current link's.
+    python3 -c "
+import json, sys
+sid = ''
+for line in open(sys.argv[1], errors='replace'):
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        d = json.loads(line)
+    except ValueError:
+        continue
+    if d.get('type') == 'thread.started':
+        sid = d.get('thread_id', '')
+print(sid)
+" "$logpath" 2>/dev/null
+  else
+    grep -m1 '^session id: ' "$logpath" 2>/dev/null | sed 's/^session id: //'
+  fi
+}
+
 spawn_role_foreground() {
   local tid="$1" runner="$2" logpath="$3" session_id="$4"
   local executor="$5" model="$6" reasoning="$7" mcp_config="$8" expected_output_file="$9"
-  local rc
+  local json_mode="${10:-}"
+  local rc child_pid
   set +e
   case "$executor" in
     codex)
       local -a codex_args=(exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox)
       [ -n "$model" ] && codex_args+=(-m "$model")
       [ -n "$reasoning" ] && codex_args+=(-c "model_reasoning_effort=$reasoning")
-      codex "${codex_args[@]}" - < "$runner" | tee "$logpath"
+      [ "$json_mode" = "yes" ] && codex_args+=(--json)
+      # Process substitution (not a plain `| tee`) so `$!` captures codex's own
+      # pid, not tee's - a foreground spawn previously never recorded any pid
+      # on the ledger at all, so reap_task's existing dead-pid auto-fail (see
+      # its own comment) could never catch a foreground rescuer that died
+      # silently mid-run - status just kept reporting stale "running" forever.
+      codex "${codex_args[@]}" - < "$runner" > >(tee "$logpath") &
       ;;
     claude)
       local -a claude_args=(-p --permission-mode bypassPermissions --session-id "$session_id")
       [ -n "$model" ] && claude_args+=(--model "$model")
       [ -n "$reasoning" ] && claude_args+=(--effort "$reasoning")
       [ -n "$mcp_config" ] && claude_args+=(--mcp-config "$mcp_config")
-      claude "${claude_args[@]}" < "$runner" | tee "$logpath"
+      [ "$json_mode" = "yes" ] && claude_args+=(--output-format stream-json --verbose)
+      claude "${claude_args[@]}" < "$runner" > >(tee "$logpath") &
       ;;
   esac
+  child_pid=$!
+  task_update "$tid" "pid=$child_pid"
+  wait "$child_pid"
   rc=$?
+  # The process-substitution `tee` can still be draining its last buffered
+  # bytes to $logpath after the writer above exits - a bare `wait` catches
+  # any remaining background jobs (just that tee) so callers reading
+  # $logpath right after this returns (extract_codex_session_id below, the
+  # caller's own log tail) see the fully-flushed file, not a truncated one.
+  wait
   set -e
   finalize_role_status "$tid" "$rc" "$expected_output_file"
   if [ "$executor" = "codex" ]; then
     local codex_sid
-    codex_sid="$(grep -m1 '^session id: ' "$logpath" 2>/dev/null | sed 's/^session id: //')" || true
+    codex_sid="$(extract_codex_session_id "$logpath" "$json_mode")" || true
     [ -n "$codex_sid" ] && task_update "$tid" "session_id=$codex_sid"
   fi
   return "$rc"
@@ -1791,6 +1845,7 @@ spawn_role_foreground() {
 spawn_role_background() {
   local tid="$1" issue="$2" logdir="$3" runner="$4" logpath="$5" session_id="$6"
   local executor="$7" model="$8" reasoning="$9" mcp_config="${10}" expected_output_file="${11}"
+  local json_mode="${12:-}"
   task_update "$tid" "status=running"
   local exitfile="$RUNTIME/tmp/issue-$issue/$tid.exit"
   local pidfile="$RUNTIME/tmp/issue-$issue/$tid.pid"
@@ -1807,6 +1862,7 @@ spawn_role_background() {
         local -a codex_args=(exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox)
         [ -n "$model" ] && codex_args+=(-m "$model")
         [ -n "$reasoning" ] && codex_args+=(-c "model_reasoning_effort=$reasoning")
+        [ "$json_mode" = "yes" ] && codex_args+=(--json)
         codex "${codex_args[@]}" - < "$runner" > "$logpath" 2>&1
         ;;
       claude)
@@ -1814,6 +1870,7 @@ spawn_role_background() {
         [ -n "$model" ] && claude_args+=(--model "$model")
         [ -n "$reasoning" ] && claude_args+=(--effort "$reasoning")
         [ -n "$mcp_config" ] && claude_args+=(--mcp-config "$mcp_config")
+        [ "$json_mode" = "yes" ] && claude_args+=(--output-format stream-json --verbose)
         claude "${claude_args[@]}" < "$runner" > "$logpath" 2>&1
         ;;
     esac
@@ -1821,7 +1878,7 @@ spawn_role_background() {
     finalize_role_status "$tid" "$rc" "$expected_output_file"
     if [ "$executor" = "codex" ]; then
       local codex_sid
-      codex_sid="$(grep -m1 '^session id: ' "$logpath" 2>/dev/null | sed 's/^session id: //')" || true
+      codex_sid="$(extract_codex_session_id "$logpath" "$json_mode")" || true
       [ -n "$codex_sid" ] && task_update "$tid" "session_id=$codex_sid"
     fi
     echo "$rc" > "$exitfile"
@@ -1838,7 +1895,7 @@ spawn_role_background() {
 
 cmd_feature() {
   ensure_runtime
-  local current="" plan_name="" planner="" model="" reasoning="" statement="" name="" browser_check="false" iso="new"
+  local current="" plan_name="" planner="" model="" reasoning="" statement="" name="" browser_check="false" iso="new" json_mode=""
   # Blockers are collected as two parallel arrays: block_refs[i] is the
   # blocker reference, block_remarks[i] its (optional) freeform status remark.
   # `--blocks a,b` adds refs with no remark; `--blocker REF --remarks TEXT`
@@ -1872,6 +1929,7 @@ cmd_feature() {
       --browser-check) browser_check="true"; shift ;;
       --main) iso="main"; shift ;;
       --background) iso="background"; shift ;;
+      --live) json_mode="yes"; shift ;;
       *) err "Unknown option: $1"; exit 1 ;;
     esac
   done
@@ -2047,14 +2105,17 @@ EOF2
   [ "$planner" = "claude" ] && session_id="$(gen_uuid)"
   task_create "$tid" "$issue" "plan" "$planner" "$model" "$iso" "fresh" "$runner" "$plan_logpath" "pending" "$reasoning" ""
   [ -n "$session_id" ] && task_update "$tid" "session_id=$session_id"
+  if [ "$json_mode" = "yes" ]; then
+    log "Live mode: planner output is raw JSONL (--json/--output-format stream-json), not human text. Tail it yourself, or have the driving session arm Monitor on it - see skills/rescue/SKILL.md."
+  fi
 
   if [ "$iso" = "background" ]; then
-    spawn_role_background "$tid" "$issue" "$logdir" "$runner" "$plan_logpath" "$session_id" "$planner" "$model" "$reasoning" "" "$plan"
+    spawn_role_background "$tid" "$issue" "$logdir" "$runner" "$plan_logpath" "$session_id" "$planner" "$model" "$reasoning" "" "$plan" "$json_mode"
     return
   fi
 
   task_update "$tid" "status=running"
-  spawn_role_foreground "$tid" "$runner" "$plan_logpath" "$session_id" "$planner" "$model" "$reasoning" "" "$plan"
+  spawn_role_foreground "$tid" "$runner" "$plan_logpath" "$session_id" "$planner" "$model" "$reasoning" "" "$plan" "$json_mode"
   local final_status rc
   final_status="$(task_field "$tid" status)"
   [ "$final_status" = "passed" ] && rc=0 || rc=1
@@ -2076,7 +2137,7 @@ cmd_add_blocker() {
   spath="$(state_path "$issue")"
   [ -f "$spath" ] || { err "No Ogre state found for issue $issue. Run 'ogre feature' first."; exit 1; }
 
-  local blocker="" statement="" name="" force="false" remarks="" planner="" model="" reasoning="" iso="new"
+  local blocker="" statement="" name="" force="false" remarks="" planner="" model="" reasoning="" iso="new" json_mode=""
   if [ $# -gt 0 ] && [[ "$1" != --* ]]; then
     blocker="$1"; shift
   fi
@@ -2091,6 +2152,7 @@ cmd_add_blocker() {
       --reasoning) reasoning="${2:-}"; shift 2 ;;
       --main) iso="main"; shift ;;
       --background) iso="background"; shift ;;
+      --live) json_mode="yes"; shift ;;
       *) err "Unknown option: $1"; exit 1 ;;
     esac
   done
@@ -2293,14 +2355,17 @@ EOF2
   [ "$planner" = "claude" ] && session_id="$(gen_uuid)"
   task_create "$tid" "$issue" "replan" "$planner" "$model" "$iso" "fresh" "$runner" "$replan_logpath" "pending" "$reasoning" ""
   [ -n "$session_id" ] && task_update "$tid" "session_id=$session_id"
+  if [ "$json_mode" = "yes" ]; then
+    log "Live mode: planner output is raw JSONL (--json/--output-format stream-json), not human text. Tail it yourself, or have the driving session arm Monitor on it - see skills/rescue/SKILL.md."
+  fi
 
   if [ "$iso" = "background" ]; then
-    spawn_role_background "$tid" "$issue" "$logdir" "$runner" "$replan_logpath" "$session_id" "$planner" "$model" "$reasoning" "" "$plan"
+    spawn_role_background "$tid" "$issue" "$logdir" "$runner" "$replan_logpath" "$session_id" "$planner" "$model" "$reasoning" "" "$plan" "$json_mode"
     return
   fi
 
   task_update "$tid" "status=running"
-  spawn_role_foreground "$tid" "$runner" "$replan_logpath" "$session_id" "$planner" "$model" "$reasoning" "" "$plan"
+  spawn_role_foreground "$tid" "$runner" "$replan_logpath" "$session_id" "$planner" "$model" "$reasoning" "" "$plan" "$json_mode"
   local final_status rc
   final_status="$(task_field "$tid" status)"
   [ "$final_status" = "passed" ] && rc=0 || rc=1
@@ -2311,7 +2376,7 @@ EOF2
 
 cmd_review_plan() {
   ensure_runtime
-  local target="${1:-}" reviewer="" model="" reasoning="" iso="new"
+  local target="${1:-}" reviewer="" model="" reasoning="" iso="new" json_mode=""
   [ -n "$target" ] || { err "Missing issue or plan path"; usage; exit 1; }
   shift || true
   while [ $# -gt 0 ]; do
@@ -2321,6 +2386,7 @@ cmd_review_plan() {
       --reasoning) reasoning="${2:-}"; shift 2 ;;
       --main) iso="main"; shift ;;
       --background) iso="background"; shift ;;
+      --live) json_mode="yes"; shift ;;
       *) err "Unknown option: $1"; exit 1 ;;
     esac
   done
@@ -2395,14 +2461,17 @@ EOF2
   [ "$reviewer" = "claude" ] && session_id="$(gen_uuid)"
   task_create "$tid" "$issue" "review" "$reviewer" "$model" "$iso" "fresh" "$runner" "$review_logpath" "pending" "$reasoning" ""
   [ -n "$session_id" ] && task_update "$tid" "session_id=$session_id"
+  if [ "$json_mode" = "yes" ]; then
+    log "Live mode: reviewer output is raw JSONL (--json/--output-format stream-json), not human text. Tail it yourself, or have the driving session arm Monitor on it - see skills/rescue/SKILL.md."
+  fi
 
   if [ "$iso" = "background" ]; then
-    spawn_role_background "$tid" "$issue" "$review_logdir" "$runner" "$review_logpath" "$session_id" "$reviewer" "$model" "$reasoning" "" "$review_path"
+    spawn_role_background "$tid" "$issue" "$review_logdir" "$runner" "$review_logpath" "$session_id" "$reviewer" "$model" "$reasoning" "" "$review_path" "$json_mode"
     return
   fi
 
   task_update "$tid" "status=running"
-  spawn_role_foreground "$tid" "$runner" "$review_logpath" "$session_id" "$reviewer" "$model" "$reasoning" "" "$review_path"
+  spawn_role_foreground "$tid" "$runner" "$review_logpath" "$session_id" "$reviewer" "$model" "$reasoning" "" "$review_path" "$json_mode"
   local final_status rc
   final_status="$(task_field "$tid" status)"
   [ "$final_status" = "passed" ] && rc=0 || rc=1
@@ -2427,7 +2496,7 @@ EOF2
 # track by hand.
 cmd_rescue() {
   ensure_runtime
-  local statement="" rescuer="" model="" reasoning="" iso="new" name=""
+  local statement="" rescuer="" model="" reasoning="" iso="new" name="" json_mode=""
   if [ $# -gt 0 ] && [[ ! "$1" =~ ^-- ]]; then
     statement="$1"; shift
   fi
@@ -2440,10 +2509,11 @@ cmd_rescue() {
       --name) name="${2:-}"; shift 2 ;;
       --main) iso="main"; shift ;;
       --background) iso="background"; shift ;;
+      --live) json_mode="yes"; shift ;;
       *) err "Unknown option: $1"; exit 1 ;;
     esac
   done
-  [ -n "$statement" ] || { err "Missing task description. Usage: ogre rescue \"<freeform task>\" [--rescuer claude|codex] [--model MODEL] [--reasoning LEVEL] [--name slug] [--main|--background]"; exit 1; }
+  [ -n "$statement" ] || { err "Missing task description. Usage: ogre rescue \"<freeform task>\" [--rescuer claude|codex] [--model MODEL] [--reasoning LEVEL] [--name slug] [--main|--background] [--live]"; exit 1; }
 
   # --rescuer/--model win if passed; else fall back to defaults.rescuer in
   # .ai/.ogre/config.json - its own role, separate from defaults.executor, so
@@ -2520,15 +2590,19 @@ EOF2
   [ "$rescuer" = "claude" ] && session_id="$(gen_uuid)"
   task_create "$tid" "$issue" "rescue" "$rescuer" "$model" "$iso" "fresh" "$runner" "$logpath" "pending" "$reasoning" ""
   [ -n "$session_id" ] && task_update "$tid" "session_id=$session_id"
+  log "Log path: $logpath"
+  if [ "$json_mode" = "yes" ]; then
+    log "Live mode: rescuer output is raw JSONL (--json/--output-format stream-json), not human text. Tail it yourself, or have the driving session arm Monitor on it - see skills/rescue/SKILL.md."
+  fi
 
   if [ "$iso" = "background" ]; then
-    spawn_role_background "$tid" "$issue" "$logdir" "$runner" "$logpath" "$session_id" "$rescuer" "$model" "$reasoning" "" ""
+    spawn_role_background "$tid" "$issue" "$logdir" "$runner" "$logpath" "$session_id" "$rescuer" "$model" "$reasoning" "" "" "$json_mode"
     log "Check with: $SCRIPT_DIR/ogre status --task $tid"
     return
   fi
 
   task_update "$tid" "status=running"
-  spawn_role_foreground "$tid" "$runner" "$logpath" "$session_id" "$rescuer" "$model" "$reasoning" "" ""
+  spawn_role_foreground "$tid" "$runner" "$logpath" "$session_id" "$rescuer" "$model" "$reasoning" "" "" "$json_mode"
   local final_status rc
   final_status="$(task_field "$tid" status)"
   [ "$final_status" = "passed" ] && rc=0 || rc=1
@@ -2543,7 +2617,7 @@ cmd_execute() {
   #   new        - default: foreground, brand-new codex/claude session, isolated from main context
   #   main       - run inline in the current Claude Code session (no subprocess spawned)
   #   background - same isolation as "new" but detached/non-blocking
-  local target="" executor="" model="" reasoning="" mode="next" freshness="fresh" iso="new" job_id="" task_id="" step_n="" assume_yes="false" max_steps="3" retry="false" mcp_config=""
+  local target="" executor="" model="" reasoning="" mode="next" freshness="fresh" iso="new" job_id="" task_id="" step_n="" assume_yes="false" max_steps="3" retry="false" mcp_config="" json_mode=""
   if [ $# -gt 0 ] && [[ ! "$1" =~ ^-- ]]; then
     target="$1"; shift
   fi
@@ -2566,6 +2640,7 @@ cmd_execute() {
       --main) iso="main"; shift ;;
       --background) iso="background"; shift ;;
       --yes) assume_yes="true"; shift ;;
+      --live) json_mode="yes"; shift ;;
       *) err "Unknown option: $1"; exit 1 ;;
     esac
   done
@@ -3022,12 +3097,37 @@ PY
   if [ "$iso" = "main" ]; then
     log ""
     log "Mode: --main. Execute the target checklist item(s) from the runner file above directly in this session (no subprocess spawned)."
+    # --live is meaningless here: --main never invokes codex/claude through
+    # ogre at all (the driving session does the work inline), so there is no
+    # subprocess to pass --json/--output-format stream-json to and nothing
+    # will ever write JSONL to $logpath. Say so instead of silently no-op'ing
+    # a flag the user explicitly asked for, or (worse) printing the same
+    # "Live mode: ..." notice the subprocess paths below use, which would
+    # falsely imply a live JSONL stream is actually happening.
+    [ "$json_mode" = "yes" ] && log "Note: --live has no effect with --main - no subprocess is spawned, so nothing produces JSONL output. Drop --main to actually get a live JSONL stream."
     log "Alternatively, run it in an isolated session yourself:"
     log "  codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox ${model:+-m $model} ${reasoning:+-c model_reasoning_effort=$reasoning} - < $runner"
     log ""
     log "Task $tid recorded as pending. Check with: $SCRIPT_DIR/ogre status --task $tid"
     log "When the work is done, mark it: $SCRIPT_DIR/ogre task-complete $tid --status passed|failed"
     return
+  fi
+
+  # --live + --all: every hand-off link normally rotates to a brand-new log
+  # file, which means a Monitor armed on link 1's file goes stale the moment
+  # link 2 starts - there's no single stable path to watch for the whole
+  # chain. When both are set, keep every link appending to this SAME
+  # `$logpath` instead (run_link_foreground/run_link_background_body switch
+  # to `tee -a`/`>>` below, and the chain loops skip generating a fresh
+  # chain_logpath per hand-off) - one Monitor arm at launch then covers the
+  # entire chain automatically, no re-targeting needed. Any other combination
+  # keeps today's per-link rotation (plain --all is more readable split up;
+  # plain --live never chains in the first place).
+  local live_chain="no"
+  [ "$json_mode" = "yes" ] && [ "$mode" = "all" ] && live_chain="yes"
+  if [ "$json_mode" = "yes" ]; then
+    log "Live mode: executor output is raw JSONL (--json/--output-format stream-json), not human text. Tail it yourself, or have the driving session arm Monitor on it - see skills/rescue/SKILL.md."
+    [ "$live_chain" = "yes" ] && log "Live + --all: every hand-off link appends to this same log path - arm Monitor on it once, it keeps working across the whole chain with no re-targeting."
   fi
 
   case "$executor" in
@@ -3055,14 +3155,24 @@ PY
         local -a codex_args=(exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox)
         [ -n "$model" ] && codex_args+=(-m "$model")
         [ -n "$reasoning" ] && codex_args+=(-c "model_reasoning_effort=$reasoning")
-        codex "${codex_args[@]}" - < "$link_runner" | tee "$link_logpath"
+        [ "$json_mode" = "yes" ] && codex_args+=(--json)
+        if [ "$live_chain" = "yes" ]; then
+          codex "${codex_args[@]}" - < "$link_runner" | tee -a "$link_logpath"
+        else
+          codex "${codex_args[@]}" - < "$link_runner" | tee "$link_logpath"
+        fi
         ;;
       claude)
         local -a claude_args=(-p --permission-mode bypassPermissions --session-id "$link_session")
         [ -n "$model" ] && claude_args+=(--model "$model")
         [ -n "$reasoning" ] && claude_args+=(--effort "$reasoning")
         [ -n "$mcp_config" ] && claude_args+=(--mcp-config "$mcp_config")
-        claude "${claude_args[@]}" < "$link_runner" | tee "$link_logpath"
+        [ "$json_mode" = "yes" ] && claude_args+=(--output-format stream-json --verbose)
+        if [ "$live_chain" = "yes" ]; then
+          claude "${claude_args[@]}" < "$link_runner" | tee -a "$link_logpath"
+        else
+          claude "${claude_args[@]}" < "$link_runner" | tee "$link_logpath"
+        fi
         ;;
     esac
     rc=$?
@@ -3070,7 +3180,7 @@ PY
     finalize_link_status "$link_tid" "$rc"
     if [ "$executor" = "codex" ]; then
       local codex_sid
-      codex_sid="$(grep -m1 '^session id: ' "$link_logpath" 2>/dev/null | sed 's/^session id: //')" || true
+      codex_sid="$(extract_codex_session_id "$link_logpath" "$json_mode")" || true
       [ -n "$codex_sid" ] && task_update "$link_tid" "session_id=$codex_sid"
     fi
     return "$rc"
@@ -3083,21 +3193,31 @@ PY
         local -a codex_args=(exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox)
         [ -n "$model" ] && codex_args+=(-m "$model")
         [ -n "$reasoning" ] && codex_args+=(-c "model_reasoning_effort=$reasoning")
-        codex "${codex_args[@]}" - < "$link_runner" > "$link_logpath" 2>&1
+        [ "$json_mode" = "yes" ] && codex_args+=(--json)
+        if [ "$live_chain" = "yes" ]; then
+          codex "${codex_args[@]}" - < "$link_runner" >> "$link_logpath" 2>&1
+        else
+          codex "${codex_args[@]}" - < "$link_runner" > "$link_logpath" 2>&1
+        fi
         ;;
       claude)
         local -a claude_args=(-p --permission-mode bypassPermissions --session-id "$link_session")
         [ -n "$model" ] && claude_args+=(--model "$model")
         [ -n "$reasoning" ] && claude_args+=(--effort "$reasoning")
         [ -n "$mcp_config" ] && claude_args+=(--mcp-config "$mcp_config")
-        claude "${claude_args[@]}" < "$link_runner" > "$link_logpath" 2>&1
+        [ "$json_mode" = "yes" ] && claude_args+=(--output-format stream-json --verbose)
+        if [ "$live_chain" = "yes" ]; then
+          claude "${claude_args[@]}" < "$link_runner" >> "$link_logpath" 2>&1
+        else
+          claude "${claude_args[@]}" < "$link_runner" > "$link_logpath" 2>&1
+        fi
         ;;
     esac
     local rc=$?
     finalize_link_status "$link_tid" "$rc"
     if [ "$executor" = "codex" ]; then
       local codex_sid
-      codex_sid="$(grep -m1 '^session id: ' "$link_logpath" 2>/dev/null | sed 's/^session id: //')" || true
+      codex_sid="$(extract_codex_session_id "$link_logpath" "$json_mode")" || true
       [ -n "$codex_sid" ] && task_update "$link_tid" "session_id=$codex_sid"
     fi
     return "$rc"
@@ -3426,7 +3546,12 @@ PY
           break
         fi
         chain_tid="$(new_task_id)"
-        chain_logpath="$logdir/execute-$(date '+%Y%m%d-%H%M%S')-${chain_tid:5:8}.log"
+        # live_chain: keep the SAME chain_logpath across every hand-off
+        # instead of rotating to a fresh file - see the live_chain comment
+        # near "Log path:" above. run_link_background_body already appends
+        # (>>) rather than truncates in this mode, so reusing the path here
+        # is what makes that append meaningful.
+        [ "$live_chain" = "yes" ] || chain_logpath="$logdir/execute-$(date '+%Y%m%d-%H%M%S')-${chain_tid:5:8}.log"
         write_all_runner "$chain_tid" "$chain_logpath"
         task_create "$chain_tid" "$issue" "execute" "$executor" "$model" "$mode" "$freshness" "$runner" "$chain_logpath" "running" "$reasoning" "$mcp_config"
         task_update "$chain_tid" "pid=$driver_pid"
@@ -3475,7 +3600,10 @@ PY
       log "Task $chain_tid passed and stopped early on its own context budget; steps remain - spawning a fresh session to continue."
     fi
     chain_tid="$(new_task_id)"
-    chain_logpath="$logdir/execute-$(date '+%Y%m%d-%H%M%S')-${chain_tid:5:8}.log"
+    # live_chain: see the comment on the background loop's identical check -
+    # keep the same log path across hand-offs so a Monitor arm from launch
+    # keeps working for the whole chain instead of going stale per link.
+    [ "$live_chain" = "yes" ] || chain_logpath="$logdir/execute-$(date '+%Y%m%d-%H%M%S')-${chain_tid:5:8}.log"
     write_all_runner "$chain_tid" "$chain_logpath"
     task_create "$chain_tid" "$issue" "execute" "$executor" "$model" "$mode" "$freshness" "$runner" "$chain_logpath" "running" "$reasoning" "$mcp_config"
     if [ "$executor" = "claude" ]; then

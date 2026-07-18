@@ -111,6 +111,16 @@ json.dump(d, open('.ai/.ogre/config.json', 'w'))
   [ "$(task_json_field "${tid}" status)" = "pending" ] || return 1
 }
 
+@test "execute --main --live warns --live has no effect instead of falsely claiming a live JSONL stream" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
+  write_plan_with_steps 42 "First step"
+  run "${OGRE_BIN}" execute 42 --main --live
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" == *"Mode: --main."* ]] || return 1
+  [[ "${output}" == *"--live has no effect with --main"* ]] || return 1
+  [[ "${output}" != *"Live mode: executor output is raw JSONL"* ]] || return 1
+}
+
 @test "execute foreground default (claude) runs the lowest pending step and marks it passed" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step" "Second step"
@@ -220,6 +230,201 @@ print(t['id'])
   [ -f "${args_file}" ] || return 1
   [[ "$(cat "${args_file}")" == *"--dangerously-bypass-approvals-and-sandbox"* ]] || return 1
   [[ "$(cat "${args_file}")" != *"--sandbox workspace-write"* ]] || return 1
+}
+
+@test "execute --live passes --json to a codex executor" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
+  write_plan_with_steps 42 "Only step"
+  local args_file="${TEST_TMP}/codex-args.log"
+  MOCK_CODEX_ARGS_FILE="${args_file}" run "${OGRE_BIN}" execute 42 --executor codex --live
+  [ "${status}" -eq 0 ] || return 1
+  [ -f "${args_file}" ] || return 1
+  [[ "$(cat "${args_file}")" == *" --json"* ]] || return 1
+}
+
+@test "execute --live extracts the codex session id from the thread.started JSONL event, not a grep on plain text" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
+  write_plan_with_steps 42 "Only step"
+  run "${OGRE_BIN}" execute 42 --executor codex --live
+  [ "${status}" -eq 0 ] || return 1
+  local tid
+  tid="$(python3 -c "
+import json
+tasks = json.load(open('.ai/.ogre/state/tasks.json'))
+t = next(t for t in tasks if t.get('step_index') == 1)
+print(t['id'])
+")"
+  [ "$(task_json_field "${tid}" session_id)" = "mock-codex-thread-1234" ] || return 1
+}
+
+@test "execute --all --live keeps every hand-off link on the same log path and appends instead of truncating" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
+  write_plan_with_steps 42 "First step" "Second step"
+  export MOCK_CLAUDE_TICK_PLAN="$(pwd)/.ai/.ogre/plans/issue-42.md"
+  run "${OGRE_BIN}" execute 42 --all --live
+  [ "${status}" -eq 0 ] || return 1
+  local link1_tid link2_tid link1_log link2_log
+  link1_tid="$(python3 -c "
+import json
+tasks = json.load(open('.ai/.ogre/state/tasks.json'))
+rows = [t for t in tasks if t.get('mode') == 'all']
+print(rows[0]['id'])
+")"
+  link2_tid="$(python3 -c "
+import json
+tasks = json.load(open('.ai/.ogre/state/tasks.json'))
+rows = [t for t in tasks if t.get('mode') == 'all']
+print(rows[-1]['id'])
+")"
+  [ "${link1_tid}" != "${link2_tid}" ] || return 1
+  link1_log="$(task_json_field "${link1_tid}" log_path)"
+  link2_log="$(task_json_field "${link2_tid}" log_path)"
+  [ -n "${link1_log}" ] || return 1
+  [ "${link1_log}" = "${link2_log}" ] || return 1
+  [ "$(grep -c 'Mock claude -p output' "${link2_log}")" = "2" ] || return 1
+}
+
+@test "execute --all --background --live also keeps every hand-off link on the same log path" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
+  write_plan_with_steps 42 "First step" "Second step"
+  export MOCK_CLAUDE_TICK_PLAN="$(pwd)/.ai/.ogre/plans/issue-42.md"
+  run "${OGRE_BIN}" execute 42 --all --background --live
+  [ "${status}" -eq 0 ] || return 1
+  # Poll until BOTH links exist, not just until the first one passes - a
+  # bare wait on link 1's own status races the driver's own hand-off to
+  # link 2 (it creates link 2 immediately after marking link 1 passed, but
+  # that's not instant), so a one-shot read right after link 1 passes can
+  # still see only 1 row.
+  local first_tid="" last_tid=""
+  for _ in $(seq 1 50); do
+    first_tid="$(python3 -c "
+import json
+tasks = json.load(open('.ai/.ogre/state/tasks.json'))
+rows = [t for t in tasks if t.get('mode') == 'all']
+print(rows[0]['id'] if len(rows) >= 2 else '')
+")"
+    last_tid="$(python3 -c "
+import json
+tasks = json.load(open('.ai/.ogre/state/tasks.json'))
+rows = [t for t in tasks if t.get('mode') == 'all']
+print(rows[-1]['id'] if len(rows) >= 2 else '')
+")"
+    [ -n "${last_tid}" ] && break
+    sleep 0.2
+  done
+  [ -n "${first_tid}" ] || return 1
+  [ -n "${last_tid}" ] || return 1
+  [ "${first_tid}" != "${last_tid}" ] || return 1
+  wait_for_task_status "${last_tid}" passed 30 || return 1
+  local first_log last_log
+  first_log="$(task_json_field "${first_tid}" log_path)"
+  last_log="$(task_json_field "${last_tid}" log_path)"
+  [ -n "${first_log}" ] || return 1
+  [ "${first_log}" = "${last_log}" ] || return 1
+  [ "$(grep -c 'Mock claude -p output' "${last_log}")" = "2" ] || return 1
+}
+
+@test "execute --all --live extracts the CURRENT link's codex session id, not a stale earlier one" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
+  write_plan_with_steps 42 "First step" "Second step"
+
+  local call_counter="${TEST_TMP}/codex-calls"
+  local plan_path="$(pwd)/.ai/.ogre/plans/issue-42.md"
+  local stub_bin="${TEST_TMP}/stub-bin"
+  mkdir -p "${stub_bin}"
+  cat > "${stub_bin}/codex" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+[ "\${1:-}" = "mcp" ] && { echo "playwright  npx  @playwright/mcp@latest  enabled"; exit 0; }
+n=0
+[ -f "${call_counter}" ] && n="\$(cat "${call_counter}")"
+n=\$((n + 1))
+echo "\$n" > "${call_counter}"
+runner="\$(cat)"
+tid="\$(printf '%s\n' "\$runner" | sed -n 's/.*Task id: \`\(task-[^\`]*\)\`.*/\1/p' | head -n1)"
+# Stand in for a real executor actually ticking the checklist item it just
+# did - without this, sync_state_from_plan never sees a step as done and
+# the chain loops until its 200-iteration safety cap instead of stopping.
+python3 -c "
+import re
+path = '${plan_path}'
+text = open(path).read()
+new_text, n = re.subn(r'- \[ \]', '- [x]', text, count=1)
+if n:
+    open(path, 'w').write(new_text)
+"
+echo "{\"type\":\"thread.started\",\"thread_id\":\"thread-link-\$n\"}"
+if [ -n "\$tid" ]; then
+  "${OGRE_BIN}" task-complete "\$tid" --status passed
+fi
+exit 0
+EOF
+  chmod +x "${stub_bin}/codex"
+  export PATH="${stub_bin}:${PATH}"
+
+  run "${OGRE_BIN}" execute 42 --executor codex --all --live
+  [ "${status}" -eq 0 ] || return 1
+  local link2_tid
+  link2_tid="$(python3 -c "
+import json
+tasks = json.load(open('.ai/.ogre/state/tasks.json'))
+rows = [t for t in tasks if t.get('mode') == 'all']
+print(rows[-1]['id'])
+")"
+  [ "$(task_json_field "${link2_tid}" session_id)" = "thread-link-2" ] || return 1
+}
+
+@test "execute --all without --live still rotates to a fresh log file per hand-off link" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
+  write_plan_with_steps 42 "First step" "Second step"
+  export MOCK_CLAUDE_TICK_PLAN="$(pwd)/.ai/.ogre/plans/issue-42.md"
+  run "${OGRE_BIN}" execute 42 --all
+  [ "${status}" -eq 0 ] || return 1
+  local link1_tid link2_tid link1_log link2_log
+  link1_tid="$(python3 -c "
+import json
+tasks = json.load(open('.ai/.ogre/state/tasks.json'))
+rows = [t for t in tasks if t.get('mode') == 'all']
+print(rows[0]['id'])
+")"
+  link2_tid="$(python3 -c "
+import json
+tasks = json.load(open('.ai/.ogre/state/tasks.json'))
+rows = [t for t in tasks if t.get('mode') == 'all']
+print(rows[-1]['id'])
+")"
+  link1_log="$(task_json_field "${link1_tid}" log_path)"
+  link2_log="$(task_json_field "${link2_tid}" log_path)"
+  [ -n "${link1_log}" ] || return 1
+  [ "${link1_log}" != "${link2_log}" ] || return 1
+}
+
+@test "execute --background --live passes --json to a detached codex executor" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
+  write_plan_with_steps 42 "Only step"
+  local args_file="${TEST_TMP}/codex-args.log"
+  MOCK_CODEX_ARGS_FILE="${args_file}" run "${OGRE_BIN}" execute 42 --executor codex --background --live
+  [ "${status}" -eq 0 ] || return 1
+  local tid
+  tid="$(python3 -c "
+import json
+tasks = json.load(open('.ai/.ogre/state/tasks.json'))
+t = next(t for t in tasks if t.get('step_index') == 1)
+print(t['id'])
+")"
+  wait_for_task_status "${tid}" passed 10 || return 1
+  [ -f "${args_file}" ] || return 1
+  [[ "$(cat "${args_file}")" == *" --json"* ]] || return 1
+}
+
+@test "execute without --live never passes --json/stream-json (default behavior unchanged)" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
+  write_plan_with_steps 42 "Only step"
+  local args_file="${TEST_TMP}/claude-args.log"
+  MOCK_CLAUDE_ARGS_FILE="${args_file}" run "${OGRE_BIN}" execute 42
+  [ "${status}" -eq 0 ] || return 1
+  [ -f "${args_file}" ] || return 1
+  [[ "$(cat "${args_file}")" != *"stream-json"* ]] || return 1
 }
 
 @test "execute --reasoning passes --effort to claude" {

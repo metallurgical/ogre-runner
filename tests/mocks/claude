@@ -19,6 +19,17 @@
 #                                         actually producing its output file
 #                                         (plan/review path), which this mock
 #                                         otherwise never touches.
+#   MOCK_CLAUDE_TICK_PLAN                - if set to a plan file path, ticks
+#                                         the first unchecked "- [ ]" line to
+#                                         "- [x]" before task-complete - stands
+#                                         in for a real `--all` executor that
+#                                         actually edits the plan's checklist
+#                                         as it completes each item. Without
+#                                         this, `sync_state_from_plan` never
+#                                         sees a step as done and an `--all`
+#                                         chain against this mock loops until
+#                                         its 200-iteration safety cap instead
+#                                         of stopping when steps run out.
 set -euo pipefail
 [ -n "${MOCK_CLAUDE_ARGS_FILE:-}" ] && printf '%s\n' "$*" >> "${MOCK_CLAUDE_ARGS_FILE}"
 runner="$(cat)" # capture stdin (the runner file) instead of draining it
@@ -26,6 +37,16 @@ tid="$(printf '%s\n' "$runner" | sed -n 's/.*Task id: `\(task-[^`]*\)`.*/\1/p' |
 if [ -n "${MOCK_CLAUDE_WRITE_FILE:-}" ]; then
   mkdir -p "$(dirname "${MOCK_CLAUDE_WRITE_FILE}")"
   echo "# Mock output" > "${MOCK_CLAUDE_WRITE_FILE}"
+fi
+if [ -n "${MOCK_CLAUDE_TICK_PLAN:-}" ]; then
+  python3 -c "
+import re, sys
+path = sys.argv[1]
+text = open(path).read()
+new_text, n = re.subn(r'- \[ \]', '- [x]', text, count=1)
+if n:
+    open(path, 'w').write(new_text)
+" "${MOCK_CLAUDE_TICK_PLAN}"
 fi
 echo "Mock claude -p output"
 if [ "${MOCK_CLAUDE_EXIT:-0}" = "0" ] && [ -z "${MOCK_CLAUDE_SKIP_COMPLETE:-}" ] && [ -n "${tid}" ]; then

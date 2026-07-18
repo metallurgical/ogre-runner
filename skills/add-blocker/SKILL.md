@@ -20,6 +20,7 @@ Use this skill when the user wants to add a blocker to an issue Ogre is already 
 - Optional `--planner claude|codex`, `--model MODEL`, `--reasoning LEVEL` — defaults to whichever planner `/ogre:feature` already seeded for this issue if omitted.
 - `--main` — revise the plan inline in this session instead of spawning an isolated subprocess (loses context isolation; only pass when the user explicitly wants that).
 - `--background` — spawn the isolated subprocess detached; returns immediately instead of waiting for the revision to finish.
+- `--live` — opt-in, off by default. Runs the re-planner with `--json`/`--output-format stream-json --verbose` instead of plain text, writing raw JSONL to the log path. Only use when the user explicitly wants to watch the revision happen live — see `/ogre:rescue`'s "Watching a `--live` rescue live" section for the Monitor+jq recipe (same recipe, against `add-blocker`'s own log path).
 
 ## Behavior
 

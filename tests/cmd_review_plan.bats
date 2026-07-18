@@ -44,6 +44,16 @@ print(t['id'])
   [ "$(task_json_field "${tid}" status)" = "passed" ] || return 1
 }
 
+@test "review-plan --live passes --output-format stream-json to a claude reviewer" {
+  write_plan_with_steps 42 "Do the thing"
+  export MOCK_CLAUDE_WRITE_FILE="$(pwd)/.ai/.ogre/reviews/issue-42/plan-review.md"
+  local args_file="${TEST_TMP}/claude-args.log"
+  MOCK_CLAUDE_ARGS_FILE="${args_file}" run "${OGRE_BIN}" review-plan 42 --live
+  [ "${status}" -eq 0 ] || return 1
+  [ -f "${args_file}" ] || return 1
+  [[ "$(cat "${args_file}")" == *"--output-format stream-json --verbose"* ]] || return 1
+}
+
 @test "review-plan --main preserves inline behavior and creates no ledger task" {
   write_plan_with_steps 42 "Do the thing"
   run "${OGRE_BIN}" review-plan 42 --main

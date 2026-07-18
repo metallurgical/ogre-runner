@@ -22,6 +22,23 @@
 #                                        actually producing its output file
 #                                        (plan/review path), which this mock
 #                                        otherwise never touches.
+#   MOCK_CODEX_HANG=1                  - after printing output, sleep instead
+#                                        of calling task-complete/exiting -
+#                                        simulates a subprocess that's still
+#                                        alive and mid-run (or, combined with
+#                                        a test killing this pid, one that
+#                                        died silently without self-reporting).
+#   MOCK_CODEX_TICK_PLAN                - if set to a plan file path, ticks
+#                                        the first unchecked "- [ ]" line to
+#                                        "- [x]" before task-complete - stands
+#                                        in for a real `--all` executor that
+#                                        actually edits the plan's checklist
+#                                        as it completes each item. Without
+#                                        this, `sync_state_from_plan` never
+#                                        sees a step as done and an `--all`
+#                                        chain against this mock loops until
+#                                        its 200-iteration safety cap instead
+#                                        of stopping when steps run out.
 set -euo pipefail
 [ -n "${MOCK_CODEX_ARGS_FILE:-}" ] && printf '%s\n' "$*" >> "${MOCK_CODEX_ARGS_FILE}"
 # `codex mcp list` - the browser-MCP detector for [BROWSER-CHECK] isolation.
@@ -36,8 +53,31 @@ if [ -n "${MOCK_CODEX_WRITE_FILE:-}" ]; then
   mkdir -p "$(dirname "${MOCK_CODEX_WRITE_FILE}")"
   echo "# Mock output" > "${MOCK_CODEX_WRITE_FILE}"
 fi
-echo "session id: mock-codex-session-1234"
-echo "Mock codex exec output"
+if [ -n "${MOCK_CODEX_TICK_PLAN:-}" ]; then
+  python3 -c "
+import re, sys
+path = sys.argv[1]
+text = open(path).read()
+new_text, n = re.subn(r'- \[ \]', '- [x]', text, count=1)
+if n:
+    open(path, 'w').write(new_text)
+" "${MOCK_CODEX_TICK_PLAN}"
+fi
+# --json mode: real `codex exec --json` never prints the human "session id: "
+# line, only a `thread.started` JSONL event carrying `thread_id` - mirror
+# that here so callers exercising --json get realistic output to parse.
+if [[ " $* " == *" --json "* ]]; then
+  echo '{"type":"thread.started","thread_id":"mock-codex-thread-1234"}'
+  echo '{"type":"turn.started"}'
+  echo '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"Mock codex exec output"}}'
+  echo '{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1,"reasoning_output_tokens":0}}'
+else
+  echo "session id: mock-codex-session-1234"
+  echo "Mock codex exec output"
+fi
+if [ -n "${MOCK_CODEX_HANG:-}" ]; then
+  exec sleep 3600
+fi
 if [ "${MOCK_CODEX_EXIT:-0}" = "0" ] && [ -z "${MOCK_CODEX_SKIP_COMPLETE:-}" ] && [ -n "${tid}" ]; then
   "${OGRE_BIN}" task-complete "${tid}" --status "${MOCK_CODEX_STATUS:-passed}"
 fi

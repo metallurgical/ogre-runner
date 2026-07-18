@@ -22,6 +22,7 @@ Optional flags:
 - `--reasoning LEVEL` (reasoning effort for the reviewer; omit to use the CLI's own default)
 - `--main` — run the review inline in this session instead of spawning an isolated subprocess (loses context isolation; only pass when the user explicitly wants that).
 - `--background` — spawn the isolated subprocess detached; returns immediately instead of waiting for the review to finish.
+- `--live` — opt-in, off by default. Runs the reviewer with `--json`/`--output-format stream-json --verbose` instead of plain text, writing raw JSONL to the log path. Only use when the user explicitly wants to watch the review happen live — see `/ogre:rescue`'s "Watching a `--live` rescue live" section for the Monitor+jq recipe (same recipe, against `review-plan`'s own log path).
 
 ## Behavior
 

@@ -42,6 +42,24 @@ print(t['id'])
   [ -f ".ai/.ogre/plans/issue-42.md" ] || return 1
 }
 
+@test "feature --live passes --output-format stream-json to a claude planner" {
+  export MOCK_CLAUDE_WRITE_FILE="$(pwd)/.ai/.ogre/plans/issue-42.md"
+  local args_file="${TEST_TMP}/claude-args.log"
+  MOCK_CLAUDE_ARGS_FILE="${args_file}" run "${OGRE_BIN}" feature --statement "base feature" --name 42 --live
+  [ "${status}" -eq 0 ] || return 1
+  [ -f "${args_file}" ] || return 1
+  [[ "$(cat "${args_file}")" == *"--output-format stream-json --verbose"* ]] || return 1
+}
+
+@test "feature without --live never passes stream-json (default behavior unchanged)" {
+  export MOCK_CLAUDE_WRITE_FILE="$(pwd)/.ai/.ogre/plans/issue-42.md"
+  local args_file="${TEST_TMP}/claude-args.log"
+  MOCK_CLAUDE_ARGS_FILE="${args_file}" run "${OGRE_BIN}" feature --statement "base feature" --name 42
+  [ "${status}" -eq 0 ] || return 1
+  [ -f "${args_file}" ] || return 1
+  [[ "$(cat "${args_file}")" != *"stream-json"* ]] || return 1
+}
+
 @test "feature --main preserves today's inline behavior and creates no ledger task" {
   run "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   [ "${status}" -eq 0 ] || return 1

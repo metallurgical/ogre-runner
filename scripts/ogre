@@ -23,10 +23,11 @@ Usage:
                                    (--planner/--model omitted: falls back to whichever planner ogre feature already seeded for this issue)
   ogre review-plan <issue-or-plan> [--reviewer claude|codex] [--model MODEL] [--reasoning LEVEL] [--main|--background] [--live]
                                    (--reviewer/--model omitted: falls back to defaults.plan_reviewer in .ai/.ogre/config.json, then claude/claude-sonnet-5)
-  ogre rescue "<freeform task>" [--rescuer claude|codex] [--model MODEL] [--reasoning LEVEL] [--name slug] [--main|--background] [--live]
+  ogre rescue "<freeform task>" [--rescuer claude|codex] [--model MODEL] [--reasoning LEVEL] [--name slug] [--mcp-config PATH] [--main|--background] [--live]
                                    (standalone hotfix/task, no plan or issue involved - e.g. "fix error in login backend". Not tied to any ogre feature job.)
                                    (--rescuer/--model omitted: falls back to defaults.rescuer in .ai/.ogre/config.json, then claude/claude-sonnet-5)
                                    (--name slug: override the auto-derived slug used for its state/log/tmp paths, e.g. rescue-<slug>)
+                                   (--mcp-config PATH: browser MCP for the rescue task, e.g. to drive Playwright for a live browser check; also settable as "browser_mcp" in .ai/.ogre/config.json. Same wiring as ogre execute's [BROWSER-CHECK] steps)
                                    (default spawns an isolated rescuer subprocess, same isolation model as ogre execute; --main runs inline in the current session, --background detaches)
                                    (no job/state file is created - track it via "ogre status --task <id>" / "ogre stop --task <id>" using the task id it prints)
   ogre execute <issue-or-plan> [--executor codex|claude] [--model MODEL] [--reasoning LEVEL] [--mcp-config PATH] [--all] [--max-steps N] [--fresh|--resume] [--main|--background] [--yes] [--live]
@@ -2496,7 +2497,7 @@ EOF2
 # track by hand.
 cmd_rescue() {
   ensure_runtime
-  local statement="" rescuer="" model="" reasoning="" iso="new" name="" json_mode=""
+  local statement="" rescuer="" model="" reasoning="" iso="new" name="" json_mode="" mcp_config=""
   if [ $# -gt 0 ] && [[ ! "$1" =~ ^-- ]]; then
     statement="$1"; shift
   fi
@@ -2507,13 +2508,14 @@ cmd_rescue() {
       --model) model="${2:-}"; shift 2 ;;
       --reasoning) reasoning="${2:-}"; shift 2 ;;
       --name) name="${2:-}"; shift 2 ;;
+      --mcp-config) mcp_config="${2:-}"; shift 2 ;;
       --main) iso="main"; shift ;;
       --background) iso="background"; shift ;;
       --live) json_mode="yes"; shift ;;
       *) err "Unknown option: $1"; exit 1 ;;
     esac
   done
-  [ -n "$statement" ] || { err "Missing task description. Usage: ogre rescue \"<freeform task>\" [--rescuer claude|codex] [--model MODEL] [--reasoning LEVEL] [--name slug] [--main|--background] [--live]"; exit 1; }
+  [ -n "$statement" ] || { err "Missing task description. Usage: ogre rescue \"<freeform task>\" [--rescuer claude|codex] [--model MODEL] [--reasoning LEVEL] [--name slug] [--mcp-config PATH] [--main|--background] [--live]"; exit 1; }
 
   # --rescuer/--model win if passed; else fall back to defaults.rescuer in
   # .ai/.ogre/config.json - its own role, separate from defaults.executor, so
@@ -2532,6 +2534,21 @@ cmd_rescue() {
       codex) model="gpt-5.6-sol" ;;
       *) model="claude-sonnet-5" ;;
     esac
+  fi
+
+  # Browser MCP, same resolution/wiring as ogre execute's [BROWSER-CHECK]
+  # steps: --mcp-config flag wins, else the optional browser_mcp field in
+  # .ai/.ogre/config.json. Passed to a spawned `claude` rescuer via
+  # --mcp-config; `claude -p` also inherits ambient project/user MCP servers
+  # regardless, so an already-configured browser MCP works with no flag at
+  # all. codex relies on its own ~/.codex/config.toml mcp_servers instead -
+  # this flag/field does not apply to it - but codex's rescue spawn already
+  # runs fully unsandboxed, so it can reach a real browser via its own
+  # external Playwright MCP server without any extra wiring here.
+  [ -n "$mcp_config" ] || mcp_config="$(config_browser_mcp)"
+  local browser_force_note=""
+  if [ "$rescuer" = "codex" ]; then
+    browser_force_note="Browser tools (if this task needs live browser verification): use ONLY the external \"playwright\" MCP server tools (browser_navigate, browser_snapshot, etc.) directly. Do NOT use node_repl, the in-app browser, agent.browsers, or browser-client - those require the Codex desktop app and have no session in this headless spawn, so they will fail."
   fi
 
   local slug
@@ -2571,6 +2588,7 @@ Rules:
 * Do not add packages unless strictly required for this task.
 * Preserve existing project style and conventions.
 * Prefer the smallest safe change that fully addresses the task.
+* If this task needs live browser verification (e.g. checking a UI fix actually renders/works), use your browser MCP tools (e.g. Playwright) to actually drive and observe it - not just reading markup/CSS/JS. ${browser_force_note:+$browser_force_note }If no browser MCP is available in this session, say so in your report instead of skipping the check silently.
 * Before finishing, run \`git status --porcelain\` yourself. If the working tree already had unrelated changes you didn't make (e.g. the user's own hand-edit or hotfix made alongside this task), do NOT stop and do NOT revert/touch them - leave them as-is, don't attribute them to this task's own work, and mention them briefly in your final report. Only stop for this if a file looks genuinely alarming (a credential/secret, a half-finished destructive edit) rather than an ordinary incidental edit.
 * Stop and report if validation fails rather than leaving a broken state.
 ${completion_rule}
@@ -2588,7 +2606,7 @@ EOF2
   local logpath session_id=""
   logpath="$logdir/rescue-$(date '+%Y%m%d-%H%M%S')-${tid:5:8}.log"
   [ "$rescuer" = "claude" ] && session_id="$(gen_uuid)"
-  task_create "$tid" "$issue" "rescue" "$rescuer" "$model" "$iso" "fresh" "$runner" "$logpath" "pending" "$reasoning" ""
+  task_create "$tid" "$issue" "rescue" "$rescuer" "$model" "$iso" "fresh" "$runner" "$logpath" "pending" "$reasoning" "$mcp_config"
   [ -n "$session_id" ] && task_update "$tid" "session_id=$session_id"
   log "Log path: $logpath"
   if [ "$json_mode" = "yes" ]; then
@@ -2596,13 +2614,13 @@ EOF2
   fi
 
   if [ "$iso" = "background" ]; then
-    spawn_role_background "$tid" "$issue" "$logdir" "$runner" "$logpath" "$session_id" "$rescuer" "$model" "$reasoning" "" "" "$json_mode"
+    spawn_role_background "$tid" "$issue" "$logdir" "$runner" "$logpath" "$session_id" "$rescuer" "$model" "$reasoning" "$mcp_config" "" "$json_mode"
     log "Check with: $SCRIPT_DIR/ogre status --task $tid"
     return
   fi
 
   task_update "$tid" "status=running"
-  spawn_role_foreground "$tid" "$runner" "$logpath" "$session_id" "$rescuer" "$model" "$reasoning" "" "" "$json_mode"
+  spawn_role_foreground "$tid" "$runner" "$logpath" "$session_id" "$rescuer" "$model" "$reasoning" "$mcp_config" "" "$json_mode"
   local final_status rc
   final_status="$(task_field "$tid" status)"
   [ "$final_status" = "passed" ] && rc=0 || rc=1

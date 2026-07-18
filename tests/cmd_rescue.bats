@@ -249,6 +249,75 @@ print(rescues[0]['id'] if rescues else '')
   [ "$(task_json_field "${tid}" status)" = "failed" ] || return 1
 }
 
+@test "rescue --mcp-config passes --mcp-config through to a claude rescuer" {
+  local args_file="${TEST_TMP}/claude-args.log"
+  MOCK_CLAUDE_ARGS_FILE="${args_file}" run "${OGRE_BIN}" rescue "fix login bug" --name login-fix --mcp-config /tmp/fake-mcp.json
+  [ "${status}" -eq 0 ] || return 1
+  [ -f "${args_file}" ] || return 1
+  [[ "$(cat "${args_file}")" == *"--mcp-config /tmp/fake-mcp.json"* ]] || return 1
+}
+
+@test "rescue falls back to config.json's browser_mcp when --mcp-config is omitted" {
+  "${OGRE_BIN}" init
+  python3 -c "
+import json
+d = json.load(open('.ai/.ogre/config.json'))
+d['browser_mcp'] = '/tmp/configured-mcp.json'
+json.dump(d, open('.ai/.ogre/config.json', 'w'))
+"
+  local args_file="${TEST_TMP}/claude-args.log"
+  MOCK_CLAUDE_ARGS_FILE="${args_file}" run "${OGRE_BIN}" rescue "fix login bug" --name login-fix
+  [ "${status}" -eq 0 ] || return 1
+  [ -f "${args_file}" ] || return 1
+  [[ "$(cat "${args_file}")" == *"--mcp-config /tmp/configured-mcp.json"* ]] || return 1
+}
+
+@test "rescue --mcp-config flag wins over config.json's browser_mcp" {
+  "${OGRE_BIN}" init
+  python3 -c "
+import json
+d = json.load(open('.ai/.ogre/config.json'))
+d['browser_mcp'] = '/tmp/configured-mcp.json'
+json.dump(d, open('.ai/.ogre/config.json', 'w'))
+"
+  local args_file="${TEST_TMP}/claude-args.log"
+  MOCK_CLAUDE_ARGS_FILE="${args_file}" run "${OGRE_BIN}" rescue "fix login bug" --name login-fix --mcp-config /tmp/flag-mcp.json
+  [ "${status}" -eq 0 ] || return 1
+  [ -f "${args_file}" ] || return 1
+  [[ "$(cat "${args_file}")" == *"--mcp-config /tmp/flag-mcp.json"* ]] || return 1
+  [[ "$(cat "${args_file}")" != *"configured-mcp.json"* ]] || return 1
+}
+
+@test "rescue without --mcp-config and no browser_mcp configured passes no --mcp-config to the rescuer" {
+  local args_file="${TEST_TMP}/claude-args.log"
+  MOCK_CLAUDE_ARGS_FILE="${args_file}" run "${OGRE_BIN}" rescue "fix login bug" --name login-fix
+  [ "${status}" -eq 0 ] || return 1
+  [ -f "${args_file}" ] || return 1
+  [[ "$(cat "${args_file}")" != *"--mcp-config"* ]] || return 1
+}
+
+@test "rescue --mcp-config also wires through in --background mode" {
+  local args_file="${TEST_TMP}/claude-args.log"
+  MOCK_CLAUDE_ARGS_FILE="${args_file}" run "${OGRE_BIN}" rescue "fix login bug" --name login-fix --mcp-config /tmp/fake-mcp.json --background
+  [ "${status}" -eq 0 ] || return 1
+  local tid
+  tid="$(python3 -c "
+import json
+tasks = json.load(open('.ai/.ogre/state/tasks.json'))
+t = next(t for t in tasks if t.get('type') == 'rescue')
+print(t['id'])
+")"
+  wait_for_task_status "${tid}" passed 10 || return 1
+  [ -f "${args_file}" ] || return 1
+  [[ "$(cat "${args_file}")" == *"--mcp-config /tmp/fake-mcp.json"* ]] || return 1
+}
+
+@test "rescue's runner prompt tells a codex rescuer to use the external playwright MCP for browser checks" {
+  run "${OGRE_BIN}" rescue "fix login bug" --rescuer codex --name login-fix --main
+  [ "${status}" -eq 0 ] || return 1
+  [[ "$(cat .ai/.ogre/tmp/issue-rescue-login-fix/rescue-runner.md)" == *"external \"playwright\" MCP server"* ]] || return 1
+}
+
 @test "rescue --live --background still passes --json through to the detached rescuer" {
   local args_file="${TEST_TMP}/codex-args.log"
   MOCK_CODEX_ARGS_FILE="${args_file}" run "${OGRE_BIN}" rescue "fix login bug" --rescuer codex --name login-fix --live --background

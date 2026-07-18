@@ -2,7 +2,7 @@
 
 **A Claude Code plugin that turns "implement this feature" into a controlled, resumable, context-safe pipeline: plan it, review it, then execute one step at a time or chain the remaining steps with `--all`, with Claude or Codex doing the work.**
 
-> **⚠️ Development tool only — not for production environments.** When `--executor codex` is used, every codex spawn runs with `--dangerously-bypass-approvals-and-sandbox`: no filesystem, shell, or network confinement, and no approval prompts, for *any* step (not just `[BROWSER-CHECK]`). This is unconditional, not an opt-in flag. Codex's default sandbox otherwise blocks things Ogre needs (real registry/network access, spawning a real browser), so Ogre trades away that confinement entirely rather than half-sandbox individual steps. Only run Ogre with `--executor codex` in a disposable dev environment or a repo you're comfortable giving full local access to — never against production data, secrets, or a machine you don't fully trust the plan/model on. `claude` isolates fine by default and needs no such tradeoff.
+> **⚠️ Development tool only — not for production environments.** `--executor codex` runs every step with `--dangerously-bypass-approvals-and-sandbox`: no filesystem/shell/network confinement, no approvals, unconditional. Needed for real registry access and browser spawning. Use only in a disposable dev env or repo you'd give full local access to — never on production data, secrets, or an untrusted machine. `claude` sandboxes fine, no tradeoff needed.
 
 ## The problem
 
@@ -238,6 +238,7 @@ By default the planner runs in an isolated `claude -p`/`codex exec` subprocess, 
 | `--browser-check` | `/ogre:feature --statement "..." --name forgot-password --browser-check` | Opt-in. Without it, the generated plan never tags a step `[BROWSER-CHECK]`, even ones that render/change UI - default assumes you'll verify the feature yourself. Pass it when you want automated browser verification as part of execution (see `[BROWSER-CHECK]` steps below) |
 | `--main` | `/ogre:feature --statement "..." --name forgot-password --main` | Run planning inline in the current session instead of spawning an isolated subprocess. Opt-in only; defeats context-isolation if habitual |
 | `--background` | `/ogre:feature --statement "..." --name forgot-password --background` | Spawn the isolated subprocess detached instead of blocking; check progress with `ogre status <issue>` |
+| `--live` | `/ogre:feature --statement "..." --name forgot-password --live` | Raw JSONL output (`--json`/`--output-format stream-json`) instead of human text, so a driving session can arm Monitor on the log for a live in-TUI feed. No effect with `--main` (no subprocess spawned) |
 
 ### `/ogre:add-blocker`
 
@@ -263,6 +264,7 @@ Accepts the same input types as `/ogre:feature` for the blocker itself. Re-plann
 | `--planner claude\|codex` / `--model MODEL` / `--reasoning LEVEL` | `/ogre:add-blocker 107 108 --planner codex` | Which LLM CLI re-plans; defaults to the issue's already-seeded planner |
 | `--main` | `/ogre:add-blocker 107 108 --main` | Run re-planning inline in the current session instead of spawning an isolated subprocess |
 | `--background` | `/ogre:add-blocker 107 108 --background` | Spawn the isolated subprocess detached instead of blocking |
+| `--live` | `/ogre:add-blocker 107 108 --live` | Raw JSONL output instead of human text, for arming Monitor on the log for a live in-TUI feed. No effect with `--main` |
 
 ### `/ogre:review-plan`
 
@@ -280,6 +282,7 @@ Reviews a generated plan for hallucinations, missing validation, risky assumptio
 | `--reasoning LEVEL` | `/ogre:review-plan 107 --reviewer codex --reasoning high` | Reasoning effort for the reviewer. Omit it to use the CLI's own default - Ogre never forces one |
 | `--main` | `/ogre:review-plan 107 --main` | Run the review inline in the current session instead of spawning an isolated subprocess |
 | `--background` | `/ogre:review-plan 107 --background` | Spawn the isolated subprocess detached instead of blocking |
+| `--live` | `/ogre:review-plan 107 --live` | Raw JSONL output instead of human text, for arming Monitor on the log for a live in-TUI feed. No effect with `--main` |
 
 Same isolated-subprocess-by-default model as `/ogre:feature`/`/ogre:execute`: default spawns and blocks, `--main` opts back into inline, `--background` detaches.
 
@@ -308,6 +311,7 @@ Executes one checklist item (or all remaining, with `--all`) from an approved pl
 | `--main` | `/ogre:execute 107 --main` | Run inline in the current Claude Code session, no subprocess spawned. Opt-in only (Ogre auto-falls back to it only in single-step mode, as the browser-check fallback when no browser MCP is detected - `--all`/`--background` stop instead of falling back, see `[BROWSER-CHECK]` steps below); defeats Ogre's context-isolation purpose if habitual |
 | `--mcp-config PATH` | `/ogre:execute 107 --mcp-config ./playwright-mcp.json` | Browser MCP config for the spawned `claude` session, so `[BROWSER-CHECK]` steps run isolated instead of falling back to `--main`. Also settable as `"browser_mcp"` in `.ai/.ogre/config.json` |
 | `--background` | `/ogre:execute 107 --background` | Same isolation as default (new session) but detached/non-blocking |
+| `--live` | `/ogre:execute 107 --live` | Raw JSONL output instead of human text, for arming Monitor on the log for a live in-TUI feed. With `--all --live`, every hand-off link in the chain rotates to its own log, still raw JSONL. No effect with `--main` |
 | `--yes` | `/ogre:execute 107 --yes` | Required to proceed non-interactively when the step/job was previously `stopped`, or jumping to an out-of-order step whose earlier steps aren't `passed`. Only pass after explicit user confirmation |
 
 Default with no isolation flag: foreground, brand-new codex/claude session, targeting the lowest-numbered pending step.
@@ -356,6 +360,7 @@ A standalone hotfix/task runner - no plan, no job, no issue involved. For when g
 | `--name SLUG` | `/ogre:rescue "..." --name login-fix` | Slug for this rescue's log/tmp paths (`.ai/.ogre/{tmp,logs}/issue-rescue-<slug>/`). Default: derived from the first few words of the task text plus a short uuid, same scheme as `/ogre:feature --statement`'s auto-name |
 | `--main` | `/ogre:rescue "..." --main` | Run inline in the current Claude Code session instead of spawning an isolated subprocess. Opt-in only; no task id is tracked in this mode since there's no subprocess to track |
 | `--background` | `/ogre:rescue "..." --background` | Spawn the isolated subprocess detached instead of blocking |
+| `--live` | `/ogre:rescue "..." --live` | Raw JSONL output instead of human text, for arming Monitor on the log for a live in-TUI feed. No effect with `--main` |
 
 Same isolated-subprocess-by-default model as `/ogre:execute` (foreground, blocking, new codex/claude session unless `--main`/`--background` say otherwise) - but always exactly one subprocess call, never a chain (no `--all`, `--task`/`--step`, or `--retry`). No `state/issue-<x>.json` is ever written; track a run via the task id it prints instead:
 

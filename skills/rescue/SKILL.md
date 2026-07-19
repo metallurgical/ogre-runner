@@ -206,10 +206,17 @@ actual progress.
   rescuer's lifetime), not the one-shot "tell me when it's done" pattern - it does not
   fall under the general "don't use Monitor for a single completion signal" guidance;
   that guidance is about a different use case, not a ban on Monitor for this plugin.
-- Only arm this when the user explicitly wants to watch (it's why `--live` is opt-in
-  in the first place) - each surfaced event lands as a message in this conversation and
-  consumes this session's own tokens, on top of the rescuer's own unrelated cost. Don't
-  arm it by default just because `--live` happened to be passed for some other reason.
+- **If the user's own request/command is the one that included `--live`, that alone is
+  the explicit ask - arm Monitor immediately, right after launch, with no further
+  confirmation needed.** Do not treat "the user typed `--live`" as insufficient signal
+  requiring some separate spoken "watch this live" - passing the flag themselves *is*
+  them asking to watch. Only skip arming if the user's own message says *why* they
+  want `--live` and that reason isn't watching (e.g. they said they just want JSONL in
+  the log file for their own later tailing) - that case is rare and must be stated by
+  the user, not assumed by you. Each surfaced event lands as a message in this
+  conversation and consumes this session's own tokens, on top of the rescuer's own
+  unrelated cost - that's the tradeoff `--live` opts into, not a reason to skip arming
+  once it's been requested.
 - Still separately wrap the actual `ogre rescue ... --live` call per the isolation rules
   above (`run_in_background: true` for the default/foreground case, or the poll loop for
   `--background`) - Monitor watches the log file, it does not replace waiting for the

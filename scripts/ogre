@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OGRE_VERSION="1.4.41"
+OGRE_VERSION="1.4.42"
 RUNTIME=".ai/.ogre"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -1126,6 +1126,26 @@ try:
 except Exception:
     tasks = []
 issue_tasks = [t for t in tasks if t.get("issue") == issue]
+
+# Plan rewrites (e.g. via mdr) change checklist text, so a step that survives
+# a rewrite gets re-seeded under its new text below and the OLD text's task
+# becomes orphaned - never re-matched by by_text, never pruned, sitting in
+# the ledger forever as a phantom duplicate row (`ogre status` showing 22
+# "Steps" for a 14-item plan). Drop any ledger task for this issue whose step
+# text is no longer present in the plan at all, so the plan .md stays the
+# single source of truth for what "the steps" are. Never prune a task that's
+# still "running" - a rewrite mid-execution shouldn't yank the in-flight step
+# out from under itself.
+current_texts = {raw_text.strip() for _, raw_text in items}
+stale_ids = {
+    t.get("id") for t in issue_tasks
+    if t.get("step") is not None and t.get("step") not in current_texts
+    and t.get("status") != "running"
+}
+if stale_ids:
+    tasks = [t for t in tasks if t.get("id") not in stale_ids]
+    issue_tasks = [t for t in issue_tasks if t.get("id") not in stale_ids]
+
 by_text = {t.get("step"): t for t in issue_tasks if t.get("step")}
 
 # A step counts as done if its checkbox is ticked OR its matched ledger task
@@ -1160,7 +1180,7 @@ dump_json(d, spath)
 if items:
     now = datetime.datetime.now().astimezone().isoformat()
     unlinked_passed = [t for t in issue_tasks if t.get("step") is None and t.get("status") == "passed"]
-    changed = False
+    changed = bool(stale_ids)
     planned_counter = 0
     for idx, (marker, raw_text) in enumerate(items, start=1):
         step_text = raw_text.strip()

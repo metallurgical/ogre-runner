@@ -380,6 +380,56 @@ count_tasks_for_issue() {
   [[ "${output}" == *"stopped"* ]] || return 1
 }
 
+@test "status prunes stale ledger tasks left behind by a plan rewrite (mdr)" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
+  write_plan_with_steps 42 "Old step one" "Old step two"
+  "${OGRE_BIN}" status 42 >/dev/null # seeds tasks for the old draft's text
+  [ "$(count_tasks_for_issue 42)" -eq 2 ] || return 1
+
+  # Simulate an mdr rewrite: checklist text changes, old rows should not survive.
+  write_plan_with_steps 42 "New step one" "New step two"
+  run "${OGRE_BIN}" status 42
+  [ "${status}" -eq 0 ] || return 1
+  [ "$(count_tasks_for_issue 42)" -eq 2 ] || return 1
+  [[ "${output}" == *"Steps (2)"* ]] || return 1
+
+  local steps
+  steps="$(python3 -c "
+import json
+tasks = json.load(open('.ai/.ogre/state/tasks.json'))
+print(sorted(t.get('step') for t in tasks if t.get('issue') == '42'))
+")"
+  [[ "${steps}" == *"New step one"* ]] || return 1
+  [[ "${steps}" == *"New step two"* ]] || return 1
+  [[ "${steps}" != *"Old step"* ]] || return 1
+}
+
+@test "status keeps a running task's ledger row even if a plan rewrite drops its old text" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
+  write_plan_with_steps 42 "Old step one"
+  "${OGRE_BIN}" status 42 >/dev/null
+
+  local tid
+  tid="$(python3 -c "import json; print(json.load(open('.ai/.ogre/state/tasks.json'))[0]['id'])")"
+  python3 - "$tid" <<'PY'
+import json, sys
+tid = sys.argv[1]
+tasks = json.load(open('.ai/.ogre/state/tasks.json'))
+for t in tasks:
+    if t.get('id') == tid:
+        t['status'] = 'running'
+json.dump(tasks, open('.ai/.ogre/state/tasks.json', 'w'), indent=2)
+PY
+
+  write_plan_with_steps 42 "New step one"
+  run "${OGRE_BIN}" status 42
+  [ "${status}" -eq 0 ] || return 1
+
+  local kept
+  kept="$(task_json_field "${tid}" status)"
+  [ "${kept}" = "running" ] || return 1
+}
+
 @test "status self-heals a dead background plan driver (no exit sentinel) by relaunching it" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   mkdir -p .ai/.ogre/tmp/issue-42

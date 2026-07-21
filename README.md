@@ -173,7 +173,7 @@ See every checklist step for a job at once:
 
 ## Command Reference
 
-Invoke as `/ogre:<command> ...` inside Claude Code (or `scripts/ogre <command> ...` directly, same flags either way). Positional input always comes first, flags after, in any order. `task-complete` has no skill wrapper — run it via `scripts/ogre`. `ogre init` is optional too — other commands create the runtime folders automatically when needed. Every flag below also has a one-letter short form (e.g. `--background` == `-b`) — run `scripts/ogre` with no args for the full per-command legend; letters are only unique within their own subcommand, not across the whole tool.
+Invoke as `/ogre:<command> ...` inside Claude Code (or `scripts/ogre <command> ...` directly, same flags either way). Positional input always comes first, flags after, in any order. `task-complete` has no skill wrapper — run it via `scripts/ogre`. `ogre init` is optional too — other commands create the runtime folders automatically when needed. Every flag below has a one-letter short form too (shown as `--long` / `-x` in the tables) — letters are only unique within their own subcommand, not across the whole tool.
 
 ### Valid `--model` IDs
 
@@ -223,22 +223,22 @@ By default the planner runs in an isolated `claude -p`/`codex exec` subprocess, 
 
 | Option | Example | Description |
 | :--- | :--- | :--- |
-| `--statement "..."` | `/ogre:feature --statement "need a forgot-password page"` | Freeform feature text, no issue needed at all |
-| `--name NAME` | `/ogre:feature --statement "..." --name forgot-password` | Slug for runtime paths when using `--statement` (default: first ~4 words + short uuid) |
+| `--statement` / `-s "..."` | `/ogre:feature --statement "need a forgot-password page"` | Freeform feature text, no issue needed at all |
+| `--name` / `-n NAME` | `/ogre:feature --statement "..." --name forgot-password` | Slug for runtime paths when using `--statement` (default: first ~4 words + short uuid) |
 | `<issue>` (positional) | `/ogre:feature 107` | GitHub issue number (GitHub-only, resolved via `gh` + this project's git remote) |
 | `<issue>` (positional) | `/ogre:feature https://github.com/acme/app/issues/107` | Full GitHub issue URL |
 | `<issue>` (positional) | `/ogre:feature https://gitlab.com/acme/app/-/issues/9` | Any non-GitHub issue/page URL (GitLab, self-hosted GitLab, Bitbucket, Jira, etc.), fetched generically as page text, not via an API |
 | `<issue>` (positional) | `/ogre:feature ./notes/bug-report.md` | Local file path (`.md`, `.txt` copied verbatim; `.docx` text-extracted) |
-| `--blocks ref,ref` | `/ogre:feature --statement "..." --name forgot-password --blocks ./notes/auth-debt.md` | Comma-separated blockers (issue numbers/URLs/paths), fetched alongside the main input, no status remark |
-| `--blocker REF --remarks "..."` | `/ogre:feature --statement "..." --name forgot-password --blocker ./notes/auth-debt.md --remarks "PR merged"` | One blocker plus a freeform status remark tied to it. Repeatable; `--remarks` annotates the blocker right before it; mix freely with `--blocks`. The remark is prepended to the blocker's file and shown to the planner so it can reason about what's already landed vs still in flight |
-| `--plan NAME.md` | `/ogre:feature --statement "..." --name forgot-password --plan forgot-password-v2.md` | Custom plan output filename instead of the default issue-derived or statement-derived plan name |
-| `--planner claude\|codex` | `/ogre:feature --statement "..." --name forgot-password --planner codex` | Which LLM CLI plans the feature (default: `claude`) |
-| `--model MODEL` | `/ogre:feature --statement "..." --name forgot-password --planner codex --model gpt-5.6-sol` | Model override for the planner |
-| `--reasoning LEVEL` | `/ogre:feature --statement "..." --name forgot-password --planner codex --reasoning high` | Reasoning effort for the planner. Omit it to use the CLI's own default - Ogre never forces one |
-| `--browser-check` | `/ogre:feature --statement "..." --name forgot-password --browser-check` | Opt-in. Without it, the generated plan never tags a step `[BROWSER-CHECK]`, even ones that render/change UI - default assumes you'll verify the feature yourself. Pass it when you want automated browser verification as part of execution (see `[BROWSER-CHECK]` steps below) |
-| `--main` | `/ogre:feature --statement "..." --name forgot-password --main` | Run planning inline in the current session instead of spawning an isolated subprocess. Opt-in only; defeats context-isolation if habitual |
-| `--background` | `/ogre:feature --statement "..." --name forgot-password --background` | Spawn the isolated subprocess detached instead of blocking; check progress with `ogre status <issue>` |
-| `--live` | `/ogre:feature --statement "..." --name forgot-password --live` | Streams progress live into the current session's TUI as it happens, instead of waiting for a final text summary. No effect with `--main` (no subprocess spawned) |
+| `--blocks` / `-K ref,ref` | `/ogre:feature --statement "..." --name forgot-password --blocks ./notes/auth-debt.md` | Comma-separated blockers (issue numbers/URLs/paths), fetched alongside the main input, no status remark |
+| `--blocker` / `-k REF --remarks` / `-e "..."` | `/ogre:feature --statement "..." --name forgot-password --blocker ./notes/auth-debt.md --remarks "PR merged"` | One blocker plus a freeform status remark tied to it. Repeatable; `--remarks`/`-e` annotates the blocker right before it; mix freely with `--blocks`/`-K`. The remark is prepended to the blocker's file and shown to the planner so it can reason about what's already landed vs still in flight |
+| `--plan` / `-P NAME.md` | `/ogre:feature --statement "..." --name forgot-password --plan forgot-password-v2.md` | Custom plan output filename instead of the default issue-derived or statement-derived plan name |
+| `--planner` / `-p claude\|codex` | `/ogre:feature --statement "..." --name forgot-password --planner codex` | Which LLM CLI plans the feature (default: `claude`) |
+| `--model` / `-m MODEL` | `/ogre:feature --statement "..." --name forgot-password --planner codex --model gpt-5.6-sol` | Model override for the planner |
+| `--reasoning` / `-r LEVEL` | `/ogre:feature --statement "..." --name forgot-password --planner codex --reasoning high` | Reasoning effort for the planner. Omit it to use the CLI's own default - Ogre never forces one |
+| `--browser-check` / `-c` | `/ogre:feature --statement "..." --name forgot-password --browser-check` | Opt-in. Without it, the generated plan never tags a step `[BROWSER-CHECK]`, even ones that render/change UI - default assumes you'll verify the feature yourself. Pass it when you want automated browser verification as part of execution (see `[BROWSER-CHECK]` steps below) |
+| `--main` / `-M` | `/ogre:feature --statement "..." --name forgot-password --main` | Run planning inline in the current session instead of spawning an isolated subprocess. Opt-in only; defeats context-isolation if habitual |
+| `--background` / `-b` | `/ogre:feature --statement "..." --name forgot-password --background` | Spawn the isolated subprocess detached instead of blocking; check progress with `ogre status <issue>` |
+| `--live` / `-l` | `/ogre:feature --statement "..." --name forgot-password --live` | Streams progress live into the current session's TUI as it happens, instead of waiting for a final text summary. No effect with `--main` (no subprocess spawned) |
 
 ### `/ogre:add-blocker`
 
@@ -257,14 +257,14 @@ Accepts the same input types as `/ogre:feature` for the blocker itself. Re-plann
 | `<blocker>` (positional) | `/ogre:add-blocker 107 https://github.com/acme/app/issues/108` | Full GitHub issue URL |
 | `<blocker>` (positional) | `/ogre:add-blocker 107 https://gitlab.com/acme/app/-/issues/9` | Any non-GitHub issue/page URL (GitLab, self-hosted GitLab, Bitbucket, Jira, etc.), fetched generically as page text |
 | `<blocker>` (positional) | `/ogre:add-blocker 107 ./notes/blocker.docx` | Local file path (`.md`, `.txt` copied verbatim; `.docx` text-extracted) |
-| `--statement "..."` | `/ogre:add-blocker 107 --statement "must invalidate old tokens"` | Freeform blocker text instead of an issue/URL/path |
-| `--name SLUG` | `/ogre:add-blocker 107 --statement "..." --name invalidate-tokens` | Slug for the blocker's file, only used with `--statement` |
-| `--remarks "..."` | `/ogre:add-blocker 107 108 --remarks "PR under review"` | Freeform status note tied to this blocker (e.g. merged / under review / blocking). Prepended to the blocker's file and shown to the planner; omit to store the blocker with no remark |
-| `--force` | `/ogre:add-blocker 107 108 --force` | Override the "execution already started" refusal (skips retroactive revision of completed steps; surface this warning to the user, never pass silently) |
-| `--planner claude\|codex` / `--model MODEL` / `--reasoning LEVEL` | `/ogre:add-blocker 107 108 --planner codex` | Which LLM CLI re-plans; defaults to the issue's already-seeded planner |
-| `--main` | `/ogre:add-blocker 107 108 --main` | Run re-planning inline in the current session instead of spawning an isolated subprocess |
-| `--background` | `/ogre:add-blocker 107 108 --background` | Spawn the isolated subprocess detached instead of blocking |
-| `--live` | `/ogre:add-blocker 107 108 --live` | Streams progress live into the current session's TUI as it happens, instead of waiting for a final text summary. No effect with `--main` |
+| `--statement` / `-s "..."` | `/ogre:add-blocker 107 --statement "must invalidate old tokens"` | Freeform blocker text instead of an issue/URL/path |
+| `--name` / `-n SLUG` | `/ogre:add-blocker 107 --statement "..." --name invalidate-tokens` | Slug for the blocker's file, only used with `--statement` |
+| `--remarks` / `-e "..."` | `/ogre:add-blocker 107 108 --remarks "PR under review"` | Freeform status note tied to this blocker (e.g. merged / under review / blocking). Prepended to the blocker's file and shown to the planner; omit to store the blocker with no remark |
+| `--force` / `-f` | `/ogre:add-blocker 107 108 --force` | Override the "execution already started" refusal (skips retroactive revision of completed steps; surface this warning to the user, never pass silently) |
+| `--planner` / `-p claude\|codex` / `--model` / `-m MODEL` / `--reasoning` / `-r LEVEL` | `/ogre:add-blocker 107 108 --planner codex` | Which LLM CLI re-plans; defaults to the issue's already-seeded planner |
+| `--main` / `-M` | `/ogre:add-blocker 107 108 --main` | Run re-planning inline in the current session instead of spawning an isolated subprocess |
+| `--background` / `-b` | `/ogre:add-blocker 107 108 --background` | Spawn the isolated subprocess detached instead of blocking |
+| `--live` / `-l` | `/ogre:add-blocker 107 108 --live` | Streams progress live into the current session's TUI as it happens, instead of waiting for a final text summary. No effect with `--main` |
 
 ### `/ogre:review-plan`
 
@@ -277,12 +277,12 @@ Reviews a generated plan for hallucinations, missing validation, risky assumptio
 | Option | Example | Description |
 | :--- | :--- | :--- |
 | `<issue-or-plan>` (positional) | `/ogre:review-plan 107` | Issue number, plan name (`issue-107`), or plan path |
-| `--reviewer claude\|codex` | `/ogre:review-plan 107 --reviewer codex` | Which LLM CLI reviews the plan (default: `claude`) |
-| `--model MODEL` | `/ogre:review-plan 107 --reviewer codex --model gpt-5.6-sol` | Model override for the reviewer |
-| `--reasoning LEVEL` | `/ogre:review-plan 107 --reviewer codex --reasoning high` | Reasoning effort for the reviewer. Omit it to use the CLI's own default - Ogre never forces one |
-| `--main` | `/ogre:review-plan 107 --main` | Run the review inline in the current session instead of spawning an isolated subprocess |
-| `--background` | `/ogre:review-plan 107 --background` | Spawn the isolated subprocess detached instead of blocking |
-| `--live` | `/ogre:review-plan 107 --live` | Streams progress live into the current session's TUI as it happens, instead of waiting for a final text summary. No effect with `--main` |
+| `--reviewer` / `-R claude\|codex` | `/ogre:review-plan 107 --reviewer codex` | Which LLM CLI reviews the plan (default: `claude`) |
+| `--model` / `-m MODEL` | `/ogre:review-plan 107 --reviewer codex --model gpt-5.6-sol` | Model override for the reviewer |
+| `--reasoning` / `-r LEVEL` | `/ogre:review-plan 107 --reviewer codex --reasoning high` | Reasoning effort for the reviewer. Omit it to use the CLI's own default - Ogre never forces one |
+| `--main` / `-M` | `/ogre:review-plan 107 --main` | Run the review inline in the current session instead of spawning an isolated subprocess |
+| `--background` / `-b` | `/ogre:review-plan 107 --background` | Spawn the isolated subprocess detached instead of blocking |
+| `--live` / `-l` | `/ogre:review-plan 107 --live` | Streams progress live into the current session's TUI as it happens, instead of waiting for a final text summary. No effect with `--main` |
 
 Same isolated-subprocess-by-default model as `/ogre:feature`/`/ogre:execute`: default spawns and blocks, `--main` opts back into inline, `--background` detaches.
 
@@ -297,22 +297,22 @@ Executes one checklist item (or all remaining, with `--all`) from an approved pl
 | Option | Example | Description |
 | :--- | :--- | :--- |
 | `<issue-or-plan>` (positional) | `/ogre:execute 107` | Issue number, plan name, or plan path |
-| `--job JOB_ID` | `/ogre:execute --job job-6d7715e4-...` | Target by job id instead of issue/plan |
-| `--executor codex\|claude` | `/ogre:execute 107 --executor codex` | Which LLM CLI executes the step (default: `claude` — always present since it's the host; use `codex` if installed) |
-| `--model MODEL` | `/ogre:execute 107 --executor claude --model claude-sonnet-5` | Model override for the executor |
-| `--reasoning LEVEL` | `/ogre:execute 107 --executor codex --reasoning high` | Reasoning effort for the executor - `claude -p` gets `--effort LEVEL`, `codex exec` gets `-c model_reasoning_effort=LEVEL`. Omit it to use the CLI's own default; Ogre never forces one |
-| `--task TASK_ID` | `/ogre:execute 107 --task task-0f32a78f-...` | Target one specific seeded step out of order |
-| `--step N` | `/ogre:execute 107 --step 3` | Target step N (1-based) out of order |
-| `--retry` | `/ogre:execute 107 --retry` | Re-run the lowest failed step in a fresh session, with the failed attempt's exit code and log tail injected into the runner prompt - the failure becomes an input instead of a dead end to re-explain by hand. Not combinable with `--all` |
-| `--all` | `/ogre:execute 107 --all` | Chain through every remaining step, each session handing off to a fresh one at the `--max-steps` cap or when it estimates ~50%+ context used, whichever comes first |
-| `--max-steps N` | `/ogre:execute 107 --all --max-steps 5` | Hard cap on checklist items per chained session (default: 3). Self-assessed context estimates are unreliable, so the cap is the authoritative limit. Many tiny/trivial steps (e.g. scaffolding dozens of near-identical files)? Raise this so they batch into one session instead of one spawn per step |
-| `--fresh` | `/ogre:execute 107 --fresh` | Force a brand-new context for this step (default) |
-| `--resume` | `/ogre:execute 107 --resume` | Resume prior context for this step instead of starting fresh |
-| `--main` | `/ogre:execute 107 --main` | Run inline in the current Claude Code session, no subprocess spawned. Opt-in only (Ogre auto-falls back to it only in single-step mode, as the browser-check fallback when no browser MCP is detected - `--all`/`--background` stop instead of falling back, see `[BROWSER-CHECK]` steps below); defeats Ogre's context-isolation purpose if habitual |
-| `--mcp-config PATH` | `/ogre:execute 107 --mcp-config ./playwright-mcp.json` | Browser MCP config for the spawned `claude` session, so `[BROWSER-CHECK]` steps run isolated instead of falling back to `--main`. Also settable as `"browser_mcp"` in `.ai/.ogre/config.json` |
-| `--background` | `/ogre:execute 107 --background` | Same isolation as default (new session) but detached/non-blocking |
-| `--live` | `/ogre:execute 107 --live` | Streams progress live into the current session's TUI as it happens, instead of waiting for a final text summary. With `--all --live`, each step in the chain streams the same way as it hands off to the next. No effect with `--main` |
-| `--yes` | `/ogre:execute 107 --yes` | Required to proceed non-interactively when the step/job was previously `stopped`, or jumping to an out-of-order step whose earlier steps aren't `passed`. Only pass after explicit user confirmation |
+| `--job` / `-j JOB_ID` | `/ogre:execute --job job-6d7715e4-...` | Target by job id instead of issue/plan |
+| `--executor` / `-e codex\|claude` | `/ogre:execute 107 --executor codex` | Which LLM CLI executes the step (default: `claude` — always present since it's the host; use `codex` if installed) |
+| `--model` / `-m MODEL` | `/ogre:execute 107 --executor claude --model claude-sonnet-5` | Model override for the executor |
+| `--reasoning` / `-r LEVEL` | `/ogre:execute 107 --executor codex --reasoning high` | Reasoning effort for the executor - `claude -p` gets `--effort LEVEL`, `codex exec` gets `-c model_reasoning_effort=LEVEL`. Omit it to use the CLI's own default; Ogre never forces one |
+| `--task` / `-t TASK_ID` | `/ogre:execute 107 --task task-0f32a78f-...` | Target one specific seeded step out of order |
+| `--step` / `-s N` | `/ogre:execute 107 --step 3` | Target step N (1-based) out of order |
+| `--retry` / `-R` | `/ogre:execute 107 --retry` | Re-run the lowest failed step in a fresh session, with the failed attempt's exit code and log tail injected into the runner prompt - the failure becomes an input instead of a dead end to re-explain by hand. Not combinable with `--all` |
+| `--all` / `-a` | `/ogre:execute 107 --all` | Chain through every remaining step, each session handing off to a fresh one at the `--max-steps` cap or when it estimates ~50%+ context used, whichever comes first |
+| `--max-steps` / `-x N` | `/ogre:execute 107 --all --max-steps 5` | Hard cap on checklist items per chained session (default: 3). Self-assessed context estimates are unreliable, so the cap is the authoritative limit. Many tiny/trivial steps (e.g. scaffolding dozens of near-identical files)? Raise this so they batch into one session instead of one spawn per step |
+| `--fresh` / `-f` | `/ogre:execute 107 --fresh` | Force a brand-new context for this step (default) |
+| `--resume` / `-F` | `/ogre:execute 107 --resume` | Resume prior context for this step instead of starting fresh |
+| `--main` / `-M` | `/ogre:execute 107 --main` | Run inline in the current Claude Code session, no subprocess spawned. Opt-in only (Ogre auto-falls back to it only in single-step mode, as the browser-check fallback when no browser MCP is detected - `--all`/`--background` stop instead of falling back, see `[BROWSER-CHECK]` steps below); defeats Ogre's context-isolation purpose if habitual |
+| `--mcp-config` / `-c PATH` | `/ogre:execute 107 --mcp-config ./playwright-mcp.json` | Browser MCP config for the spawned `claude` session, so `[BROWSER-CHECK]` steps run isolated instead of falling back to `--main`. Also settable as `"browser_mcp"` in `.ai/.ogre/config.json` |
+| `--background` / `-b` | `/ogre:execute 107 --background` | Same isolation as default (new session) but detached/non-blocking |
+| `--live` / `-l` | `/ogre:execute 107 --live` | Streams progress live into the current session's TUI as it happens, instead of waiting for a final text summary. With `--all --live`, each step in the chain streams the same way as it hands off to the next. No effect with `--main` |
+| `--yes` / `-y` | `/ogre:execute 107 --yes` | Required to proceed non-interactively when the step/job was previously `stopped`, or jumping to an out-of-order step whose earlier steps aren't `passed`. Only pass after explicit user confirmation |
 
 Default with no isolation flag: foreground, brand-new codex/claude session, targeting the lowest-numbered pending step.
 
@@ -353,15 +353,15 @@ A standalone hotfix/task runner - no plan, no job, no issue involved. For when g
 | Option | Example | Description |
 | :--- | :--- | :--- |
 | `<task>` (positional) | `/ogre:rescue "fix login bug"` | Freeform task description |
-| `--statement "..."` | `/ogre:rescue --statement "fix login bug"` | Same as the positional form |
-| `--rescuer claude\|codex` | `/ogre:rescue "..." --rescuer codex` | Which LLM CLI does the work (default: falls back to `defaults.rescuer` in `.ai/.ogre/config.json`, then `claude` - its own config role, separate from `defaults.executor`) |
-| `--model MODEL` | `/ogre:rescue "..." --rescuer codex --model gpt-5.6-sol` | Model override for the rescuer |
-| `--reasoning LEVEL` | `/ogre:rescue "..." --rescuer codex --reasoning high` | Reasoning effort for the rescuer. Omit it to use the CLI's own default - Ogre never forces one |
-| `--name SLUG` | `/ogre:rescue "..." --name login-fix` | Slug for this rescue's log/tmp paths (`.ai/.ogre/{tmp,logs}/issue-rescue-<slug>/`). Default: derived from the first few words of the task text plus a short uuid, same scheme as `/ogre:feature --statement`'s auto-name |
-| `--mcp-config PATH` | `/ogre:rescue "fix the modal, verify it renders" --mcp-config ./playwright-mcp.json` | Browser MCP for the rescue task (e.g. live Playwright verification), same wiring as `/ogre:execute`'s `[BROWSER-CHECK]` steps. Also settable as `"browser_mcp"` in `.ai/.ogre/config.json`. Only applies to a `claude` rescuer - `claude -p` also inherits an already-configured ambient MCP server with no flag needed. A `codex` rescuer needs no wiring here since it's always unsandboxed and can reach its own external Playwright MCP server directly |
-| `--main` | `/ogre:rescue "..." --main` | Run inline in the current Claude Code session instead of spawning an isolated subprocess. Opt-in only; no task id is tracked in this mode since there's no subprocess to track |
-| `--background` | `/ogre:rescue "..." --background` | Spawn the isolated subprocess detached instead of blocking |
-| `--live` | `/ogre:rescue "..." --live` | Streams progress live into the current session's TUI as it happens, instead of waiting for a final text summary. No effect with `--main` |
+| `--statement` / `-s "..."` | `/ogre:rescue --statement "fix login bug"` | Same as the positional form |
+| `--rescuer` / `-R claude\|codex` | `/ogre:rescue "..." --rescuer codex` | Which LLM CLI does the work (default: falls back to `defaults.rescuer` in `.ai/.ogre/config.json`, then `claude` - its own config role, separate from `defaults.executor`) |
+| `--model` / `-m MODEL` | `/ogre:rescue "..." --rescuer codex --model gpt-5.6-sol` | Model override for the rescuer |
+| `--reasoning` / `-r LEVEL` | `/ogre:rescue "..." --rescuer codex --reasoning high` | Reasoning effort for the rescuer. Omit it to use the CLI's own default - Ogre never forces one |
+| `--name` / `-n SLUG` | `/ogre:rescue "..." --name login-fix` | Slug for this rescue's log/tmp paths (`.ai/.ogre/{tmp,logs}/issue-rescue-<slug>/`). Default: derived from the first few words of the task text plus a short uuid, same scheme as `/ogre:feature --statement`'s auto-name |
+| `--mcp-config` / `-c PATH` | `/ogre:rescue "fix the modal, verify it renders" --mcp-config ./playwright-mcp.json` | Browser MCP for the rescue task (e.g. live Playwright verification), same wiring as `/ogre:execute`'s `[BROWSER-CHECK]` steps. Also settable as `"browser_mcp"` in `.ai/.ogre/config.json`. Only applies to a `claude` rescuer - `claude -p` also inherits an already-configured ambient MCP server with no flag needed. A `codex` rescuer needs no wiring here since it's always unsandboxed and can reach its own external Playwright MCP server directly |
+| `--main` / `-M` | `/ogre:rescue "..." --main` | Run inline in the current Claude Code session instead of spawning an isolated subprocess. Opt-in only; no task id is tracked in this mode since there's no subprocess to track |
+| `--background` / `-b` | `/ogre:rescue "..." --background` | Spawn the isolated subprocess detached instead of blocking |
+| `--live` / `-l` | `/ogre:rescue "..." --live` | Streams progress live into the current session's TUI as it happens, instead of waiting for a final text summary. No effect with `--main` |
 
 Same isolated-subprocess-by-default model as `/ogre:execute` (foreground, blocking, new codex/claude session unless `--main`/`--background` say otherwise) - but always exactly one subprocess call, never a chain (no `--all`, `--task`/`--step`, or `--retry`). No `state/issue-<x>.json` is ever written; track a run via the task id it prints instead:
 
@@ -383,11 +383,11 @@ Shows job/task progress from `.ai/.ogre` state. Also self-heals a `--all --backg
 | Option | Example | Description |
 | :--- | :--- | :--- |
 | `[issue]` (positional, optional) | `/ogre:status 107` | Show one issue's Job Summary + its tasks. Omit for every issue + every pending/running task |
-| `--job JOB_ID` | `/ogre:status --job job-6d7715e4-...` | Same as `[issue]`, addressed by job id |
-| `--tasks` | `/ogre:status --tasks` or `/ogre:status 107 --tasks` | List all tasks, optionally filtered to one issue |
-| `--task TASK_ID` | `/ogre:status --task task-0f32a78f-...` | Show one task's full record |
-| `--watch` | `/ogre:status --watch` | Live-refresh view (run standalone in another terminal), Ctrl-C to quit |
-| `--interval N` | `/ogre:status --watch --interval 5` | Refresh seconds for `--watch` (default: 2) |
+| `--job` / `-j JOB_ID` | `/ogre:status --job job-6d7715e4-...` | Same as `[issue]`, addressed by job id |
+| `--tasks` / `-T` | `/ogre:status --tasks` or `/ogre:status 107 --tasks` | List all tasks, optionally filtered to one issue |
+| `--task` / `-t TASK_ID` | `/ogre:status --task task-0f32a78f-...` | Show one task's full record |
+| `--watch` / `-w` | `/ogre:status --watch` | Live-refresh view (run standalone in another terminal), Ctrl-C to quit |
+| `--interval` / `-i N` | `/ogre:status --watch --interval 5` | Refresh seconds for `--watch` (default: 2) |
 
 `/ogre:status`/`/ogre:execute` self-heal a missing `state.json` by backfilling it from the plan file, so hand-authored plans still work.
 
@@ -414,9 +414,9 @@ scripts/ogre task-complete task-0f32a78f-... --status passed
 | Option | Example | Description |
 | :--- | :--- | :--- |
 | `<task-id>` (positional, required) | `ogre task-complete task-0f32a78f-...` | The task id to mark |
-| `--status passed\|failed` | `ogre task-complete task-0f32a78f-... --status passed` | Outcome to record (default: `passed`) |
-| `--exit-code N` | `ogre task-complete task-0f32a78f-... --status failed --exit-code 1` | Optional exit code to record alongside the status |
-| `--notes "..."` | `ogre task-complete task-0f32a78f-... --notes "reset route is POST /password/email, not /forgot"` | Findings the next step's fresh session must know (real signature/route found, deviation from plan, gotcha). Injected into every later runner prompt for the issue, so mid-step knowledge survives the session that discovered it |
+| `--status` / `-s passed\|failed` | `ogre task-complete task-0f32a78f-... --status passed` | Outcome to record (default: `passed`) |
+| `--exit-code` / `-x N` | `ogre task-complete task-0f32a78f-... --status failed --exit-code 1` | Optional exit code to record alongside the status |
+| `--notes` / `-n "..."` | `ogre task-complete task-0f32a78f-... --notes "reset route is POST /password/email, not /forgot"` | Findings the next step's fresh session must know (real signature/route found, deviation from plan, gotcha). Injected into every later runner prompt for the issue, so mid-step knowledge survives the session that discovered it |
 
 ### `/ogre:stop`
 
@@ -429,12 +429,12 @@ Stops, archives, or deletes Ogre runtime data. Does not revert code changes.
 | Option | Example | Description |
 | :--- | :--- | :--- |
 | `[issue]` (positional, optional) | `/ogre:stop 107` | Stop the job: cascades to all its tasks (kills running pids, marks pending/running `stopped`) |
-| `--job JOB_ID` | `/ogre:stop --job job-6d7715e4-...` | Same, addressed by job id |
-| `--task TASK_ID` | `/ogre:stop --task task-0f32a78f-...` | Stop ONE task only; sibling tasks and job/issue state untouched |
-| `--all` | `/ogre:stop --all` | Stop every tracked job (cascades to all their tasks) |
-| `--archive` | `/ogre:stop 107 --archive` | Move the issue's runtime data to `.ai/.ogre/archive/issue-<n>-<timestamp>/` |
-| `--delete` | `/ogre:stop 107 --delete` | Delete the issue's runtime data (after confirmation) |
-| `--list` | `/ogre:stop 107 --list` | Print every runtime file/dir path for the issue without deleting, so the user can pick individually |
+| `--job` / `-j JOB_ID` | `/ogre:stop --job job-6d7715e4-...` | Same, addressed by job id |
+| `--task` / `-t TASK_ID` | `/ogre:stop --task task-0f32a78f-...` | Stop ONE task only; sibling tasks and job/issue state untouched |
+| `--all` / `-a` | `/ogre:stop --all` | Stop every tracked job (cascades to all their tasks) |
+| `--archive` / `-A` | `/ogre:stop 107 --archive` | Move the issue's runtime data to `.ai/.ogre/archive/issue-<n>-<timestamp>/` |
+| `--delete` / `-d` | `/ogre:stop 107 --delete` | Delete the issue's runtime data (after confirmation) |
+| `--list` / `-l` | `/ogre:stop 107 --list` | Print every runtime file/dir path for the issue without deleting, so the user can pick individually |
 
 ### `/ogre:config`
 
@@ -459,7 +459,7 @@ Prints `config.json`'s actual nested shape (not a flattened dot-path list), each
 
 | Option | Example | Description |
 | :--- | :--- | :--- |
-| `--reset` | `/ogre:config --reset` | Back up the current `config.json` to `config.json.bak`, then overwrite it with fresh-install defaults — use when config.json has been hand-edited into a confusing state |
+| `--reset` / `-r` | `/ogre:config --reset` | Back up the current `config.json` to `config.json.bak`, then overwrite it with fresh-install defaults — use when config.json has been hand-edited into a confusing state |
 
 Precedence for every value shown: CLI flag on the command itself wins, then config.json, then the hardcoded fallback (`claude`/`claude-sonnet-5` for planner/reviewer/executor).
 

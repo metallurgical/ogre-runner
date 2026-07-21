@@ -288,7 +288,7 @@ Same isolated-subprocess-by-default model as `/ogre:feature`/`/ogre:execute`: de
 
 ### `/ogre:execute`
 
-Executes one checklist item (or all remaining, with `--all`) from an approved plan.
+Executes one checklist item (or all remaining, with `--all`) from an approved plan. CLI alias: `ogre exec` (same command, same flags).
 
 ```
 /ogre:execute 107 --executor codex

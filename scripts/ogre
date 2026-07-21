@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OGRE_VERSION="1.4.43"
+OGRE_VERSION="1.4.44"
 RUNTIME=".ai/.ogre"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -31,6 +31,7 @@ Usage:
                                    (default spawns an isolated rescuer subprocess, same isolation model as ogre execute; --main runs inline in the current session, --background detaches)
                                    (no job/state file is created - track it via "ogre status --task <id>" / "ogre stop --task <id>" using the task id it prints)
   ogre execute <issue-or-plan> [--executor codex|claude] [--model MODEL] [--reasoning LEVEL] [--mcp-config PATH] [--all] [--max-steps N] [--fresh|--resume] [--main|--background] [--yes] [--live]
+                                   (alias: ogre exec - same command, same flags)
                                    (--executor/--model omitted: falls back to defaults.executor in .ai/.ogre/config.json, then claude/claude-sonnet-5)
                                    (--reasoning omitted: uses claude/codex's own default effort level - not forced by Ogre)
                                    (--mcp-config PATH: browser MCP for [BROWSER-CHECK] steps, so they run isolated; also settable as "browser_mcp" in .ai/.ogre/config.json)
@@ -4112,7 +4113,7 @@ main() {
     add-blocker) cmd_add_blocker "$@" ;;
     review-plan) cmd_review_plan "$@" ;;
     rescue) cmd_rescue "$@" ;;
-    execute) cmd_execute "$@" ;;
+    execute|exec) cmd_execute "$@" ;;
     status) cmd_status "$@" ;;
     task-list) cmd_task_list "$@" ;;
     task-complete) cmd_task_complete "$@" ;;

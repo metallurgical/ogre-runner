@@ -74,6 +74,13 @@ json.dump(d, open('.ai/.ogre/config.json', 'w'))
   [[ "${output}" == *'"executor": { "provider": "claude", "model": "claude-sonnet-5" }'*"config.json"* ]] || return 1
 }
 
+@test "config -r (short --reset) behaves like --reset" {
+  "${OGRE_BIN}" init
+  run "${OGRE_BIN}" config -r
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" == *"Reset .ai/.ogre/config.json to fresh-install defaults"* ]] || return 1
+}
+
 @test "config --reset with no prior config.json still succeeds" {
   run "${OGRE_BIN}" config --reset
   [ "${status}" -eq 0 ] || return 1

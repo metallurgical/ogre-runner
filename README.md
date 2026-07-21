@@ -173,7 +173,7 @@ See every checklist step for a job at once:
 
 ## Command Reference
 
-Invoke as `/ogre:<command> ...` inside Claude Code (or `scripts/ogre <command> ...` directly, same flags either way). Positional input always comes first, flags after, in any order. `task-complete` has no skill wrapper — run it via `scripts/ogre`. `ogre init` is optional too — other commands create the runtime folders automatically when needed.
+Invoke as `/ogre:<command> ...` inside Claude Code (or `scripts/ogre <command> ...` directly, same flags either way). Positional input always comes first, flags after, in any order. `task-complete` has no skill wrapper — run it via `scripts/ogre`. `ogre init` is optional too — other commands create the runtime folders automatically when needed. Every flag below also has a one-letter short form (e.g. `--background` == `-b`) — run `scripts/ogre` with no args for the full per-command legend; letters are only unique within their own subcommand, not across the whole tool.
 
 ### Valid `--model` IDs
 

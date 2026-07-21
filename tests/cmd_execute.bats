@@ -140,6 +140,46 @@ print(t['id'])
   [ "$(state_field 42 status)" = "executing" ] || return 1
 }
 
+@test "execute short flags -e -m -r -x behave like their long forms" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
+  write_plan_with_steps 42 "First step" "Second step"
+  run "${OGRE_BIN}" execute 42 -e codex -m gpt-5.6-sol -r low -x 2
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" == *"Executor: codex"* ]] || return 1
+  [[ "${output}" == *"Task"*"finished: passed"* ]] || return 1
+}
+
+@test "execute -j (short --job) as the first arg is not swallowed as the positional target" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
+  write_plan_with_steps 42 "First step"
+  local job_id
+  job_id="$(state_field 42 job_id)"
+  run "${OGRE_BIN}" execute -j "${job_id}" -M
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" == *"Mode: --main."* ]] || return 1
+}
+
+@test "execute -f (short --fresh) and -F (short --resume) don't collide" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
+  write_plan_with_steps 42 "First step"
+  run "${OGRE_BIN}" execute 42 -f -M
+  [ "${status}" -eq 0 ] || return 1
+  run "${OGRE_BIN}" execute 42 -F -M
+  [ "${status}" -eq 0 ] || return 1
+}
+
+@test "execute -R (short --retry) is distinct from -r (short --reasoning)" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
+  write_plan_with_steps 42 "First step" "Second step"
+  export MOCK_CLAUDE_STATUS=failed
+  run "${OGRE_BIN}" execute 42
+  [ "${status}" -eq 1 ] || return 1
+  unset MOCK_CLAUDE_STATUS
+  run "${OGRE_BIN}" execute 42 -R -r low -M
+  [ "${status}" -eq 0 ] || return 1
+  grep -q "Previous attempt for this step FAILED" .ai/.ogre/tmp/issue-42/run-next.md
+}
+
 @test "execute foreground prints the job summary automatically after finishing a step" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step" "Second step"

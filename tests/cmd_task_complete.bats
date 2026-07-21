@@ -37,6 +37,21 @@ load test_helper
   [ "$(task_json_field "${tid}" status)" = "passed" ] || return 1
 }
 
+@test "task-complete short flags (-s -x -n) behave like their long forms" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
+  write_plan_with_steps 42 "First step"
+  "${OGRE_BIN}" task-list "$(state_field 42 job_id)" >/dev/null
+  local tid
+  tid="$(python3 -c "import json; print(json.load(open('.ai/.ogre/state/tasks.json'))[0]['id'])")"
+
+  run "${OGRE_BIN}" task-complete "${tid}" -s failed -x 1 -n "reason here"
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" == *"Task ${tid} marked failed."* ]] || return 1
+  [ "$(task_json_field "${tid}" status)" = "failed" ] || return 1
+  [ "$(task_json_field "${tid}" exit_code)" = "1" ] || return 1
+  [ "$(task_json_field "${tid}" notes)" = "reason here" ] || return 1
+}
+
 @test "task-complete --notes records findings on the task and shows them in the summary" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step"

@@ -29,6 +29,14 @@ load test_helper
   [ -f ".ai/.ogre/tmp/issue-42/plan-runner.md" ] || return 1
 }
 
+@test "add-blocker short flags (-s -n -e -f -p -m -r -M) behave like their long forms" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
+  run "${OGRE_BIN}" add-blocker 42 -s "needs auth first" -n authblock -e "still open" -f -p claude -m claude-sonnet-5 -r low -M
+  [ "${status}" -eq 0 ] || return 1
+  [ -f ".ai/.ogre/issues/issue-authblock.md" ] || return 1
+  [ "$(state_field 42 status)" = "planning" ] || return 1
+}
+
 @test "add-blocker default spawns an isolated session and marks the replan task passed" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   export MOCK_CLAUDE_WRITE_FILE="$(pwd)/.ai/.ogre/plans/issue-42.md"

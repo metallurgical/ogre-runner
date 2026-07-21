@@ -36,6 +36,24 @@ load test_helper
   [ "$(state_field 42 status)" = "stopped" ] || return 1
 }
 
+@test "stop short flags -a, -A (not -a) and -l don't collide" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
+  run "${OGRE_BIN}" stop 42 -l
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" == *"issue-42.md"* ]] || return 1
+  [ -f ".ai/.ogre/issues/issue-42.md" ] || return 1
+
+  run "${OGRE_BIN}" stop 42 -A
+  [ "${status}" -eq 0 ] || return 1
+  [ ! -f ".ai/.ogre/issues/issue-42.md" ] || return 1
+  [ -n "$(find .ai/.ogre/archive -name 'issue-42.md' 2>/dev/null)" ] || return 1
+
+  "${OGRE_BIN}" feature --statement "base feature 2" --name 99 --main
+  run "${OGRE_BIN}" stop -a
+  [ "${status}" -eq 0 ] || return 1
+  [ "$(state_field 99 status)" = "stopped" ] || return 1
+}
+
 @test "stop --list shows runtime files without deleting anything" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   run "${OGRE_BIN}" stop 42 --list

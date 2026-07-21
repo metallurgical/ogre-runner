@@ -50,6 +50,27 @@ load test_helper
   [[ "${output}" == *"Job Id"* ]] || return 1
 }
 
+@test "status short flags -j -T -t behave like their long forms, -t != -T" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
+  write_plan_with_steps 42 "Step one"
+  local job_id
+  job_id="$(state_field 42 job_id)"
+  run "${OGRE_BIN}" status -j "${job_id}"
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" == *"Job Id"* ]] || return 1
+
+  "${OGRE_BIN}" status 42 >/dev/null # seeds step tasks
+  run "${OGRE_BIN}" status -T
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" == *"Tasks:"* ]] || return 1
+
+  local tid
+  tid="$(python3 -c "import json; print(json.load(open('.ai/.ogre/state/tasks.json'))[0]['id'])")"
+  run "${OGRE_BIN}" status -t "${tid}"
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" == *"Task Id"* ]] || return 1
+}
+
 @test "status --job with unknown job id errors" {
   run "${OGRE_BIN}" status --job "job-does-not-exist"
   [ "${status}" -eq 1 ] || return 1

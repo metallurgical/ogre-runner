@@ -92,6 +92,19 @@ print(t['id'])
   [[ "${output}" == *"Rescuer: codex (gpt-5.6-sol) [reasoning: medium]"* ]] || return 1
 }
 
+@test "rescue short flags (-R -m -r -n -M) behave like their long forms, -R != -r" {
+  run "${OGRE_BIN}" rescue "fix login bug" -R codex -m gpt-5.6-sol -r medium -n login-fix -M
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" == *"Rescuer: codex (gpt-5.6-sol) [reasoning: medium]"* ]] || return 1
+}
+
+@test "rescue -s (short --statement) works with -c (short --mcp-config)" {
+  local mcp_file="${TEST_TMP}/mcp.json"
+  echo '{}' > "${mcp_file}"
+  run "${OGRE_BIN}" rescue -s "fix login bug" -n login-fix -c "${mcp_file}" -M
+  [ "${status}" -eq 0 ] || return 1
+}
+
 @test "rescue omits the reasoning tag from the rescuer log line when --reasoning isn't passed" {
   run "${OGRE_BIN}" rescue "fix login bug" --name login-fix --main
   [ "${status}" -eq 0 ] || return 1

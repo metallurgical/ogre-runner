@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OGRE_VERSION="1.4.42"
+OGRE_VERSION="1.4.43"
 RUNTIME=".ai/.ogre"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -63,6 +63,23 @@ Usage:
   ogre task-complete <task-id> [--status passed|failed] [--exit-code N] [--notes "..."]
                                    (mark a task done when it wasn't run via --run/--background;
                                     --notes records findings shown to every later session on the issue)
+
+Short flags (every long flag above also has a one-letter form, e.g. --background == -b; each
+letter is only unique within its own subcommand, not across the whole tool):
+  feature:        -K blocks  -k blocker  -e remarks  -P plan  -p planner  -m model  -r reasoning
+                   -s statement  -n name  -c browser-check  -M main  -b background  -l live
+  add-blocker:    -s statement  -n name  -e remarks  -f force  -p planner  -m model  -r reasoning
+                   -M main  -b background  -l live
+  review-plan:    -R reviewer  -m model  -r reasoning  -M main  -b background  -l live
+  rescue:         -s statement  -R rescuer  -m model  -r reasoning  -n name  -c mcp-config
+                   -M main  -b background  -l live
+  execute:        -j job  -t task  -s step  -e executor  -m model  -r reasoning  -c mcp-config
+                   -x max-steps  -R retry  -a all  -n next  -f fresh  -F resume  -M main
+                   -b background  -y yes  -l live
+  status:         -t task  -T tasks  -j job  -w watch  -i interval
+  task-complete:  -s status  -x exit-code  -n notes
+  stop:           -a all  -A archive  -d delete  -l list  -t task  -j job
+  config:         -r reset
 
 Concepts:
   job  = one feature/issue workflow (1:1 with an issue), id: job-<uuid>, lives in state/issue-<issue>.json
@@ -1922,13 +1939,13 @@ cmd_feature() {
   # `--blocks a,b` adds refs with no remark; `--blocker REF --remarks TEXT`
   # attaches a remark to the ref that immediately precedes it.
   local -a block_refs=() block_remarks=()
-  if [ $# -gt 0 ] && [[ "$1" != --* ]]; then
+  if [ $# -gt 0 ] && [[ "$1" != -* ]]; then
     current="$1"; shift
   fi
 
   while [ $# -gt 0 ]; do
     case "$1" in
-      --blocks)
+      --blocks|-K)
         local _ref
         IFS=',' read -ra _refs <<< "${2:-}"
         for _ref in "${_refs[@]}"; do
@@ -1937,20 +1954,20 @@ cmd_feature() {
           block_refs+=("$_ref"); block_remarks+=("")
         done
         shift 2 ;;
-      --blocker) block_refs+=("${2:-}"); block_remarks+=(""); shift 2 ;;
-      --remarks)
+      --blocker|-k) block_refs+=("${2:-}"); block_remarks+=(""); shift 2 ;;
+      --remarks|-e)
         [ ${#block_refs[@]} -gt 0 ] || { err "--remarks must follow a --blocker (or --blocks) it annotates"; exit 1; }
         block_remarks[$((${#block_remarks[@]} - 1))]="${2:-}"; shift 2 ;;
-      --plan) plan_name="${2:-}"; shift 2 ;;
-      --planner) planner="${2:-}"; shift 2 ;;
-      --model) model="${2:-}"; shift 2 ;;
-      --reasoning) reasoning="${2:-}"; shift 2 ;;
-      --statement) statement="${2:-}"; shift 2 ;;
-      --name) name="${2:-}"; shift 2 ;;
-      --browser-check) browser_check="true"; shift ;;
-      --main) iso="main"; shift ;;
-      --background) iso="background"; shift ;;
-      --live) json_mode="yes"; shift ;;
+      --plan|-P) plan_name="${2:-}"; shift 2 ;;
+      --planner|-p) planner="${2:-}"; shift 2 ;;
+      --model|-m) model="${2:-}"; shift 2 ;;
+      --reasoning|-r) reasoning="${2:-}"; shift 2 ;;
+      --statement|-s) statement="${2:-}"; shift 2 ;;
+      --name|-n) name="${2:-}"; shift 2 ;;
+      --browser-check|-c) browser_check="true"; shift ;;
+      --main|-M) iso="main"; shift ;;
+      --background|-b) iso="background"; shift ;;
+      --live|-l) json_mode="yes"; shift ;;
       *) err "Unknown option: $1"; exit 1 ;;
     esac
   done
@@ -2159,21 +2176,21 @@ cmd_add_blocker() {
   [ -f "$spath" ] || { err "No Ogre state found for issue $issue. Run 'ogre feature' first."; exit 1; }
 
   local blocker="" statement="" name="" force="false" remarks="" planner="" model="" reasoning="" iso="new" json_mode=""
-  if [ $# -gt 0 ] && [[ "$1" != --* ]]; then
+  if [ $# -gt 0 ] && [[ "$1" != -* ]]; then
     blocker="$1"; shift
   fi
   while [ $# -gt 0 ]; do
     case "$1" in
-      --statement) statement="${2:-}"; shift 2 ;;
-      --name) name="${2:-}"; shift 2 ;;
-      --remarks) remarks="${2:-}"; shift 2 ;;
-      --force) force="true"; shift ;;
-      --planner) planner="${2:-}"; shift 2 ;;
-      --model) model="${2:-}"; shift 2 ;;
-      --reasoning) reasoning="${2:-}"; shift 2 ;;
-      --main) iso="main"; shift ;;
-      --background) iso="background"; shift ;;
-      --live) json_mode="yes"; shift ;;
+      --statement|-s) statement="${2:-}"; shift 2 ;;
+      --name|-n) name="${2:-}"; shift 2 ;;
+      --remarks|-e) remarks="${2:-}"; shift 2 ;;
+      --force|-f) force="true"; shift ;;
+      --planner|-p) planner="${2:-}"; shift 2 ;;
+      --model|-m) model="${2:-}"; shift 2 ;;
+      --reasoning|-r) reasoning="${2:-}"; shift 2 ;;
+      --main|-M) iso="main"; shift ;;
+      --background|-b) iso="background"; shift ;;
+      --live|-l) json_mode="yes"; shift ;;
       *) err "Unknown option: $1"; exit 1 ;;
     esac
   done
@@ -2402,12 +2419,12 @@ cmd_review_plan() {
   shift || true
   while [ $# -gt 0 ]; do
     case "$1" in
-      --reviewer) reviewer="${2:-}"; shift 2 ;;
-      --model) model="${2:-}"; shift 2 ;;
-      --reasoning) reasoning="${2:-}"; shift 2 ;;
-      --main) iso="main"; shift ;;
-      --background) iso="background"; shift ;;
-      --live) json_mode="yes"; shift ;;
+      --reviewer|-R) reviewer="${2:-}"; shift 2 ;;
+      --model|-m) model="${2:-}"; shift 2 ;;
+      --reasoning|-r) reasoning="${2:-}"; shift 2 ;;
+      --main|-M) iso="main"; shift ;;
+      --background|-b) iso="background"; shift ;;
+      --live|-l) json_mode="yes"; shift ;;
       *) err "Unknown option: $1"; exit 1 ;;
     esac
   done
@@ -2518,20 +2535,20 @@ EOF2
 cmd_rescue() {
   ensure_runtime
   local statement="" rescuer="" model="" reasoning="" iso="new" name="" json_mode="" mcp_config=""
-  if [ $# -gt 0 ] && [[ ! "$1" =~ ^-- ]]; then
+  if [ $# -gt 0 ] && [[ ! "$1" =~ ^- ]]; then
     statement="$1"; shift
   fi
   while [ $# -gt 0 ]; do
     case "$1" in
-      --statement) statement="${2:-}"; shift 2 ;;
-      --rescuer) rescuer="${2:-}"; shift 2 ;;
-      --model) model="${2:-}"; shift 2 ;;
-      --reasoning) reasoning="${2:-}"; shift 2 ;;
-      --name) name="${2:-}"; shift 2 ;;
-      --mcp-config) mcp_config="${2:-}"; shift 2 ;;
-      --main) iso="main"; shift ;;
-      --background) iso="background"; shift ;;
-      --live) json_mode="yes"; shift ;;
+      --statement|-s) statement="${2:-}"; shift 2 ;;
+      --rescuer|-R) rescuer="${2:-}"; shift 2 ;;
+      --model|-m) model="${2:-}"; shift 2 ;;
+      --reasoning|-r) reasoning="${2:-}"; shift 2 ;;
+      --name|-n) name="${2:-}"; shift 2 ;;
+      --mcp-config|-c) mcp_config="${2:-}"; shift 2 ;;
+      --main|-M) iso="main"; shift ;;
+      --background|-b) iso="background"; shift ;;
+      --live|-l) json_mode="yes"; shift ;;
       *) err "Unknown option: $1"; exit 1 ;;
     esac
   done
@@ -2656,29 +2673,29 @@ cmd_execute() {
   #   main       - run inline in the current Claude Code session (no subprocess spawned)
   #   background - same isolation as "new" but detached/non-blocking
   local target="" executor="" model="" reasoning="" mode="next" freshness="fresh" iso="new" job_id="" task_id="" step_n="" assume_yes="false" max_steps="3" retry="false" mcp_config="" json_mode=""
-  if [ $# -gt 0 ] && [[ ! "$1" =~ ^-- ]]; then
+  if [ $# -gt 0 ] && [[ ! "$1" =~ ^- ]]; then
     target="$1"; shift
   fi
   while [ $# -gt 0 ]; do
     case "$1" in
-      --job) job_id="${2:-}"; shift 2 ;;
-      --task) task_id="${2:-}"; shift 2 ;;
-      --step) step_n="${2:-}"; shift 2 ;;
-      --executor) executor="${2:-}"; shift 2 ;;
-      --model) model="${2:-}"; shift 2 ;;
-      --reasoning) reasoning="${2:-}"; shift 2 ;;
-      --mcp-config) mcp_config="${2:-}"; shift 2 ;;
-      --max-steps) max_steps="${2:-3}"; shift 2 ;;
-      --retry) retry="true"; shift ;;
-      --all) mode="all"; shift ;;
-      --next) mode="next"; shift ;;
-      --fresh) freshness="fresh"; shift ;;
-      --resume) freshness="resume"; shift ;;
+      --job|-j) job_id="${2:-}"; shift 2 ;;
+      --task|-t) task_id="${2:-}"; shift 2 ;;
+      --step|-s) step_n="${2:-}"; shift 2 ;;
+      --executor|-e) executor="${2:-}"; shift 2 ;;
+      --model|-m) model="${2:-}"; shift 2 ;;
+      --reasoning|-r) reasoning="${2:-}"; shift 2 ;;
+      --mcp-config|-c) mcp_config="${2:-}"; shift 2 ;;
+      --max-steps|-x) max_steps="${2:-3}"; shift 2 ;;
+      --retry|-R) retry="true"; shift ;;
+      --all|-a) mode="all"; shift ;;
+      --next|-n) mode="next"; shift ;;
+      --fresh|-f) freshness="fresh"; shift ;;
+      --resume|-F) freshness="resume"; shift ;;
       --run) iso="new"; shift ;;               # legacy flag, kept as a no-op alias: "new" is now the default anyway
-      --main) iso="main"; shift ;;
-      --background) iso="background"; shift ;;
-      --yes) assume_yes="true"; shift ;;
-      --live) json_mode="yes"; shift ;;
+      --main|-M) iso="main"; shift ;;
+      --background|-b) iso="background"; shift ;;
+      --yes|-y) assume_yes="true"; shift ;;
+      --live|-l) json_mode="yes"; shift ;;
       *) err "Unknown option: $1"; exit 1 ;;
     esac
   done
@@ -3678,11 +3695,11 @@ cmd_status() {
   local target="" task_id="" list_tasks="false" job_id="" watch="false" interval="2"
   while [ $# -gt 0 ]; do
     case "$1" in
-      --task) task_id="${2:-}"; shift 2 ;;
-      --tasks) list_tasks="true"; shift ;;
-      --job) job_id="${2:-}"; shift 2 ;;
-      --watch) watch="true"; shift ;;
-      --interval) interval="${2:-2}"; shift 2 ;;
+      --task|-t) task_id="${2:-}"; shift 2 ;;
+      --tasks|-T) list_tasks="true"; shift ;;
+      --job|-j) job_id="${2:-}"; shift 2 ;;
+      --watch|-w) watch="true"; shift ;;
+      --interval|-i) interval="${2:-2}"; shift 2 ;;
       --*) err "Unknown option: $1"; exit 1 ;;
       *) target="$1"; shift ;;
     esac
@@ -3871,9 +3888,9 @@ cmd_task_complete() {
   shift || true
   while [ $# -gt 0 ]; do
     case "$1" in
-      --status) status="${2:-passed}"; shift 2 ;;
-      --exit-code) exit_code="${2:-}"; shift 2 ;;
-      --notes) notes="${2:-}"; shift 2 ;;
+      --status|-s) status="${2:-passed}"; shift 2 ;;
+      --exit-code|-x) exit_code="${2:-}"; shift 2 ;;
+      --notes|-n) notes="${2:-}"; shift 2 ;;
       --*) err "Unknown option: $1"; exit 1 ;;
       *) err "Unknown argument: $1"; exit 1 ;;
     esac
@@ -3899,17 +3916,17 @@ cmd_task_complete() {
 cmd_stop() {
   ensure_runtime
   local target="" all="false" archive="false" delete="false" list="false" task_id="" job_id=""
-  if [ $# -gt 0 ] && [[ ! "$1" =~ ^-- ]]; then
+  if [ $# -gt 0 ] && [[ ! "$1" =~ ^- ]]; then
     target="$1"; shift
   fi
   while [ $# -gt 0 ]; do
     case "$1" in
-      --all) all="true"; shift ;;
-      --archive) archive="true"; shift ;;
-      --delete) delete="true"; shift ;;
-      --list) list="true"; shift ;;
-      --task) task_id="${2:-}"; shift 2 ;;
-      --job) job_id="${2:-}"; shift 2 ;;
+      --all|-a) all="true"; shift ;;
+      --archive|-A) archive="true"; shift ;;
+      --delete|-d) delete="true"; shift ;;
+      --list|-l) list="true"; shift ;;
+      --task|-t) task_id="${2:-}"; shift 2 ;;
+      --job|-j) job_id="${2:-}"; shift 2 ;;
       --current) shift ;;
       *) err "Unknown option: $1"; exit 1 ;;
     esac
@@ -4010,7 +4027,7 @@ cmd_config() {
   local reset="false"
   while [ $# -gt 0 ]; do
     case "$1" in
-      --reset) reset="true"; shift ;;
+      --reset|-r) reset="true"; shift ;;
       *) err "Unknown option: $1"; exit 1 ;;
     esac
   done

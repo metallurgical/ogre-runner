@@ -67,6 +67,29 @@ print(t['id'])
   [ "$(python3 -c "import json; print(len(json.load(open('.ai/.ogre/state/tasks.json'))))")" = "0" ] || return 1
 }
 
+@test "feature short flags (-s -n -p -m -r -c -M) behave like their long forms" {
+  run "${OGRE_BIN}" feature -s "base feature" -n 42 -p claude -m claude-sonnet-5 -r low -c -M
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" == *"Next inside Claude Code: read"* ]] || return 1
+  [ -f ".ai/.ogre/issues/issue-42.md" ] || return 1
+  [ "$(state_field 42 status)" = "planning" ] || return 1
+}
+
+@test "feature -P (short --plan) and -p (short --planner) don't collide" {
+  run "${OGRE_BIN}" feature -s "base feature" -n 42 -P custom-plan.md -p codex -M
+  [ "${status}" -eq 0 ] || return 1
+  [ "$(state_field 42 plan_path)" = ".ai/.ogre/plans/custom-plan.md" ] || return 1
+}
+
+@test "feature -k (short --blocker) and -K (short --blocks) don't collide" {
+  run "${OGRE_BIN}" feature 42 -K 10 -k 11 -M
+  [ "${status}" -eq 0 ] || return 1
+  [ -f ".ai/.ogre/issues/issue-10.md" ] || return 1
+  [ -f ".ai/.ogre/issues/issue-11.md" ] || return 1
+  [[ "$(cat .ai/.ogre/tmp/issue-42/plan-runner.md)" == *"issue-10.md"* ]] || return 1
+  [[ "$(cat .ai/.ogre/tmp/issue-42/plan-runner.md)" == *"issue-11.md"* ]] || return 1
+}
+
 @test "feature --background starts detached and the plan task eventually passes" {
   export MOCK_CLAUDE_WRITE_FILE="$(pwd)/.ai/.ogre/plans/issue-42.md"
   run "${OGRE_BIN}" feature --statement "base feature" --name 42 --background

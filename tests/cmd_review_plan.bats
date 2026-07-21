@@ -28,6 +28,14 @@ load test_helper
   [[ "${output}" == *"Review output: .ai/.ogre/reviews/issue-42/plan-review.md"* ]] || return 1
 }
 
+@test "review-plan short flags (-R -m -r -M) behave like their long forms, -R != -r" {
+  write_plan_with_steps 42 "Do the thing"
+  run "${OGRE_BIN}" review-plan 42 -R codex -m gpt-5.6-sol -r low -M
+  [ "${status}" -eq 0 ] || return 1
+  [ -f ".ai/.ogre/tmp/issue-42/plan-review-runner.md" ] || return 1
+  [[ "$(state_field 42 reviewer)" == *"codex"* ]] || return 1
+}
+
 @test "review-plan default spawns an isolated session and marks the review task passed" {
   write_plan_with_steps 42 "Do the thing"
   export MOCK_CLAUDE_WRITE_FILE="$(pwd)/.ai/.ogre/reviews/issue-42/plan-review.md"

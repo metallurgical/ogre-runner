@@ -152,6 +152,12 @@ call:
 tail -n +1 -f <logpath> | jq -Rc --unbuffered '<per-rescuer transform below>'
 ```
 
+**TL;DR before the details below: every delivered Monitor event gets summarized as
+`⎿ ` + the summary text in a single backtick code span** (e.g.
+`` ⎿ `Reading skill docs, still investigating.` ``) **— never bold, never plain prose.**
+Full rationale is restated at the bottom of this section; it's repeated here too because
+it's easy to lose track of by the time you're several events into a live run.
+
 Do NOT prefix this with your own wait-for-file loop (e.g. `until [ -s <logpath> ]; do
 sleep 1; done`) before starting the tail - `tail -n +1 -f` already reads from the start
 of the file itself. A wait-loop just adds dead time in front for no benefit, and if you

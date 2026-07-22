@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OGRE_VERSION="1.4.49"
+OGRE_VERSION="1.4.50"
 RUNTIME=".ai/.ogre"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -59,6 +59,8 @@ Usage:
   ogre stop [issue] [--all] [--archive] [--delete] [--list]     (stop the job: cascades to all its tasks)
   ogre stop --job <job-id> [--archive] [--delete] [--list]      (same, addressed by job id)
   ogre stop --task <task-id>                                    (stop ONE task only, job/siblings untouched)
+  ogre prune [--all] [--older-than N] [--yes]                   (alias: purge - bulk-delete finished data instead of one issue at a time)
+                                   (default: dry-run, rescue-only, only fully-terminal issues finished >1 day ago. --all also considers completed/stopped feature/execute issues. --yes actually deletes; without it, nothing is touched)
   ogre config                                                   (show every config.json key ogre reads: dot path, current value/source, and the CLI flag that overrides it)
   ogre config --reset                                           (back up config.json to config.json.bak, then overwrite it with fresh-install defaults)
   ogre status [issue]
@@ -1731,7 +1733,14 @@ PY
 # the belt-and-suspenders GC run opportunistically from `ogre status` (no args)
 # so a stale ledger self-heals instead of growing without bound. Prints the
 # number removed. Never touches a row whose issue still has state (a live or
-# in-flight job always has one - write_state creates it before any task).
+# in-flight job always has one - write_state creates it before any task) -
+# EXCEPT rescue tasks (issue starts with "rescue-"), which never get a state
+# file at all by design (see cmd_rescue: "no job/state file is created"). Those
+# are always excluded from this live-check regardless of state-file presence,
+# or every plain `ogre status` call would silently strip every rescue ledger
+# row - including ones still `running` - the moment it ran. `ogre prune`
+# (rescue-scoped, status-aware, age-gated) is the correct cleanup path for
+# rescue rows; this function must never race it by deleting a live one first.
 compact_tasks_ledger() {
   local path statedir
   path="$(tasks_path)"
@@ -1750,7 +1759,7 @@ for p in glob.glob(os.path.join(statedir, "issue-*.json")):
     b = os.path.basename(p)
     live.add(b[len("issue-"):-len(".json")])
 before = len(tasks)
-kept = [t for t in tasks if str(t.get("issue")) in live]
+kept = [t for t in tasks if str(t.get("issue", "")).startswith("rescue-") or str(t.get("issue")) in live]
 removed = before - len(kept)
 if removed:
     dump_json(kept, path)
@@ -4022,6 +4031,131 @@ PY
   fi
 }
 
+# cmd_prune (alias: purge) - bulk-deletes finished Ogre data instead of making
+# the user target one issue at a time with `ogre stop <issue> --delete`.
+# Default scope: only "rescue-*" ledger tasks whose status is fully terminal
+# (passed/failed/stopped - never a pending/running one, and never one where
+# ANY task under the same issue is still non-terminal) and whose most recent
+# ended_at/updated_at is older than --older-than days (default 1, a safety
+# margin so a just-finished rescue's log isn't yanked out from under someone
+# still reading it). --all extends the same age-gated sweep to regular
+# feature/execute issues too, but only ones whose own state.json status is
+# "completed" or "stopped" - the same terminal states print_job_summary
+# already uses to recommend `ogre stop <issue> --delete`/--archive itself, so
+# this never touches an issue that's still mid-plan or mid-execution.
+# Always dry-run by default (prints what's eligible, deletes nothing) - pass
+# --yes to actually delete. Reuses delete_issue_data per eligible issue, the
+# same primitive `ogre stop <issue> --delete` already uses, so the actual
+# deletion logic (files + ledger rows) has exactly one implementation.
+cmd_prune() {
+  ensure_runtime
+  local all="false" yes="false" older_than="1"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --all|-a) all="true"; shift ;;
+      --yes|-y) yes="true"; shift ;;
+      --older-than|-o) older_than="${2:-1}"; shift 2 ;;
+      *) err "Unknown option: $1"; exit 1 ;;
+    esac
+  done
+  [[ "$older_than" =~ ^[0-9]+$ ]] || { err "--older-than must be a non-negative integer (days)"; exit 1; }
+
+  local eligible
+  eligible="$(python3 - "$(tasks_path)" "$RUNTIME/state" "$older_than" "$all" <<'PY'
+import json, sys, glob, os, datetime
+
+tasks_path, statedir, older_than, all_scope = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4] == "true"
+cutoff = datetime.datetime.now().astimezone() - datetime.timedelta(days=older_than)
+
+def parse(ts):
+    if not ts:
+        return None
+    try:
+        return datetime.datetime.fromisoformat(ts)
+    except Exception:
+        return None
+
+try:
+    tasks = json.load(open(tasks_path))
+except Exception:
+    tasks = []
+
+by_issue = {}
+for t in tasks:
+    issue = str(t.get("issue") or "")
+    if not issue.startswith("rescue-"):
+        continue
+    by_issue.setdefault(issue, []).append(t)
+
+for issue, rows in sorted(by_issue.items()):
+    if any(r.get("status") not in ("passed", "failed", "stopped") for r in rows):
+        continue
+    finished_ats = [f for f in (parse(r.get("ended_at") or r.get("updated_at")) for r in rows) if f]
+    if not finished_ats:
+        continue
+    latest = max(finished_ats)
+    if latest > cutoff:
+        continue
+    print("rescue\t{}\t{}".format(issue, latest.isoformat()))
+
+if all_scope:
+    for p in sorted(glob.glob(os.path.join(statedir, "issue-*.json"))):
+        try:
+            d = json.load(open(p))
+        except Exception:
+            continue
+        if d.get("status") not in ("completed", "stopped"):
+            continue
+        updated = parse(d.get("updated_at"))
+        if not updated or updated > cutoff:
+            continue
+        issue = d.get("issue")
+        if issue:
+            print("feature\t{}\t{}".format(issue, updated.isoformat()))
+PY
+)"
+
+  if [ -z "$eligible" ]; then
+    if [ "$all" = "true" ]; then
+      log "Nothing to prune (--all scope; nothing finished more than $older_than day(s) ago)."
+    else
+      log "Nothing to prune (rescue-only scope; nothing finished more than $older_than day(s) ago). Pass --all to also consider finished feature/execute issues."
+    fi
+    exit 0
+  fi
+
+  local count total_kb=0
+  count="$(printf '%s\n' "$eligible" | grep -c .)"
+  log "Eligible for pruning (finished more than $older_than day(s) ago):"
+  log ""
+  while IFS=$'\t' read -r kind issue finished_at; do
+    local logdir="$RUNTIME/logs/issue-$issue" tmpdir="$RUNTIME/tmp/issue-$issue"
+    local kb human
+    kb="$( { du -sk "$logdir" "$tmpdir" 2>/dev/null || true; } | awk '{s+=$1} END{print s+0}')"
+    total_kb=$((total_kb + kb))
+    human="$(awk -v kb="$kb" 'BEGIN{ if (kb>=1048576) printf "%.1fG", kb/1048576; else if (kb>=1024) printf "%.1fM", kb/1024; else printf "%dK", kb; }')"
+    printf '  %-8s %-45s finished %s  (~%s)\n' "$kind" "$issue" "$finished_at" "$human"
+  done <<< "$eligible"
+
+  local total_human
+  total_human="$(awk -v kb="$total_kb" 'BEGIN{ if (kb>=1048576) printf "%.1fG", kb/1048576; else if (kb>=1024) printf "%.1fM", kb/1024; else printf "%dK", kb; }')"
+  log ""
+  log "Total: $count issue(s), ~$total_human reclaimable."
+
+  if [ "$yes" != "true" ]; then
+    log ""
+    log "Dry run - nothing deleted. Re-run with --yes to actually delete."
+    exit 0
+  fi
+
+  log ""
+  while IFS=$'\t' read -r kind issue finished_at; do
+    delete_issue_data "$issue"
+  done <<< "$eligible"
+  log ""
+  log "Pruned $count issue(s), reclaimed ~$total_human."
+}
+
 # cmd_config - print every config.json key ogre actually reads: its dot path,
 # current value (config.json if set, else the hardcoded fallback), and the
 # CLI flag/command that overrides it for one invocation. Exists because
@@ -4123,6 +4257,7 @@ main() {
     task-list) cmd_task_list "$@" ;;
     task-complete) cmd_task_complete "$@" ;;
     stop) cmd_stop "$@" ;;
+    prune|purge) cmd_prune "$@" ;;
     config) cmd_config "$@" ;;
     -v|--version|version) echo "Ogre $OGRE_VERSION" ;;
     -h|--help|help|"") usage ;;

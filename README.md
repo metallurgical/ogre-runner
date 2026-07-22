@@ -436,6 +436,23 @@ Stops, archives, or deletes Ogre runtime data. Does not revert code changes.
 | `--delete` / `-d` | `/ogre:stop 107 --delete` | Delete the issue's runtime data (after confirmation) |
 | `--list` / `-l` | `/ogre:stop 107 --list` | Print every runtime file/dir path for the issue without deleting, so the user can pick individually |
 
+### `/ogre:prune`
+
+Bulk-deletes finished Ogre runtime data instead of targeting one issue at a time with `/ogre:stop --delete` - mainly for the ad-hoc `logs/`/`tmp/` directories every `/ogre:rescue` call creates, which nothing else cleans up automatically. Alias: `ogre purge` / `/ogre:purge` (same command, same flags). Always dry-run by default - pass `--yes` to actually delete.
+
+```
+/ogre:prune
+/ogre:prune --all --older-than 7 --yes
+```
+
+| Option | Example | Description |
+| :--- | :--- | :--- |
+| `--all` / `-a` | `/ogre:prune --all` | Also considers completed/stopped feature/execute issues, not just `rescue-*` tasks |
+| `--older-than` / `-o N` | `/ogre:prune --older-than 7` | Age safety margin in days (default `1`) - only tasks/issues finished more than N days ago are eligible. `--older-than 0` overrides for immediate cleanup |
+| `--yes` / `-y` | `/ogre:prune --yes` | Actually deletes. Without it, only previews what's eligible (issue, finished date, reclaimable size) and deletes nothing |
+
+Eligibility: a `rescue-*` issue only qualifies if *every* task under it is fully terminal (`passed`/`failed`/`stopped`) - never one with any `pending`/`running` task. Under `--all`, a feature/execute issue only qualifies if its own state status is `completed` or `stopped` - the same terminal states `/ogre:status` already flags as ready for archive/delete. Deletion reuses the same primitive `/ogre:stop <issue> --delete` uses.
+
 ### `/ogre:config`
 
 Prints `config.json`'s actual nested shape (not a flattened dot-path list), each line annotated with whether that value came from the file or a hardcoded fallback, and the CLI flag that overrides it for one invocation. Useful because config.json has no schema of its own — a key set in the wrong spot (e.g. top-level instead of inside `"defaults"`) just does nothing, silently.

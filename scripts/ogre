@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OGRE_VERSION="1.4.46"
+OGRE_VERSION="1.4.47"
 RUNTIME=".ai/.ogre"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -16,15 +16,19 @@ Usage:
   ogre init
   ogre feature <issue-number|issue-url|issue-file> [--blocks 1,2,url,path] [--plan issue-107.md] [--planner claude|codex] [--model MODEL] [--reasoning LEVEL] [--browser-check] [--main|--background] [--live]
   ogre feature --statement "free text description" [--name my-feature] [--blocks 1,2,url,path] [--plan NAME.md] [--planner claude|codex] [--model MODEL] [--reasoning LEVEL] [--browser-check] [--main|--background] [--live]
+                                   (alias: ogre plan - same command, same flags)
                                    (--browser-check: opt-in - the generated plan tags steps needing real browser verification with [BROWSER-CHECK]. Default omits the tag entirely; the user verifies the feature themselves)
                                    (--planner/--model omitted: falls back to defaults.planner in .ai/.ogre/config.json, then claude/claude-sonnet-5)
                                    (default spawns an isolated planner subprocess, same isolation model as ogre execute; --main runs inline in the current session, --background detaches)
   ogre add-blocker <issue> <blocker-number|url|path> [--planner claude|codex] [--model MODEL] [--reasoning LEVEL] [--force] [--main|--background] [--live]
   ogre add-blocker <issue> --statement "free text blocker" [--name blocker-slug] [--planner claude|codex] [--model MODEL] [--reasoning LEVEL] [--force] [--main|--background] [--live]
+                                   (alias: ogre blocker - same command, same flags)
                                    (--planner/--model omitted: falls back to whichever planner ogre feature already seeded for this issue)
   ogre review-plan <issue-or-plan> [--reviewer claude|codex] [--model MODEL] [--reasoning LEVEL] [--main|--background] [--live]
+                                   (alias: ogre review - same command, same flags)
                                    (--reviewer/--model omitted: falls back to defaults.plan_reviewer in .ai/.ogre/config.json, then claude/claude-sonnet-5)
   ogre rescue "<freeform task>" [--rescuer claude|codex] [--model MODEL] [--reasoning LEVEL] [--name slug] [--mcp-config PATH] [--main|--background] [--live]
+                                   (alias: ogre run - same command, same flags)
                                    (standalone hotfix/task, no plan or issue involved - e.g. "fix error in login backend". Not tied to any ogre feature job.)
                                    (--rescuer/--model omitted: falls back to defaults.rescuer in .ai/.ogre/config.json, then claude/claude-sonnet-5)
                                    (--name slug: override the auto-derived slug used for its state/log/tmp paths, e.g. rescue-<slug>)
@@ -4110,10 +4114,10 @@ main() {
   shift || true
   case "$cmd" in
     init) cmd_init "$@" ;;
-    feature) cmd_feature "$@" ;;
-    add-blocker) cmd_add_blocker "$@" ;;
-    review-plan) cmd_review_plan "$@" ;;
-    rescue) cmd_rescue "$@" ;;
+    feature|plan) cmd_feature "$@" ;;
+    add-blocker|blocker) cmd_add_blocker "$@" ;;
+    review-plan|review) cmd_review_plan "$@" ;;
+    rescue|run) cmd_rescue "$@" ;;
     execute|exec) cmd_execute "$@" ;;
     status) cmd_status "$@" ;;
     task-list) cmd_task_list "$@" ;;

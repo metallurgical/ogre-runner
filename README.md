@@ -211,7 +211,7 @@ Same pass-through-unvalidated rule as `--model`. Omit `--reasoning` entirely to 
 
 ### `/ogre:feature`
 
-Starts a new workflow and generates the planning runner. It also creates the `.ai/.ogre/` runtime folders/templates automatically if they do not exist, so you do not need to run `ogre init` first. The main path is freeform text:
+Starts a new workflow and generates the planning runner. It also creates the `.ai/.ogre/` runtime folders/templates automatically if they do not exist, so you do not need to run `ogre init` first. CLI/skill alias: `ogre plan` / `/ogre:plan` (same command, same flags). The main path is freeform text:
 
 ```
 /ogre:feature --statement "need a forgot-password page" --name forgot-password
@@ -242,7 +242,7 @@ By default the planner runs in an isolated `claude -p`/`codex exec` subprocess, 
 
 ### `/ogre:add-blocker`
 
-Attaches a new blocker to an issue already tracked by Ogre, and forces the plan to be revised. Refuses once execution has started (use `--force` to override; manual risk, since already-completed steps aren't retroactively revised).
+Attaches a new blocker to an issue already tracked by Ogre, and forces the plan to be revised. Refuses once execution has started (use `--force` to override; manual risk, since already-completed steps aren't retroactively revised). CLI/skill alias: `ogre blocker` / `/ogre:blocker` (same command, same flags).
 
 ```
 /ogre:add-blocker 107 --statement "must also invalidate old reset tokens"
@@ -268,7 +268,7 @@ Accepts the same input types as `/ogre:feature` for the blocker itself. Re-plann
 
 ### `/ogre:review-plan`
 
-Reviews a generated plan for hallucinations, missing validation, risky assumptions, over-scoped steps.
+Reviews a generated plan for hallucinations, missing validation, risky assumptions, over-scoped steps. CLI/skill alias: `ogre review` / `/ogre:review` (same command, same flags).
 
 ```
 /ogre:review-plan 107 --reviewer claude
@@ -288,7 +288,7 @@ Same isolated-subprocess-by-default model as `/ogre:feature`/`/ogre:execute`: de
 
 ### `/ogre:execute`
 
-Executes one checklist item (or all remaining, with `--all`) from an approved plan. CLI alias: `ogre exec` (same command, same flags).
+Executes one checklist item (or all remaining, with `--all`) from an approved plan. CLI/skill alias: `ogre exec` / `/ogre:exec` (same command, same flags).
 
 ```
 /ogre:execute 107 --executor codex
@@ -343,7 +343,7 @@ So passing `--browser-check` to `/ogre:feature` without a browser MCP configured
 
 ### `/ogre:rescue`
 
-A standalone hotfix/task runner - no plan, no job, no issue involved. For when going through `/ogre:feature` → `/ogre:review-plan` → `/ogre:execute` would be overkill for what you actually want done right now:
+A standalone hotfix/task runner - no plan, no job, no issue involved. For when going through `/ogre:feature` → `/ogre:review-plan` → `/ogre:execute` would be overkill for what you actually want done right now. CLI/skill alias: `ogre run` / `/ogre:run` (same command, same flags - deliberately not `help`, which already means "print usage").
 
 ```
 /ogre:rescue "fix error in login backend"

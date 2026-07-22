@@ -1,6 +1,6 @@
 {
   "name": "ogre",
-  "version": "1.4.46",
+  "version": "1.4.47",
   "description": "Issue-to-plan-to-execution workflow helper for Claude Code + Codex with runtime state under .ai/.ogre.",
   "author": {
     "name": "Norlihazmey Ghazali",

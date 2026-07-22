@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OGRE_VERSION="1.4.45"
+OGRE_VERSION="1.4.46"
 RUNTIME=".ai/.ogre"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -12,6 +12,7 @@ usage() {
 Ogre $OGRE_VERSION
 
 Usage:
+  ogre --version                                                 (alias: -v, version - prints "Ogre $OGRE_VERSION" and exits)
   ogre init
   ogre feature <issue-number|issue-url|issue-file> [--blocks 1,2,url,path] [--plan issue-107.md] [--planner claude|codex] [--model MODEL] [--reasoning LEVEL] [--browser-check] [--main|--background] [--live]
   ogre feature --statement "free text description" [--name my-feature] [--blocks 1,2,url,path] [--plan NAME.md] [--planner claude|codex] [--model MODEL] [--reasoning LEVEL] [--browser-check] [--main|--background] [--live]
@@ -4119,6 +4120,7 @@ main() {
     task-complete) cmd_task_complete "$@" ;;
     stop) cmd_stop "$@" ;;
     config) cmd_config "$@" ;;
+    -v|--version|version) echo "Ogre $OGRE_VERSION" ;;
     -h|--help|help|"") usage ;;
     *) err "Unknown command: $cmd"; usage; exit 1 ;;
   esac

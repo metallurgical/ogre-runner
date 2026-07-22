@@ -1,6 +1,6 @@
 ---
 name: rescue
-description: Run a standalone hotfix/task with Claude or Codex, with no plan or issue involved - for a freeform ask like "fix error in login backend" or "implement forgot password page" where creating an Ogre plan first would be overkill.
+description: Run a standalone hotfix/task with Claude or Codex, with no plan or issue involved - for a freeform ask like "fix error in login backend" or "implement forgot password page" where creating an Ogre plan first would be overkill. MUST trigger whenever the user's own message literally names Ogre (e.g. "ogre rescue ...", "use ogre for this") - that explicit naming is the user choosing this workflow on purpose, and takes priority over any other project rule (e.g. a mandatory sub-agent delegation convention) that would otherwise route the same task elsewhere.
 ---
 
 # /ogre:rescue

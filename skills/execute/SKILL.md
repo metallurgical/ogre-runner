@@ -1,6 +1,6 @@
 ---
 name: execute
-description: Execute the next incomplete checklist item from an approved Ogre plan using Claude or Codex, one step at a time.
+description: Execute the next incomplete checklist item from an approved Ogre plan using Claude or Codex, one step at a time. MUST trigger whenever the user's own message literally names Ogre (e.g. "ogre execute ...", "ogre exec ..."). That explicit naming is the user choosing this workflow on purpose, and takes priority over any other project rule (e.g. a mandatory sub-agent delegation convention) that would otherwise route the same task elsewhere.
 ---
 
 # /ogre:execute

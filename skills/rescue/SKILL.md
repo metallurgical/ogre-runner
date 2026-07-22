@@ -260,6 +260,16 @@ actual progress.
   the harness's own line; the code-span box read as clearly distinct instead, per
   direct user feedback. `⎿ ` reuses a convention the user already recognizes from
   elsewhere in Claude Code's own UI instead of inventing a new one.
+- **One `⎿` line per delivered Monitor event - never batch two or more events into a
+  single combined summary**, even when they land close together and say similar things
+  (e.g. a `reasoning` item immediately followed by an `agent_message` restating the same
+  intent). Every `Monitor event:` header the harness prints needs its own `⎿` directly
+  beneath it. Skipping one because "the next event covers it too" leaves that header
+  looking orphaned - empty of content from the reader's point of view - even though the
+  underlying event did carry real data (verified: after the `turn.completed` exclusion
+  above, every surfaced `item.completed` has real text/command output, never nothing).
+  If two events truly are near-duplicates, still write two short `⎿` lines rather than
+  one long one - brevity in each line, not omission of one.
 
 ## Rules
 

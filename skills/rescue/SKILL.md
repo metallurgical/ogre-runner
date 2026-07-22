@@ -191,11 +191,20 @@ actual progress.
   get an early "it's alive" signal without waiting for the first full model turn:
   - codex:
     ```
-    fromjson? | select(.type=="thread.started" or .type=="item.completed" or .type=="turn.completed" or .type=="error")
+    fromjson? | select(.type=="thread.started" or .type=="item.completed" or .type=="error")
     ```
     `thread.started` is already tiny (`{"type":"thread.started","thread_id":"..."}`) -
     no transform needed, pass it through as the heartbeat. Skip `*.started`/`*.updated`
-    otherwise - they're per-step noise, not per-outcome.
+    otherwise - they're per-step noise, not per-outcome. **Do NOT include
+    `turn.completed`** - verified against real output, it carries zero displayable
+    content (`{"type":"turn.completed","usage":{"input_tokens":...}}`, token counts
+    only, no text/command/patch field to summarize). Passing it through produces a
+    bare `Monitor event: "..."` header with nothing underneath it once you go to
+    write the `⎿` summary - exactly the empty-header noise this filter exists to
+    avoid. Every `item.completed` does carry real content (its `item.type` varies -
+    `agent_message` has `.item.text`, `command_execution` has `.item.command`/
+    `.item.aggregated_output`, etc.) - summarize from whichever fields are present,
+    that part still needs your own judgment per item.
   - claude:
     ```
     fromjson? | if .type=="system" and .subtype=="init" then {type:"heartbeat", msg:"rescuer session started, model working"} elif .type=="assistant" or .type=="result" then . else empty end

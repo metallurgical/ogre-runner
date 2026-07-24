@@ -44,6 +44,12 @@ Optional flags (same shape as `/ogre:execute`'s):
   about the fix itself, purely a visibility option. See "Watching a `--live` rescue
   live" below for how to actually surface that as it happens; passing `--live` alone
   does nothing beyond changing the log file's format.
+- `--allow-unverified-paths` - opt-in escape hatch for `reject_invented_paths` (see
+  Behavior step 1): only pass this when `<task>` genuinely needs to name a file that
+  doesn't exist yet (e.g. "create `services/PdfExport.php`"). Never pass it just to
+  get past the check on a file you weren't sure existed - that's exactly the case the
+  check exists to catch. If it fires and you don't recognize the filename as something
+  the user actually typed, drop the filename from `<task>` instead of adding this flag.
 
 ## Default
 
@@ -74,33 +80,37 @@ the user hasn't already been through that tradeoff this session.
 
 ## Behavior
 
-1. Do not grep/read/inspect the target codebase yourself before this call, even to
-   make the task text more precise. Pass the user's request through as `<task>`
-   near-verbatim (light wording cleanup only, e.g. dropping filler words, fixing
-   obvious typos/grammar) - do not pad it with file paths, function/variable names,
-   or implementation details you went and looked up first. Doing that research in
-   this session burns main-session context on work the isolated rescuer subprocess is
-   about to redo anyway once it starts - it defeats the entire point of `ogre
-   rescue`'s isolation (see "Default" above: "keeps main conversation context
-   untouched"). The rescuer (claude/codex) is fully capable of finding the right file
-   and reading it itself, in its own throwaway context, with its own full budget for
-   that discovery - that's what the isolated session is *for*.
-   **"Light wording cleanup" does NOT mean rewriting or paraphrasing.** Do not swap
-   the user's own words for more specific/technical vocabulary, even generic
-   UI/programming terms you already know without having looked at this codebase -
-   e.g. the user writes "quantity update" or "the plus minus thing," you do NOT
-   upgrade that to "quantity stepper" on your own initiative. That's not cleanup,
-   it's rewriting: it can silently narrow or misdescribe what the user meant (their
-   "quantity update" might not even be a stepper control), and every word you
-   generate to do it burns this session's own tokens for something the rescuer would
-   have described correctly itself once it actually looks at the file. If the user's
-   phrasing is genuinely ambiguous enough that you'd need to guess a term, that's the
-   "ask a clarifying question" exception below, not license to guess and rewrite.
-   Only exception: the user's own message already gives
-   you a file path/identifier directly (nothing to look up), or the task is
+1. **`<task>` is the user's own message, reused, not a paragraph you compose.** Default
+   action: copy the user's own wording for the task straight into `<task>`, verbatim.
+   Do not draft a new sentence/paragraph that "captures the same idea" - every word of
+   that drafting is (a) tokens this session burns for zero benefit, since the isolated
+   rescuer redoes the real discovery anyway, and (b) a chance to silently insert a
+   detail the user never said. Only two kinds of touch-up are allowed, and both are
+   edits to their words, not replacements of them:
+   - Trim pure filler/typos/grammar (e.g. "uhh can u also" -> "also").
+   - If a screenshot/image is attached, you may append a separate, clearly-labeled
+     block of literally-visible content only - e.g. `Observed in screenshot: button
+     labels "Pay now"/"Continue Shopping", status badge "UNPAID", "Not recorded" next
+     to payment date.` Quote what's on screen; do not narrate or explain it, and never
+     name a file/component/route from a screenshot - a rendered page cannot tell you
+     its own source filename, so any name you'd write there is a guess, not an
+     observation.
+   **Never upgrade the user's own vocabulary to something more specific/technical**
+   (e.g. "quantity update" -> "quantity stepper") **and never name a file, function,
+   route, table, column, config key, or API you haven't personally opened and
+   confirmed in this session** - both are guessing, not cleanup, dressed up as
+   helpfulness. `ogre rescue` itself now hard-rejects any `<task>` naming a source
+   file that doesn't exist anywhere in the repo (`reject_invented_paths`, checked
+   against `git ls-files`) as a backstop, but that only catches fabricated
+   *filenames* - it can't catch an invented function/route/table name, or a
+   paraphrase, so don't rely on it as the actual safeguard; the discipline above is
+   the real one.
+   Do not grep/read/inspect the target codebase yourself before this call, even to
+   make the task text more precise - that's research the isolated rescuer should do
+   itself, in its own throwaway context. Only exception to verbatim reuse: the task is
    ambiguous enough that you must ask the user a clarifying question before you can
-   even form `<task>` - that's a question back to the user, not research into the
-   repo.
+   even form `<task>` - that's a question back to the user, not license to guess and
+   fill in the gap yourself.
 2. Run:
    - `${CLAUDE_PLUGIN_ROOT}/scripts/ogre rescue "<task>" [flags]`
 3. Without `--main`, this call actually spawns codex/claude in a new isolated session -
@@ -277,11 +287,18 @@ actual progress.
 - Do not pre-research the repo (grep/read files) in this session before calling
   `ogre rescue` - see Behavior step 1. Pass the task through, let the isolated
   rescuer do its own discovery.
+- `<task>` is the user's own wording, reused verbatim (filler/typo trims and a
+  literally-quoted screenshot block are the only allowed touch-ups) - not a paragraph
+  you compose to "capture the idea." See Behavior step 1.
 - Do not rewrite/paraphrase the user's own wording into more specific or technical
   terms on your own initiative (e.g. "quantity update" -> "quantity stepper") - see
   Behavior step 1. That's guessing, not cleanup, and it costs this session's own
   tokens for zero benefit.
 - Do not invent files, methods, routes, tables, columns, config keys, or APIs.
+  `ogre rescue` hard-rejects a `<task>` naming a source file not found anywhere in
+  the repo (see `--allow-unverified-paths` under Inputs) as a backstop for the
+  filename case specifically - it is not a substitute for the discipline above,
+  since it can't detect an invented function/route/table name or a paraphrase.
 - Do not add unrelated refactors or change behavior outside what was asked.
 - Do not add packages unless the task clearly needs them.
 - Preserve existing project style.

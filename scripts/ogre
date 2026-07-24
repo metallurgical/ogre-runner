@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OGRE_VERSION="1.4.50"
+OGRE_VERSION="1.4.51"
 RUNTIME=".ai/.ogre"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -389,6 +389,40 @@ repo_drift_block() {
     echo "$dirty"
     echo '```'
   fi
+}
+
+# reject_invented_paths <statement> - scans a freeform task statement for
+# filename-like tokens (foo.vue, foo.blade.php, ...) and, inside a git repo,
+# hard-fails if any don't actually exist anywhere in the tree. Guards against
+# the driving Claude session inventing a plausible-sounding file/component name
+# on its own initiative instead of passing the user's own wording through
+# (caught in practice: a fabricated "PaymentReceipt.vue" that appeared nowhere
+# in the user's message or the screenshot it was describing). Prints nothing
+# and returns 0 outside a git repo, when no such token appears, or when every
+# token found is a real path.
+reject_invented_paths() {
+  local statement="$1"
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
+  local tokens
+  tokens="$(printf '%s' "$statement" | grep -oE '[A-Za-z0-9_-]+\.(blade\.php|vue|jsx?|tsx?|py|rb|go|java|kt|swift|cpp|hpp|cs|rs|c|h|php|erb)\b' | sort -u)"
+  [ -n "$tokens" ] || return 0
+  local files_cache missing="" token
+  files_cache="$(git ls-files 2>/dev/null)"
+  while IFS= read -r token; do
+    [ -n "$token" ] || continue
+    if ! printf '%s\n' "$files_cache" | grep -qE "(^|/)${token}\$"; then
+      missing="$missing $token"
+    fi
+  done <<EOF2
+$tokens
+EOF2
+  if [ -n "$missing" ]; then
+    err "Task statement names file(s) not found anywhere in this repo:$missing"
+    err "This looks like an invented/guessed filename rather than the user's own wording - the isolated rescuer discovers real files itself and shouldn't be handed a guessed path."
+    err "Re-pass the task without naming this file, or if it's a new file about to be created, add --allow-unverified-paths."
+    return 1
+  fi
+  return 0
 }
 
 # backfill_warning_block <state-path> - warning block for jobs whose ledger
@@ -2549,7 +2583,7 @@ EOF2
 # track by hand.
 cmd_rescue() {
   ensure_runtime
-  local statement="" rescuer="" model="" reasoning="" iso="new" name="" json_mode="" mcp_config=""
+  local statement="" rescuer="" model="" reasoning="" iso="new" name="" json_mode="" mcp_config="" allow_unverified=""
   if [ $# -gt 0 ] && [[ ! "$1" =~ ^- ]]; then
     statement="$1"; shift
   fi
@@ -2564,10 +2598,12 @@ cmd_rescue() {
       --main|-M) iso="main"; shift ;;
       --background|-b) iso="background"; shift ;;
       --live|-l) json_mode="yes"; shift ;;
+      --allow-unverified-paths) allow_unverified="yes"; shift ;;
       *) err "Unknown option: $1"; exit 1 ;;
     esac
   done
-  [ -n "$statement" ] || { err "Missing task description. Usage: ogre rescue \"<freeform task>\" [--rescuer claude|codex] [--model MODEL] [--reasoning LEVEL] [--name slug] [--mcp-config PATH] [--main|--background] [--live]"; exit 1; }
+  [ -n "$statement" ] || { err "Missing task description. Usage: ogre rescue \"<freeform task>\" [--rescuer claude|codex] [--model MODEL] [--reasoning LEVEL] [--name slug] [--mcp-config PATH] [--main|--background] [--live] [--allow-unverified-paths]"; exit 1; }
+  [ -n "$allow_unverified" ] || reject_invented_paths "$statement" || exit 1
 
   # --rescuer/--model win if passed; else fall back to defaults.rescuer in
   # .ai/.ogre/config.json - its own role, separate from defaults.executor, so

@@ -325,6 +325,34 @@ print(t['id'])
   [[ "$(cat "${args_file}")" == *"--mcp-config /tmp/fake-mcp.json"* ]] || return 1
 }
 
+@test "rescue rejects a task naming a source file that doesn't exist anywhere in the repo" {
+  git init -q
+  run "${OGRE_BIN}" rescue "fix rendering in PaymentReceipt.vue" --name path-test --main
+  [ "${status}" -eq 1 ] || return 1
+  [[ "${output}" == *"not found anywhere in this repo"* ]] || return 1
+  [[ "${output}" == *"PaymentReceipt.vue"* ]] || return 1
+}
+
+@test "rescue allows a task naming a source file that actually exists in the repo" {
+  git init -q
+  mkdir -p src/components
+  echo '<template></template>' > src/components/PaymentReceipt.vue
+  git add src/components/PaymentReceipt.vue
+  run "${OGRE_BIN}" rescue "fix rendering in PaymentReceipt.vue" --name path-test --main
+  [ "${status}" -eq 0 ] || return 1
+}
+
+@test "rescue --allow-unverified-paths bypasses the invented-file check" {
+  git init -q
+  run "${OGRE_BIN}" rescue "create NewReceipt.vue for this flow" --name path-test --main --allow-unverified-paths
+  [ "${status}" -eq 0 ] || return 1
+}
+
+@test "rescue does not check for invented paths outside a git repo" {
+  run "${OGRE_BIN}" rescue "fix rendering in PaymentReceipt.vue" --name path-test --main
+  [ "${status}" -eq 0 ] || return 1
+}
+
 @test "rescue's runner prompt tells a codex rescuer to use the external playwright MCP for browser checks" {
   run "${OGRE_BIN}" rescue "fix login bug" --rescuer codex --name login-fix --main
   [ "${status}" -eq 0 ] || return 1

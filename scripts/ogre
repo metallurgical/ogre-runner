@@ -27,12 +27,14 @@ Usage:
   ogre review-plan <issue-or-plan> [--reviewer claude|codex] [--model MODEL] [--reasoning LEVEL] [--main|--background] [--live]
                                    (alias: ogre review - same command, same flags)
                                    (--reviewer/--model omitted: falls back to defaults.plan_reviewer in .ai/.ogre/config.json, then claude/claude-sonnet-5)
-  ogre rescue "<freeform task>" [--rescuer claude|codex] [--model MODEL] [--reasoning LEVEL] [--name slug] [--mcp-config PATH] [--main|--background] [--live]
+  ogre rescue "<freeform task>" [--rescuer claude|codex] [--model MODEL] [--reasoning LEVEL] [--name slug] [--mcp-config PATH] [--main|--background] [--live] [--allow-unverified-paths] [--browser-check]
                                    (alias: ogre run - same command, same flags)
                                    (standalone hotfix/task, no plan or issue involved - e.g. "fix error in login backend". Not tied to any ogre feature job.)
                                    (--rescuer/--model omitted: falls back to defaults.rescuer in .ai/.ogre/config.json, then claude/claude-sonnet-5)
                                    (--name slug: override the auto-derived slug used for its state/log/tmp paths, e.g. rescue-<slug>)
                                    (--mcp-config PATH: browser MCP for the rescue task, e.g. to drive Playwright for a live browser check; also settable as "browser_mcp" in .ai/.ogre/config.json. Same wiring as ogre execute's [BROWSER-CHECK] steps)
+                                   (--browser-check: opt-in, off by default - only then does the runner tell the rescuer to verify via a real browser MCP. Same opt-in convention as ogre feature's [BROWSER-CHECK] tagging - omitted, no browser/Playwright mention is injected at all, even for UI-sounding tasks)
+                                   (--allow-unverified-paths: skip the check that rejects a task naming a source file not found anywhere in the repo - only for tasks that genuinely create a new file)
                                    (default spawns an isolated rescuer subprocess, same isolation model as ogre execute; --main runs inline in the current session, --background detaches)
                                    (no job/state file is created - track it via "ogre status --task <id>" / "ogre stop --task <id>" using the task id it prints)
   ogre execute <issue-or-plan> [--executor codex|claude] [--model MODEL] [--reasoning LEVEL] [--mcp-config PATH] [--all] [--max-steps N] [--fresh|--resume] [--main|--background] [--yes] [--live]
@@ -2583,7 +2585,7 @@ EOF2
 # track by hand.
 cmd_rescue() {
   ensure_runtime
-  local statement="" rescuer="" model="" reasoning="" iso="new" name="" json_mode="" mcp_config="" allow_unverified=""
+  local statement="" rescuer="" model="" reasoning="" iso="new" name="" json_mode="" mcp_config="" allow_unverified="" browser_check=""
   if [ $# -gt 0 ] && [[ ! "$1" =~ ^- ]]; then
     statement="$1"; shift
   fi
@@ -2599,10 +2601,11 @@ cmd_rescue() {
       --background|-b) iso="background"; shift ;;
       --live|-l) json_mode="yes"; shift ;;
       --allow-unverified-paths) allow_unverified="yes"; shift ;;
+      --browser-check) browser_check="yes"; shift ;;
       *) err "Unknown option: $1"; exit 1 ;;
     esac
   done
-  [ -n "$statement" ] || { err "Missing task description. Usage: ogre rescue \"<freeform task>\" [--rescuer claude|codex] [--model MODEL] [--reasoning LEVEL] [--name slug] [--mcp-config PATH] [--main|--background] [--live] [--allow-unverified-paths]"; exit 1; }
+  [ -n "$statement" ] || { err "Missing task description. Usage: ogre rescue \"<freeform task>\" [--rescuer claude|codex] [--model MODEL] [--reasoning LEVEL] [--name slug] [--mcp-config PATH] [--main|--background] [--live] [--allow-unverified-paths] [--browser-check]"; exit 1; }
   [ -n "$allow_unverified" ] || reject_invented_paths "$statement" || exit 1
 
   # --rescuer/--model win if passed; else fall back to defaults.rescuer in
@@ -2634,9 +2637,17 @@ cmd_rescue() {
   # runs fully unsandboxed, so it can reach a real browser via its own
   # external Playwright MCP server without any extra wiring here.
   [ -n "$mcp_config" ] || mcp_config="$(config_browser_mcp)"
-  local browser_force_note=""
-  if [ "$rescuer" = "codex" ]; then
-    browser_force_note="Browser tools (if this task needs live browser verification): use ONLY the external \"playwright\" MCP server tools (browser_navigate, browser_snapshot, etc.) directly. Do NOT use node_repl, the in-app browser, agent.browsers, or browser-client - those require the Codex desktop app and have no session in this headless spawn, so they will fail."
+  # Browser-verification wording is opt-in (--browser-check), same convention
+  # as ogre feature's [BROWSER-CHECK] tagging - never injected by default, even
+  # for a UI-sounding task, so a codex rescuer isn't nudged toward Playwright
+  # on tasks that never asked for live verification.
+  local browser_check_line="" browser_force_note=""
+  if [ -n "$browser_check" ]; then
+    if [ "$rescuer" = "codex" ]; then
+      browser_force_note="Browser tools (mandatory for this task): use ONLY the external \"playwright\" MCP server tools (browser_navigate, browser_snapshot, etc.) directly. Do NOT use node_repl, the in-app browser, agent.browsers, or browser-client - those require the Codex desktop app and have no session in this headless spawn, so they will fail."
+    fi
+    browser_check_line="* This task needs live browser verification: use your browser MCP tools (e.g. Playwright) to actually render and observe it, not just read markup/CSS/JS. ${browser_force_note:+$browser_force_note }If no browser MCP is available in this session, say so in your report instead of skipping the check silently.
+"
   fi
 
   local slug
@@ -2676,8 +2687,7 @@ Rules:
 * Do not add packages unless strictly required for this task.
 * Preserve existing project style and conventions.
 * Prefer the smallest safe change that fully addresses the task.
-* If this task needs live browser verification (e.g. checking a UI fix actually renders/works), use your browser MCP tools (e.g. Playwright) to actually drive and observe it - not just reading markup/CSS/JS. ${browser_force_note:+$browser_force_note }If no browser MCP is available in this session, say so in your report instead of skipping the check silently.
-* Before finishing, run \`git status --porcelain\` yourself. If the working tree already had unrelated changes you didn't make (e.g. the user's own hand-edit or hotfix made alongside this task), do NOT stop and do NOT revert/touch them - leave them as-is, don't attribute them to this task's own work, and mention them briefly in your final report. Only stop for this if a file looks genuinely alarming (a credential/secret, a half-finished destructive edit) rather than an ordinary incidental edit.
+${browser_check_line}* Before finishing, run \`git status --porcelain\` yourself. If the working tree already had unrelated changes you didn't make (e.g. the user's own hand-edit or hotfix made alongside this task), do NOT stop and do NOT revert/touch them - leave them as-is, don't attribute them to this task's own work, and mention them briefly in your final report. Only stop for this if a file looks genuinely alarming (a credential/secret, a half-finished destructive edit) rather than an ordinary incidental edit.
 * Stop and report if validation fails rather than leaving a broken state.
 ${completion_rule}
 Report back: files changed, reason for each, validation commands run, and their result.

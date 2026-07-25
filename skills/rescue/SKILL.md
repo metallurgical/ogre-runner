@@ -50,6 +50,25 @@ Optional flags (same shape as `/ogre:execute`'s):
   get past the check on a file you weren't sure existed - that's exactly the case the
   check exists to catch. If it fires and you don't recognize the filename as something
   the user actually typed, drop the filename from `<task>` instead of adding this flag.
+- `--browser-check` - **opt-in, off by default, and it's the driving session's job to
+  add it - the user never has to type this flag themselves.** Only when passed does
+  the runner prompt tell the rescuer to verify via a real browser MCP (Playwright);
+  omitted (the default), the runner says nothing about browser tools at all, even for
+  a UI-sounding task. This mirrors `/ogre:feature`'s `[BROWSER-CHECK]` tagging being
+  opt-in, not automatic - same rule: don't pass it unless the user's own message asks
+  for live/browser-driven verification, in their own natural wording, not the literal
+  flag name. Recognize intent, not syntax - e.g. "use playwright/live browser to
+  testing and fix if found anything", "check it actually works in a real browser",
+  "verify this renders correctly" all mean add `--browser-check` when building the
+  `ogre rescue "<task>" ...` call, same as if they'd typed the flag. Do NOT infer this
+  from the task merely touching UI/frontend code - "fix checkout page styling" does
+  not imply `--browser-check` on its own; the task has to actually ask for a live
+  browser check, not just a code edit. Previously this instruction was unconditional
+  on every rescue (a real bug, not a design choice) - a codex rescuer reading an
+  unconditional Playwright call-out on every single task, UI-related or not, would
+  routinely decide "yes this needs it" even when nothing about the task asked for
+  live verification. If the user hasn't said or clearly implied they want a
+  browser-driven check, leave this off.
 
 ## Default
 

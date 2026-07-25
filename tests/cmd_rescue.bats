@@ -353,10 +353,24 @@ print(t['id'])
   [ "${status}" -eq 0 ] || return 1
 }
 
-@test "rescue's runner prompt tells a codex rescuer to use the external playwright MCP for browser checks" {
-  run "${OGRE_BIN}" rescue "fix login bug" --rescuer codex --name login-fix --main
+@test "rescue --browser-check tells a codex rescuer to use the external playwright MCP" {
+  run "${OGRE_BIN}" rescue "fix login bug" --rescuer codex --name login-fix --main --browser-check
   [ "${status}" -eq 0 ] || return 1
   [[ "$(cat .ai/.ogre/tmp/issue-rescue-login-fix/rescue-runner.md)" == *"external \"playwright\" MCP server"* ]] || return 1
+}
+
+@test "rescue without --browser-check never mentions browser tools/Playwright, even for codex" {
+  run "${OGRE_BIN}" rescue "fix checkout page styling" --rescuer codex --name login-fix --main
+  [ "${status}" -eq 0 ] || return 1
+  [[ "$(cat .ai/.ogre/tmp/issue-rescue-login-fix/rescue-runner.md)" != *laywright* ]] || return 1
+  [[ "$(cat .ai/.ogre/tmp/issue-rescue-login-fix/rescue-runner.md)" != *"browser MCP"* ]] || return 1
+}
+
+@test "rescue --browser-check with claude rescuer mentions browser verification but not the codex-only playwright-force note" {
+  run "${OGRE_BIN}" rescue "fix login bug" --name login-fix --main --browser-check
+  [ "${status}" -eq 0 ] || return 1
+  [[ "$(cat .ai/.ogre/tmp/issue-rescue-login-fix/rescue-runner.md)" == *"live browser verification"* ]] || return 1
+  [[ "$(cat .ai/.ogre/tmp/issue-rescue-login-fix/rescue-runner.md)" != *"mandatory for this task"* ]] || return 1
 }
 
 @test "rescue --live --background still passes --json through to the detached rescuer" {

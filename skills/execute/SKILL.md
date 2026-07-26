@@ -46,9 +46,9 @@ names an actual CLI flag/short-form, pass that exact token through unchanged int
 `ogre execute ...` call — do not translate it into a different flag based on a guess
 at what they meant, and do not silently substitute a similarly-spelled one you assume
 is equivalent. `--reasoning` is `-R` (uppercase, consistent with every other
-subcommand's reasoning flag) — `--retry` lost its short flag entirely as a result (no
-`-r`/`-R` collision anymore, `--retry` must be spelled out). `-f`/`-F`
-(`--fresh`/`--resume`) and `-m`/`-M` (`--model`/`--main`) still differ only by case
+subcommand's reasoning flag) — `--retry` reclaimed the now-free `-r` (no `-r`/`-R`
+collision anymore since they're unrelated single letters, not a case-only pair).
+`-f`/`-F` (`--fresh`/`--resume`) and `-m`/`-M` (`--model`/`--main`) still differ only by case
 with unrelated-or-opposite meanings, so a wrong guess on either is silent (no parse
 error, just the wrong behavior) — this is exactly how `-F` got treated as `--fresh`
 instead of `--resume` in practice. If you don't recognize a flag/short-form, check

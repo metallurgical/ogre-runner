@@ -168,14 +168,14 @@ print(t['id'])
   [ "${status}" -eq 0 ] || return 1
 }
 
-@test "execute --retry (no short flag - -R is --reasoning now) works alongside -R" {
+@test "execute -r (short --retry) is distinct from -R (short --reasoning)" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "First step" "Second step"
   export MOCK_CLAUDE_STATUS=failed
   run "${OGRE_BIN}" execute 42
   [ "${status}" -eq 1 ] || return 1
   unset MOCK_CLAUDE_STATUS
-  run "${OGRE_BIN}" execute 42 --retry -R low -M
+  run "${OGRE_BIN}" execute 42 -r -R low -M
   [ "${status}" -eq 0 ] || return 1
   grep -q "Previous attempt for this step FAILED" .ai/.ogre/tmp/issue-42/run-next.md
 }

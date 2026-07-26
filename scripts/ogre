@@ -84,7 +84,7 @@ letter is only unique within its own subcommand, not across the whole tool):
   rescue:         -s statement  -r rescuer  -m model  -R reasoning  -n name  -c mcp-config
                    -M main  -b background  -l live
   execute:        -j job  -t task  -s step  -e executor  -m model  -R reasoning  -c mcp-config
-                   -x max-steps  --retry (no short flag)  -a all  -n next  -f fresh  -F resume
+                   -x max-steps  -r retry  -a all  -n next  -f fresh  -F resume
                    -M main  -b background  -y yes  -l live
   status:         -t task  -T tasks  -j job  -w watch  -i interval
   task-complete:  -s status  -x exit-code  -n notes
@@ -2747,7 +2747,7 @@ cmd_execute() {
       --reasoning|-R) reasoning="${2:-}"; shift 2 ;;
       --mcp-config|-c) mcp_config="${2:-}"; shift 2 ;;
       --max-steps|-x) max_steps="${2:-3}"; shift 2 ;;
-      --retry) retry="true"; shift ;;
+      --retry|-r) retry="true"; shift ;;
       --all|-a) mode="all"; shift ;;
       --next|-n) mode="next"; shift ;;
       --fresh|-f) freshness="fresh"; shift ;;

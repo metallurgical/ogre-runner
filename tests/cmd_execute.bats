@@ -1227,3 +1227,72 @@ print(rows[-1]['id'] if rows else '')
   grep -q "DRIVER_SIGNAL TERM" "${driverlog}" || return 1
   grep -q "DRIVER_EXIT" "${driverlog}" || return 1
 }
+
+@test "execute --fresh without --yes refuses" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
+  write_plan_with_steps 42 "First step"
+  run "${OGRE_BIN}" execute 42 --fresh
+  [ "${status}" -eq 1 ] || return 1
+  [[ "${output}" == *"--fresh"*"--yes"* ]] || return 1
+}
+
+@test "execute --fresh --yes can't combine with --retry/--task/--step" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
+  write_plan_with_steps 42 "First step"
+  run "${OGRE_BIN}" execute 42 --fresh --yes --retry
+  [ "${status}" -eq 1 ] || return 1
+  [[ "${output}" == *"can't be combined"* ]] || return 1
+  run "${OGRE_BIN}" execute 42 --fresh --yes --step 1
+  [ "${status}" -eq 1 ] || return 1
+  [[ "${output}" == *"can't be combined"* ]] || return 1
+}
+
+@test "execute --fresh --yes resets passed steps to pending and unchecks the plan file" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
+  write_plan_with_steps 42 "First step" "Second step"
+  MOCK_CLAUDE_TICK_PLAN=".ai/.ogre/plans/issue-42.md" "${OGRE_BIN}" execute 42
+  MOCK_CLAUDE_TICK_PLAN=".ai/.ogre/plans/issue-42.md" "${OGRE_BIN}" execute 42
+  [ "$(state_field 42 status)" = "completed" ] || return 1
+  [[ "$(cat .ai/.ogre/plans/issue-42.md)" == *"- [x] First step"* ]] || return 1
+
+  run "${OGRE_BIN}" execute 42 --fresh --yes --main
+  [ "${status}" -eq 0 ] || return 1
+  [[ "$(cat .ai/.ogre/plans/issue-42.md)" == *"- [ ] First step"* ]] || return 1
+  [[ "$(cat .ai/.ogre/plans/issue-42.md)" == *"- [ ] Second step"* ]] || return 1
+  [[ "$(cat .ai/.ogre/plans/issue-42.md)" != *"- [x]"* ]] || return 1
+  [ "$(state_field 42 status)" != "completed" ] || return 1
+  [ "$(state_field 42 fresh_restart)" = "True" ] || return 1
+  [ "$(python3 -c "import json; print(len(json.load(open('.ai/.ogre/state/issue-42.json'))['pending_steps']))")" = "2" ] || return 1
+}
+
+@test "execute --fresh --yes drops AUTO-FIX lines from the plan entirely" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
+  write_plan_with_steps 42 "First step" "Second step"
+  {
+    echo ""
+    echo "- [ ] [AUTO-FIX 1/2 fp:deadbeef] Fix the following issue found during verification: broken layout"
+  } >> .ai/.ogre/plans/issue-42.md
+  run "${OGRE_BIN}" execute 42 --fresh --yes --main
+  [ "${status}" -eq 0 ] || return 1
+  [[ "$(cat .ai/.ogre/plans/issue-42.md)" != *"AUTO-FIX"* ]] || return 1
+}
+
+@test "execute --fresh --yes injects the fresh-restart warning into the next runner" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
+  write_plan_with_steps 42 "First step"
+  "${OGRE_BIN}" execute 42
+  run "${OGRE_BIN}" execute 42 --fresh --yes --main
+  [ "${status}" -eq 0 ] || return 1
+  [[ "$(cat .ai/.ogre/tmp/issue-42/run-next.md)" == *"Fresh-restart warning"* ]] || return 1
+}
+
+@test "execute --fresh --yes never modifies any file the prior step already created" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
+  write_plan_with_steps 42 "First step"
+  local created="${TEST_TMP}/prior-step-output.txt"
+  echo "prior step's real work" > "${created}"
+  "${OGRE_BIN}" execute 42
+  run "${OGRE_BIN}" execute 42 --fresh --yes --main
+  [ "${status}" -eq 0 ] || return 1
+  [ "$(cat "${created}")" = "prior step's real work" ] || return 1
+}

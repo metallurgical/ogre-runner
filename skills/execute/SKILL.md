@@ -26,13 +26,31 @@ Optional flags:
 - `--retry` — re-run the lowest `failed` step in a fresh session. The failed attempt's exit code and log tail are injected into the runner prompt so the new session diagnoses the failure instead of repeating the same approach blindly. Prefer this over asking the user to explain what went wrong. Not combinable with `--all`.
 - `--all` — chain through every remaining step automatically. Each session hands off to a fresh one (cleanly, via `task-complete --status passed`, not as an error) at the `--max-steps` cap or once it estimates ~50%+ of its context used, whichever comes first — so simple steps can share one session while a heavier one splits off on its own. Works with `--main`/`--background` too. Browser-check steps run isolated in the chain when the executor has a browser MCP; only if none is detected does the chain stop on one — see "`[BROWSER-CHECK]` Steps" below, and handle it yourself rather than relaying the error.
 - `--max-steps N` — hard cap on checklist items per chained `--all` session (default: 3). Self-assessed context estimates are unreliable, so the cap is the authoritative limit.
-- `--fresh` (`-f`) / `--resume` (`-F`) - accepted and recorded on the task (shown as
-  `Freshness: fresh|resume` in the runner and ledger), but **currently cosmetic** -
-  neither branches any actual spawn behavior yet (no `codex exec resume`/`claude
-  --resume` gets triggered by either). Pass through whichever one the user actually
-  typed; do not skip passing it just because it's a no-op today, and do not treat
-  omitting it as equivalent to choosing `--fresh` - `fresh` is only the default when
-  neither flag is given.
+- `--resume` (`-F`) - accepted and recorded on the task (shown as `Freshness:
+  fresh|resume` in the runner/ledger), but **currently cosmetic** - no `codex exec
+  resume`/`claude --resume` gets triggered by it, nothing else branches on it either.
+  Pass it through when the user actually typed it; don't skip it just because it's a
+  no-op today.
+- `--fresh` (`-f`) - **real, destructive-ish reset**, not cosmetic like `--resume`.
+  Resets the WHOLE job back to step 1: every checklist item in the plan file gets
+  unchecked, every AUTO-FIX line synthesized during a prior `[BROWSER-CHECK]` retry
+  gets removed entirely, and every seeded ledger step-task is cleared back to
+  `pending`. **Requires `--yes` together with it** (`ogre execute <issue> --fresh
+  --yes`) - `--fresh` alone refuses with an explanation, since this touches the whole
+  job's tracked progress, not just one step. Mutually exclusive with
+  `--retry`/`--task`/`--step` (those target one specific step; `--fresh` targets the
+  whole job) - passing both errors out.
+  **Does NOT touch any file the earlier steps already created/edited** - Ogre never
+  reverts code (same principle as `ogre stop`), and there's no per-step git snapshot
+  to revert to even if it wanted to. Only the tracking state resets; the codebase
+  keeps whatever step 1-N already did to it. Every runner prompt for a job that's
+  ever been `--fresh`-reset gets a permanent warning (`fresh_restart_warning_block`)
+  telling the executor to check whether an item's work already exists in the code
+  before redoing it from scratch - the same problem `--task`/`--step` targeting warns
+  about via `backfill_warning_block`, same fix.
+  If the user describes this as "restart/redo the chain from the beginning" without
+  naming the flag, this is what they mean - `--fresh --yes`, not `--resume`
+  (`--resume` does nothing).
 - `--main` — run inline in the current Claude Code session instead of spawning a new isolated codex/claude session. Opt-in only: Ogre never forces it, except as the automatic fallback for a `[BROWSER-CHECK]` step when no browser MCP is detected (and it says so). Use it deliberately only when the user explicitly wants the edit made in this conversation — it defeats the whole point of Ogre (keeping the main context clean) if used as a habit.
 - `--mcp-config PATH` — browser MCP config-file handed to the spawned `claude` session so `[BROWSER-CHECK]` steps run isolated. Also settable persistently as `"browser_mcp"` in `.ai/.ogre/config.json`. **`claude`-only.** Codex gets its browser MCP from its own `~/.codex/config.toml` `mcp_servers` instead — codex `[BROWSER-CHECK]` also runs isolated when an external Playwright/Puppeteer MCP is in `codex mcp list` (Ogre's codex runner forces the external MCP over Codex's desktop in-app browser, which can't run headless — verified). No such MCP → `--main` fallback.
 - `--background` — same isolation as default (new session) but detached/non-blocking

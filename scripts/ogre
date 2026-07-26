@@ -440,6 +440,22 @@ Backfilled ledger warning: this job's state was reconstructed from the plan file
 EOF
 }
 
+# fresh_restart_warning_block <state-path> - warning for a job that was ever
+# reset via `ogre execute --fresh --yes` (see reset_job_to_step_one): the
+# ledger/checklist got reset to "pending" for every step, but the actual file
+# changes prior steps already made were NOT reverted - Ogre never reverts
+# code (same principle as `ogre stop`). Sticks permanently once set (same
+# convention as the backfilled flag above) since it stays true for the life
+# of the job. Prints nothing otherwise.
+fresh_restart_warning_block() {
+  local spath="$1"
+  [ -f "$spath" ] || return 0
+  [ "$(json_field "$spath" fresh_restart 2>/dev/null || true)" = "True" ] || return 0
+  cat <<'EOF'
+Fresh-restart warning: this job was reset to step 1 via `ogre execute --fresh` at some point - every step shows "pending" again, but none of the file changes earlier steps already made were reverted (Ogre never reverts code). FIRST check whether this item's work already exists in the code before implementing it from scratch. If it's already there and correct, validate it and mark it done (`task-complete --status passed`, with `--notes` saying it was pre-existing) instead of re-implementing - redoing already-correct work risks damaging or duplicating it.
+EOF
+}
+
 # retry_context_block <prev-log> <prev-exit> - failure context for an
 # `execute --retry` runner: what the last attempt logged and how it exited.
 # Feeding this to the fresh session turns a failure into an input instead of
@@ -1299,6 +1315,87 @@ if items:
     if changed:
         dump_json(tasks, tasks_path)
 PY
+}
+
+# reset_job_to_step_one <issue> <plan> <spath> - `ogre execute --fresh --yes`'s
+# actual reset. Only clearing ledger status would NOT work on its own:
+# sync_state_from_plan's is_done() treats a step as done if EITHER the plan's
+# own checkbox is "[x]" OR the matched ledger task says "passed" - so the plan
+# file's checkboxes and the ledger both have to be reset together, or the next
+# sync just re-derives "done" right back from whichever signal was left alone.
+# Does NOT touch any file the steps already created/edited - see the
+# fresh_restart_note injected into the runner prompt (cmd_execute) for why.
+reset_job_to_step_one() {
+  local issue="$1" plan="$2" spath="$3"
+  local removed
+  [ -f "$plan" ] || { err "--fresh: plan not found: $plan"; exit 1; }
+  # 1) Plan file: uncheck every real checklist item's box, drop AUTO-FIX lines
+  # entirely (they're ephemeral retry artifacts synthesized during a prior
+  # attempt, not part of the plan the user approved).
+  python3 - "$plan" <<'PY'
+import re, sys
+plan_path = sys.argv[1]
+text = open(plan_path).read()
+m = re.search(r"(##\s*6\.\s*Execution Order)(.*?)(\n##\s|\Z)", text, re.S)
+if m:
+    section = m.group(2)
+    def is_auto_fix(raw_text):
+        return bool(re.match(r"^\[AUTO-FIX \d+/\d+ fp:", raw_text.strip()))
+    new_lines = []
+    for line in section.split("\n"):
+        lm = re.match(r"^(\s*[-*]\s*)\[([^\]]*)\](\s*)(.+)$", line)
+        if lm:
+            prefix, _marker, sp, raw_text = lm.groups()
+            if is_auto_fix(raw_text):
+                continue
+            new_lines.append("{}[ ]{}{}".format(prefix, sp, raw_text))
+        else:
+            new_lines.append(line)
+    new_section = "\n".join(new_lines)
+    text = text[:m.start(2)] + new_section + text[m.end(2):]
+    open(plan_path, "w").write(text)
+PY
+  # 2) Ledger: drop every seeded per-step task for this issue (step_index is
+  # not None covers both normal and auto-fix steps) - sync_state_from_plan
+  # reseeds fresh "pending" rows for them from the now-unchecked plan, right
+  # after this function returns. Ad-hoc --all chain-driver tasks (no
+  # step_index) are left alone as history; they're never matched by
+  # is_done()'s by-text lookup either way.
+  removed="$(py_state "$(tasks_path)" "$issue" <<'PY'
+import sys
+path, issue = sys.argv[1:3]
+_lk = lock_state(path)
+try:
+    tasks = json.load(open(path))
+except Exception:
+    tasks = []
+before = len(tasks)
+tasks = [t for t in tasks if not (t.get("issue") == issue and t.get("step_index") is not None)]
+dump_json(tasks, path)
+print(before - len(tasks))
+PY
+)"
+  # 3) state.json: sync_state_from_plan only ever forces status TO
+  # "completed" (line ~1233 above), never away from it - without this, a
+  # previously-completed job would stay stuck showing "completed"/Boom! even
+  # with every step now pending again. Guarded: a job that's never had
+  # ensure_state_from_plan run against it yet has no state.json to update -
+  # sync_state_from_plan (called right after this function returns) creates
+  # it fresh, already status "planning", nothing to correct.
+  if [ -f "$spath" ]; then
+    py_state "$spath" <<'PY'
+import sys, datetime
+spath = sys.argv[1]
+_lk = lock_state(spath)
+d = json.load(open(spath))
+if d.get("status") in ("completed", "stopped"):
+    d["status"] = "executing"
+d["fresh_restart"] = True
+d["updated_at"] = datetime.datetime.now().astimezone().isoformat()
+dump_json(d, spath)
+PY
+  fi
+  log "--fresh: reset issue $issue to step 1 - unchecked plan checklist, cleared $removed ledger step-task(s). File changes already made by prior steps are untouched (Ogre never reverts code - see the reminder in the next runner prompt)."
 }
 
 # Human-readable job summary: id, issue, status, plan, progress ratio, and
@@ -2733,7 +2830,7 @@ cmd_execute() {
   #   new        - default: foreground, brand-new codex/claude session, isolated from main context
   #   main       - run inline in the current Claude Code session (no subprocess spawned)
   #   background - same isolation as "new" but detached/non-blocking
-  local target="" executor="" model="" reasoning="" mode="next" freshness="fresh" iso="new" job_id="" task_id="" step_n="" assume_yes="false" max_steps="3" retry="false" mcp_config="" json_mode=""
+  local target="" executor="" model="" reasoning="" mode="next" freshness="fresh" iso="new" job_id="" task_id="" step_n="" assume_yes="false" max_steps="3" retry="false" mcp_config="" json_mode="" fresh_requested="false"
   if [ $# -gt 0 ] && [[ ! "$1" =~ ^- ]]; then
     target="$1"; shift
   fi
@@ -2750,7 +2847,7 @@ cmd_execute() {
       --retry|-r) retry="true"; shift ;;
       --all|-a) mode="all"; shift ;;
       --next|-n) mode="next"; shift ;;
-      --fresh|-f) freshness="fresh"; shift ;;
+      --fresh|-f) freshness="fresh"; fresh_requested="true"; shift ;;
       --resume|-F) freshness="resume"; shift ;;
       --run) iso="new"; shift ;;               # legacy flag, kept as a no-op alias: "new" is now the default anyway
       --main|-M) iso="main"; shift ;;
@@ -2833,11 +2930,24 @@ cmd_execute() {
     err "--retry targets one failed step; it can't be combined with --all"
     exit 1
   fi
+  if [ "$fresh_requested" = "true" ]; then
+    if [ "$retry" = "true" ] || [ -n "$task_id" ] || [ -n "$step_n" ]; then
+      err "--fresh resets the whole job back to step 1; it can't be combined with --retry/--task/--step, which target one specific step."
+      exit 1
+    fi
+    if [ "$assume_yes" != "true" ]; then
+      err "--fresh resets EVERY completed/failed step for this job back to pending and restarts execution from step 1. It does NOT revert any file changes already made by earlier steps - re-run with --fresh --yes to confirm."
+      exit 1
+    fi
+  fi
 
   local plan issue runner logdir logpath tid spath
   plan="$(get_plan_path "$target")"
   [ -f "$plan" ] || { err "Plan not found: $plan"; exit 1; }
   issue="$(slug_from_issue "$plan")"
+  if [ "$fresh_requested" = "true" ]; then
+    reset_job_to_step_one "$issue" "$plan" "$(state_path "$issue")"
+  fi
   sync_state_from_plan "$issue"
   update_role_state "$issue" executor "$executor" "$model"
   seed_knowledge "$issue"  # lazily seed for jobs created before knowledge bases existed
@@ -2931,6 +3041,8 @@ $(knowledge_block "$issue")
 $(repo_drift_block "$plan")
 
 $(backfill_warning_block "$spath")
+
+$(fresh_restart_warning_block "$spath")
 
 Task:
 
@@ -3154,6 +3266,8 @@ $(knowledge_block "$issue")
 $(repo_drift_block "$plan")
 
 $(backfill_warning_block "$spath")
+
+$(fresh_restart_warning_block "$spath")
 
 $retry_block
 

@@ -26,6 +26,12 @@ Examples:
 - `/ogre:stop 107 --delete`
 - `/ogre:stop 107 --list`
 
+**Flags are forwarded verbatim, never reinterpreted.** `-a`/`-A` (`--all`/`--archive`)
+differ only by case with very different blast radius (stop every job vs. archive one
+issue), so a wrong guess is silent (no parse error, just the wrong scope/action). If
+the user's own message names an actual flag/short-form, pass that exact token through
+unchanged rather than guessing a different one you assume is equivalent.
+
 ## Behavior
 
 Run:

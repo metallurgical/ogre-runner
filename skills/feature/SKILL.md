@@ -33,6 +33,14 @@ Optional flags:
 - `--background` — spawn the isolated subprocess detached; returns immediately instead of waiting for the plan to finish.
 - `--live` — opt-in, off by default. Runs the planner with `--json`/`--output-format stream-json --verbose` instead of plain text, writing raw JSONL to the log path. Only use when the user explicitly wants to watch the planner's activity live inside this conversation — see `/ogre:rescue`'s "Watching a `--live` rescue live" section for the Monitor+jq recipe that actually surfaces it (same recipe, against `feature`'s own log path).
 
+**Flags are forwarded verbatim, never reinterpreted.** This subcommand has three
+short-flag pairs that differ only by case, with unrelated meanings, so a wrong guess
+is silent (no parse error, just wrong behavior): `-k`/`-K` (`--blocker`/`--blocks`),
+`-p`/`-P` (`--planner`/`--plan`), `-m`/`-M` (`--model`/`--main`). If the user's own
+message names an actual flag/short-form, pass that exact token through unchanged
+rather than guessing a different one you assume is equivalent; check this file's flag
+list (or `scripts/ogre`'s actual parsing) if unsure.
+
 ## Behavior
 
 **Hard requirement, every completion message this skill produces, no exception:** must literally contain `Job Id:`, `Issue:` (number + name), `Plan:`, and `Steps:` lines with their real values. A terse summary sentence is fine (e.g. "Plan ready, 8 steps, issue 118 (Laporan Trend Analysis). Next: ogre review-plan 118 or ogre execute 118.") — even under caveman/ultra/terse mode — but it must not be the *only* thing shown; the `Job Id:`/`Issue:`/`Plan:`/`Steps:` lines still have to appear alongside it, every time.

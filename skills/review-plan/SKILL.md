@@ -24,6 +24,13 @@ Optional flags:
 - `--background` — spawn the isolated subprocess detached; returns immediately instead of waiting for the review to finish.
 - `--live` — opt-in, off by default. Runs the reviewer with `--json`/`--output-format stream-json --verbose` instead of plain text, writing raw JSONL to the log path. Only use when the user explicitly wants to watch the review happen live — see `/ogre:rescue`'s "Watching a `--live` rescue live" section for the Monitor+jq recipe (same recipe, against `review-plan`'s own log path).
 
+**Flags are forwarded verbatim, never reinterpreted.** This subcommand has two
+short-flag pairs that differ only by case, with unrelated meanings, so a wrong guess
+is silent (no parse error, just wrong behavior): `-r`/`-R` (`--reasoning`/`--reviewer`),
+`-m`/`-M` (`--model`/`--main`). If the user's own message names an actual flag/
+short-form, pass that exact token through unchanged rather than guessing a different
+one you assume is equivalent.
+
 ## Behavior
 
 **Hard requirement, every completion message this skill produces, no exception:** must literally contain `Job Id:`, `Issue:` (number + name), `Review:` (the `.ai/.ogre/reviews/issue-<number>/plan-review.md` path), and `Steps:` (step count of the plan being reviewed) lines with their real values. A terse summary sentence is fine, even under caveman/ultra/terse mode — but it must not be the *only* thing shown; the `Job Id:`/`Issue:`/`Review:`/`Steps:` lines still have to appear alongside it, every time.

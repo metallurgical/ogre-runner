@@ -20,6 +20,12 @@ Examples:
 - `/ogre:status --watch` (live-refresh, run standalone in another terminal while a task is executing — Ctrl-C to quit)
 - `/ogre:status --watch --interval 5` (custom refresh seconds, default 2)
 
+**Flags are forwarded verbatim, never reinterpreted.** `-t`/`-T` (`--task`/`--tasks`)
+differ only by case and a trailing letter, with different scopes (one task vs. every
+task), so a wrong guess is silent (no parse error, just the wrong scope). If the
+user's own message names an actual flag/short-form, pass that exact token through
+unchanged rather than guessing a different one you assume is equivalent.
+
 ## Concepts
 
 - **Job** = one feature/issue workflow, 1:1 with the issue. Id `job-<uuid>`, stored as `job_id` in that issue's state json.

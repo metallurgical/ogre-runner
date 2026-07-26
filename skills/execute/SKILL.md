@@ -26,8 +26,13 @@ Optional flags:
 - `--retry` — re-run the lowest `failed` step in a fresh session. The failed attempt's exit code and log tail are injected into the runner prompt so the new session diagnoses the failure instead of repeating the same approach blindly. Prefer this over asking the user to explain what went wrong. Not combinable with `--all`.
 - `--all` — chain through every remaining step automatically. Each session hands off to a fresh one (cleanly, via `task-complete --status passed`, not as an error) at the `--max-steps` cap or once it estimates ~50%+ of its context used, whichever comes first — so simple steps can share one session while a heavier one splits off on its own. Works with `--main`/`--background` too. Browser-check steps run isolated in the chain when the executor has a browser MCP; only if none is detected does the chain stop on one — see "`[BROWSER-CHECK]` Steps" below, and handle it yourself rather than relaying the error.
 - `--max-steps N` — hard cap on checklist items per chained `--all` session (default: 3). Self-assessed context estimates are unreliable, so the cap is the authoritative limit.
-- `--fresh`
-- `--resume`
+- `--fresh` (`-f`) / `--resume` (`-F`) - accepted and recorded on the task (shown as
+  `Freshness: fresh|resume` in the runner and ledger), but **currently cosmetic** -
+  neither branches any actual spawn behavior yet (no `codex exec resume`/`claude
+  --resume` gets triggered by either). Pass through whichever one the user actually
+  typed; do not skip passing it just because it's a no-op today, and do not treat
+  omitting it as equivalent to choosing `--fresh` - `fresh` is only the default when
+  neither flag is given.
 - `--main` — run inline in the current Claude Code session instead of spawning a new isolated codex/claude session. Opt-in only: Ogre never forces it, except as the automatic fallback for a `[BROWSER-CHECK]` step when no browser MCP is detected (and it says so). Use it deliberately only when the user explicitly wants the edit made in this conversation — it defeats the whole point of Ogre (keeping the main context clean) if used as a habit.
 - `--mcp-config PATH` — browser MCP config-file handed to the spawned `claude` session so `[BROWSER-CHECK]` steps run isolated. Also settable persistently as `"browser_mcp"` in `.ai/.ogre/config.json`. **`claude`-only.** Codex gets its browser MCP from its own `~/.codex/config.toml` `mcp_servers` instead — codex `[BROWSER-CHECK]` also runs isolated when an external Playwright/Puppeteer MCP is in `codex mcp list` (Ogre's codex runner forces the external MCP over Codex's desktop in-app browser, which can't run headless — verified). No such MCP → `--main` fallback.
 - `--background` — same isolation as default (new session) but detached/non-blocking
@@ -35,6 +40,21 @@ Optional flags:
 - `--live` — opt-in, off by default. Runs the executor with `--json` (codex) or `--output-format stream-json --verbose` (claude) instead of plain text, writing raw JSONL to the log path. Only use this when the user explicitly wants to watch the executor's activity live (commands it runs, files it touches) inside this same Claude Code conversation — it changes nothing about the edit itself, purely a visibility option. Passing `--live` alone does nothing beyond changing the log format; see `/ogre:rescue`'s "Watching a `--live` rescue live" section for the Monitor+jq recipe that actually surfaces it as it happens (same recipe applies here, just against `execute`'s own log path).
   - **Combined with `--all`**: every hand-off link normally rotates to a brand-new log file, which would leave a Monitor armed on link 1 stale the moment link 2 starts. `--live --all` together avoids that automatically — every link appends to the *same* log path for the life of the chain (announced as `Live + --all: every hand-off link appends to this same log path...` right after launch) instead of rotating. Arm Monitor on that one path once, right after launch — it keeps delivering events across every hand-off with no re-arming, no polling for a new path. This is the only combination where the log path is stable across a chain; `--live` without `--all` (single link, nothing to rotate) and `--all` without `--live` (per-link rotation, plain text) are unaffected. Once the whole chain's own completion signal fires (the backgrounded/polled `execute --all` call itself finishes or blocks), `TaskStop` that Monitor right away — same reasoning as rescue's: `tail -f` never exits on its own, so it otherwise sits open in the TUI until timeout or a manual `(x)`.
   - **Format every delivered Monitor event's summary as `⎿ ` (Claude Code's own tree-connector glyph) followed by the summary text wrapped in a single backtick code span** — e.g. `` ⎿ `Editing CheckoutController.php, adding validation.` ``, never as bold or plain prose. This is the same rule as `/ogre:rescue`'s — restated here in full (not just "see rescue's section") so it isn't missed by a session that only reads this file.
+
+**Flags are forwarded verbatim, never reinterpreted.** If the user's own message
+names an actual CLI flag/short-form, pass that exact token through unchanged into the
+`ogre execute ...` call — do not translate it into a different flag based on a guess
+at what they meant, and do not silently substitute a similarly-spelled one you assume
+is equivalent. This subcommand has three short-flag pairs that differ only by case,
+each mapped to unrelated-or-opposite meanings, so a wrong guess is silent (no parse
+error, just the wrong behavior): `-f`/`-F` (`--fresh`/`--resume`), `-r`/`-R`
+(`--reasoning`/`--retry`), `-m`/`-M` (`--model`/`--main`). Caught in practice: `-F`
+got treated as `--fresh` instead of `--resume`. If you don't recognize a flag/
+short-form, check this file's own flag list above (or `scripts/ogre`'s actual parsing)
+before running anything — never guess and substitute. Only translate into a flag
+yourself when the user names no flag at all and describes pure intent in plain
+English (e.g. "resume where it left off" → you choose `--resume`, having actually
+checked what it does first).
 
 ## Default
 

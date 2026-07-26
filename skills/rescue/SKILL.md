@@ -299,6 +299,17 @@ actual progress.
   above, every surfaced `item.completed` has real text/command output, never nothing).
   If two events truly are near-duplicates, still write two short `⎿` lines rather than
   one long one - brevity in each line, not omission of one.
+- **Never announce that you're "going quiet"/pausing narration/tracking silently
+  from here** (e.g. "Acknowledged - going quiet now, will report once the chain
+  finishes") **while a Monitor is still armed on the log.** A separate poll loop
+  tracking overall completion does not suspend the per-event requirement above -
+  they are two independent obligations, not one substituting for the other. Caught in
+  practice: a driving session said this, then kept receiving `Monitor event:` headers
+  with no `⎿` line under any of them - the header still fires every time the harness
+  delivers an event, whether or not you decided to stop writing about it, so "going
+  quiet" doesn't skip the headers, it just leaves them all orphaned. If you genuinely
+  want to stop receiving live per-event updates, the correct action is `TaskStop` on
+  the Monitor's task id, not silence while it stays armed.
 
 ## Rules
 

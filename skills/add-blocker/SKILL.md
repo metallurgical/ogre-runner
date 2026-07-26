@@ -22,11 +22,12 @@ Use this skill when the user wants to add a blocker to an issue Ogre is already 
 - `--background` — spawn the isolated subprocess detached; returns immediately instead of waiting for the revision to finish.
 - `--live` — opt-in, off by default. Runs the re-planner with `--json`/`--output-format stream-json --verbose` instead of plain text, writing raw JSONL to the log path. Only use when the user explicitly wants to watch the revision happen live — see `/ogre:rescue`'s "Watching a `--live` rescue live" section for the Monitor+jq recipe (same recipe, against `add-blocker`'s own log path).
 
-**Flags are forwarded verbatim, never reinterpreted.** `-m`/`-M` (`--model`/`--main`)
-differ only by case with unrelated meanings, so a wrong guess is silent (no parse
-error, just wrong behavior). If the user's own message names an actual flag/
-short-form, pass that exact token through unchanged rather than guessing a different
-one you assume is equivalent.
+**Flags are forwarded verbatim, never reinterpreted.** `--reasoning` is `-R`
+(uppercase, consistent with every other subcommand's reasoning flag). `-m`/`-M`
+(`--model`/`--main`) still differ only by case with unrelated meanings, so a wrong
+guess there is silent (no parse error, just wrong behavior). If the user's own
+message names an actual flag/short-form, pass that exact token through unchanged
+rather than guessing a different one you assume is equivalent.
 
 ## Behavior
 

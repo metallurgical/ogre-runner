@@ -72,13 +72,14 @@ Optional flags (same shape as `/ogre:execute`'s):
 - **Flags are forwarded verbatim, never reinterpreted.** If the user's own message
   names an actual CLI flag/short-form for this command, pass that exact token through
   unchanged into the `ogre rescue ...` call - do not translate it into a different
-  flag based on a guess at what they meant. This subcommand has two short-flag pairs
-  that differ only by case, with unrelated meanings, so a wrong guess is silent (no
-  parse error, just wrong behavior): `-r`/`-R` (`--reasoning`/`--rescuer`), `-m`/`-M`
-  (`--model`/`--main`). If you don't recognize a flag/short-form, check this file's
-  Inputs list (or `scripts/ogre`'s actual parsing) before running anything. Only
-  translate into a flag yourself when the user names no flag at all and describes
-  pure intent in plain English.
+  flag based on a guess at what they meant. `-r` is `--rescuer` and `-R` is
+  `--reasoning` (rescuer got the lowercase letter since it's the one used regularly -
+  this was previously swapped, a real bug, fixed). `-m`/`-M` (`--model`/`--main`)
+  still differ only by case with unrelated meanings, so a wrong guess there is silent
+  (no parse error, just wrong behavior). If you don't recognize a flag/short-form,
+  check this file's Inputs list (or `scripts/ogre`'s actual parsing) before running
+  anything. Only translate into a flag yourself when the user names no flag at all
+  and describes pure intent in plain English.
 
 ## Default
 

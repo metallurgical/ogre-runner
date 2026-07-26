@@ -92,8 +92,8 @@ print(t['id'])
   [[ "${output}" == *"Rescuer: codex (gpt-5.6-sol) [reasoning: medium]"* ]] || return 1
 }
 
-@test "rescue short flags (-R -m -r -n -M) behave like their long forms, -R != -r" {
-  run "${OGRE_BIN}" rescue "fix login bug" -R codex -m gpt-5.6-sol -r medium -n login-fix -M
+@test "rescue short flags (-r -m -R -n -M) behave like their long forms, -r != -R" {
+  run "${OGRE_BIN}" rescue "fix login bug" -r codex -m gpt-5.6-sol -R medium -n login-fix -M
   [ "${status}" -eq 0 ] || return 1
   [[ "${output}" == *"Rescuer: codex (gpt-5.6-sol) [reasoning: medium]"* ]] || return 1
 }

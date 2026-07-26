@@ -76,16 +76,16 @@ Usage:
 
 Short flags (every long flag above also has a one-letter form, e.g. --background == -b; each
 letter is only unique within its own subcommand, not across the whole tool):
-  feature:        -K blocks  -k blocker  -e remarks  -P plan  -p planner  -m model  -r reasoning
+  feature:        -K blocks  -k blocker  -e remarks  -P plan  -p planner  -m model  -R reasoning
                    -s statement  -n name  -c browser-check  -M main  -b background  -l live
-  add-blocker:    -s statement  -n name  -e remarks  -f force  -p planner  -m model  -r reasoning
+  add-blocker:    -s statement  -n name  -e remarks  -f force  -p planner  -m model  -R reasoning
                    -M main  -b background  -l live
-  review-plan:    -R reviewer  -m model  -r reasoning  -M main  -b background  -l live
-  rescue:         -s statement  -R rescuer  -m model  -r reasoning  -n name  -c mcp-config
+  review-plan:    -r reviewer  -m model  -R reasoning  -M main  -b background  -l live
+  rescue:         -s statement  -r rescuer  -m model  -R reasoning  -n name  -c mcp-config
                    -M main  -b background  -l live
-  execute:        -j job  -t task  -s step  -e executor  -m model  -r reasoning  -c mcp-config
-                   -x max-steps  -R retry  -a all  -n next  -f fresh  -F resume  -M main
-                   -b background  -y yes  -l live
+  execute:        -j job  -t task  -s step  -e executor  -m model  -R reasoning  -c mcp-config
+                   -x max-steps  --retry (no short flag)  -a all  -n next  -f fresh  -F resume
+                   -M main  -b background  -y yes  -l live
   status:         -t task  -T tasks  -j job  -w watch  -i interval
   task-complete:  -s status  -x exit-code  -n notes
   stop:           -a all  -A archive  -d delete  -l list  -t task  -j job
@@ -2012,7 +2012,7 @@ cmd_feature() {
       --plan|-P) plan_name="${2:-}"; shift 2 ;;
       --planner|-p) planner="${2:-}"; shift 2 ;;
       --model|-m) model="${2:-}"; shift 2 ;;
-      --reasoning|-r) reasoning="${2:-}"; shift 2 ;;
+      --reasoning|-R) reasoning="${2:-}"; shift 2 ;;
       --statement|-s) statement="${2:-}"; shift 2 ;;
       --name|-n) name="${2:-}"; shift 2 ;;
       --browser-check|-c) browser_check="true"; shift ;;
@@ -2238,7 +2238,7 @@ cmd_add_blocker() {
       --force|-f) force="true"; shift ;;
       --planner|-p) planner="${2:-}"; shift 2 ;;
       --model|-m) model="${2:-}"; shift 2 ;;
-      --reasoning|-r) reasoning="${2:-}"; shift 2 ;;
+      --reasoning|-R) reasoning="${2:-}"; shift 2 ;;
       --main|-M) iso="main"; shift ;;
       --background|-b) iso="background"; shift ;;
       --live|-l) json_mode="yes"; shift ;;
@@ -2470,9 +2470,9 @@ cmd_review_plan() {
   shift || true
   while [ $# -gt 0 ]; do
     case "$1" in
-      --reviewer|-R) reviewer="${2:-}"; shift 2 ;;
+      --reviewer|-r) reviewer="${2:-}"; shift 2 ;;
       --model|-m) model="${2:-}"; shift 2 ;;
-      --reasoning|-r) reasoning="${2:-}"; shift 2 ;;
+      --reasoning|-R) reasoning="${2:-}"; shift 2 ;;
       --main|-M) iso="main"; shift ;;
       --background|-b) iso="background"; shift ;;
       --live|-l) json_mode="yes"; shift ;;
@@ -2592,9 +2592,9 @@ cmd_rescue() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --statement|-s) statement="${2:-}"; shift 2 ;;
-      --rescuer|-R) rescuer="${2:-}"; shift 2 ;;
+      --rescuer|-r) rescuer="${2:-}"; shift 2 ;;
       --model|-m) model="${2:-}"; shift 2 ;;
-      --reasoning|-r) reasoning="${2:-}"; shift 2 ;;
+      --reasoning|-R) reasoning="${2:-}"; shift 2 ;;
       --name|-n) name="${2:-}"; shift 2 ;;
       --mcp-config|-c) mcp_config="${2:-}"; shift 2 ;;
       --main|-M) iso="main"; shift ;;
@@ -2744,10 +2744,10 @@ cmd_execute() {
       --step|-s) step_n="${2:-}"; shift 2 ;;
       --executor|-e) executor="${2:-}"; shift 2 ;;
       --model|-m) model="${2:-}"; shift 2 ;;
-      --reasoning|-r) reasoning="${2:-}"; shift 2 ;;
+      --reasoning|-R) reasoning="${2:-}"; shift 2 ;;
       --mcp-config|-c) mcp_config="${2:-}"; shift 2 ;;
       --max-steps|-x) max_steps="${2:-3}"; shift 2 ;;
-      --retry|-R) retry="true"; shift ;;
+      --retry) retry="true"; shift ;;
       --all|-a) mode="all"; shift ;;
       --next|-n) mode="next"; shift ;;
       --fresh|-f) freshness="fresh"; shift ;;

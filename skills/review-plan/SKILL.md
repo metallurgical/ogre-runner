@@ -24,12 +24,13 @@ Optional flags:
 - `--background` — spawn the isolated subprocess detached; returns immediately instead of waiting for the review to finish.
 - `--live` — opt-in, off by default. Runs the reviewer with `--json`/`--output-format stream-json --verbose` instead of plain text, writing raw JSONL to the log path. Only use when the user explicitly wants to watch the review happen live — see `/ogre:rescue`'s "Watching a `--live` rescue live" section for the Monitor+jq recipe (same recipe, against `review-plan`'s own log path).
 
-**Flags are forwarded verbatim, never reinterpreted.** This subcommand has two
-short-flag pairs that differ only by case, with unrelated meanings, so a wrong guess
-is silent (no parse error, just wrong behavior): `-r`/`-R` (`--reasoning`/`--reviewer`),
-`-m`/`-M` (`--model`/`--main`). If the user's own message names an actual flag/
-short-form, pass that exact token through unchanged rather than guessing a different
-one you assume is equivalent.
+**Flags are forwarded verbatim, never reinterpreted.** `-r` is `--reviewer` and `-R`
+is `--reasoning` (reviewer got the lowercase letter since it's the one used
+regularly - this was previously swapped, a real bug, fixed). `-m`/`-M`
+(`--model`/`--main`) still differ only by case with unrelated meanings, so a wrong
+guess there is silent (no parse error, just wrong behavior). If the user's own
+message names an actual flag/short-form, pass that exact token through unchanged
+rather than guessing a different one you assume is equivalent.
 
 ## Behavior
 

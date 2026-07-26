@@ -29,9 +29,9 @@ load test_helper
   [ -f ".ai/.ogre/tmp/issue-42/plan-runner.md" ] || return 1
 }
 
-@test "add-blocker short flags (-s -n -e -f -p -m -r -M) behave like their long forms" {
+@test "add-blocker short flags (-s -n -e -f -p -m -R -M) behave like their long forms" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
-  run "${OGRE_BIN}" add-blocker 42 -s "needs auth first" -n authblock -e "still open" -f -p claude -m claude-sonnet-5 -r low -M
+  run "${OGRE_BIN}" add-blocker 42 -s "needs auth first" -n authblock -e "still open" -f -p claude -m claude-sonnet-5 -R low -M
   [ "${status}" -eq 0 ] || return 1
   [ -f ".ai/.ogre/issues/issue-authblock.md" ] || return 1
   [ "$(state_field 42 status)" = "planning" ] || return 1

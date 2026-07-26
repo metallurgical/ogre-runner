@@ -67,8 +67,8 @@ print(t['id'])
   [ "$(python3 -c "import json; print(len(json.load(open('.ai/.ogre/state/tasks.json'))))")" = "0" ] || return 1
 }
 
-@test "feature short flags (-s -n -p -m -r -c -M) behave like their long forms" {
-  run "${OGRE_BIN}" feature -s "base feature" -n 42 -p claude -m claude-sonnet-5 -r low -c -M
+@test "feature short flags (-s -n -p -m -R -c -M) behave like their long forms" {
+  run "${OGRE_BIN}" feature -s "base feature" -n 42 -p claude -m claude-sonnet-5 -R low -c -M
   [ "${status}" -eq 0 ] || return 1
   [[ "${output}" == *"Next inside Claude Code: read"* ]] || return 1
   [ -f ".ai/.ogre/issues/issue-42.md" ] || return 1

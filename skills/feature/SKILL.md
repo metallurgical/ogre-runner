@@ -23,7 +23,14 @@ Optional flags:
 - `--blocks 101,102` — attach blockers with no status remark.
 - `--blocker 101 --remarks "PR merged"` — attach one blocker with a freeform status remark tied to it. Repeatable: `--blocker 101 --remarks "merged" --blocker 102 --remarks "under review"`. `--remarks` always annotates the `--blocker` (or `--blocks`) immediately before it; a `--remarks` with no preceding blocker is an error. Mix freely with `--blocks`. Use this form whenever the user tells you each blocker's status (merged / under review / in progress / blocking) so the planner can reason about what's already landed vs still in flight.
 - `--plan issue-107.md`
-- `--planner claude|codex`
+- `--planner claude|codex` — omitted, this falls back to `defaults.planner` in
+  `.ai/.ogre/config.json`, then `claude`. **Never add `--planner`/`--model` on your
+  own initiative "to be explicit" or "to be safe" when the user's own message
+  didn't name one - omit both and let `config.json` resolve it.** A real caught
+  bug: a driving session hardcoded a specific rescuer/model on a project whose
+  config had a different provider set as default, silently overriding it with no
+  user request behind it. If you don't know the project's configured default,
+  check `ogre config` first or simply omit the flag - don't guess.
 - `--model MODEL`
 - `--reasoning LEVEL` (reasoning effort for the planner; omit to use the CLI's own default)
 - `--statement "free text description of the feature"` (use instead of an issue)

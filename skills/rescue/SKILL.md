@@ -24,6 +24,14 @@ Optional flags (same shape as `/ogre:execute`'s):
   `defaults.rescuer` in `.ai/.ogre/config.json`, then `claude`. `rescuer` is its
   own config role, separate from `defaults.executor` - a project can pin a
   different CLI/model for one-off rescues than for plan execution.
+  **Never add `--rescuer`/`--model` on your own initiative "to be explicit" or
+  "to be safe" when the user's own message didn't name one - omit both and let
+  `config.json` resolve it.** A real caught bug: a driving session hardcoded
+  `--rescuer claude --model claude-sonnet-5` on a project whose `config.json` had
+  `defaults.rescuer` set to `codex`, silently overriding the project's own
+  configured default with no user request behind it. If you genuinely don't know
+  what the project's configured default is, that's still not a reason to name one
+  yourself - check `ogre config` first, or simply omit the flag; do not guess.
 - `--model MODEL`
 - `--reasoning LEVEL` - reasoning effort for the rescuer (`claude -p` gets
   `--effort LEVEL`, `codex exec` gets `-c model_reasoning_effort=LEVEL`). Omit it to

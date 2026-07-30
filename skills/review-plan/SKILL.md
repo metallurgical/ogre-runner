@@ -17,7 +17,14 @@ Accept:
 
 Optional flags:
 
-- `--reviewer claude|codex`
+- `--reviewer claude|codex` — omitted, this falls back to `defaults.plan_reviewer`
+  in `.ai/.ogre/config.json`, then `claude`. **Never add `--reviewer`/`--model` on
+  your own initiative "to be explicit" or "to be safe" when the user's own message
+  didn't name one - omit both and let `config.json` resolve it.** A real caught
+  bug: a driving session hardcoded a specific rescuer/model on a project whose
+  config had a different provider set as default, silently overriding it with no
+  user request behind it. If you don't know the project's configured default,
+  check `ogre config` first or simply omit the flag - don't guess.
 - `--model MODEL`
 - `--reasoning LEVEL` (reasoning effort for the reviewer; omit to use the CLI's own default)
 - `--main` — run the review inline in this session instead of spawning an isolated subprocess (loses context isolation; only pass when the user explicitly wants that).

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OGRE_VERSION="1.4.53"
+OGRE_VERSION="1.4.54"
 RUNTIME=".ai/.ogre"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -540,6 +540,18 @@ for t in tasks:
 # runs. Idempotent: the resumed chain's own new task immediately shows up as
 # "running" with a live pid, so a status call landing moments later sees that
 # and does nothing - no risk of double-launching a second chain on top.
+#
+# "blocked" is excluded on purpose, same as "stopped"/"completed"/"planning":
+# should_continue_chain (via mark_chain_blocked) sets it when a link stopped
+# for a REAL reason - a failed step outside any AUTO-FIX/browser-check retry
+# path, an exhausted AUTO-FIX cap, or a missing browser MCP - not because the
+# driver died. That state is structurally identical to an actual crash (no
+# live pid, pending steps left), so without this exclusion self-heal would
+# respawn the exact same doomed step forever instead of surfacing it. A
+# blocked chain is meant to wait for a human (or the driving Claude session,
+# per CLAUDE.md's orchestration section) to resolve the issue and explicitly
+# resume with `ogre execute --job <id> --all [--background]` - see
+# print_job_summary's "Blocked:"/"Resume once fixed:" lines.
 maybe_resume_stalled_chain() {
   local issue="$1"
   local spath
@@ -557,7 +569,7 @@ print(len(d.get("pending_steps") or []))
 print(d.get("job_id") or "")
 ')
   case "$status" in
-    stopped|completed|planning|"") return 0 ;;
+    stopped|completed|planning|blocked|"") return 0 ;;
   esac
   [ "${pending_left:-0}" -gt 0 ] || return 0
   [ -n "$job_id" ] || return 0
@@ -1511,6 +1523,30 @@ if blocker_paths:
         for bp in blocker_paths
     ]
     table_cols(["Blocker", "Remark"], blk_rows)
+
+# should_continue_chain (via mark_chain_blocked) stopped the chain for a real
+# reason - not a driver crash - and self-heal deliberately won't auto-resume
+# this (see maybe_resume_stalled_chain). Surface the reason plus the exact
+# flags the blocked step actually ran with, so whoever resolves it (a human,
+# or the driving Claude session per CLAUDE.md's orchestration section) can
+# resume with identical tooling instead of guessing/retyping flags.
+if status == "blocked":
+    print()
+    print("Blocked: {}".format(d.get("block_reason") or "(no reason recorded)"))
+    cur = d.get("current_step")
+    match = next((t for t in steps if t.get("step") == cur), None)
+    if match:
+        resume_flags = []
+        if match.get("executor"):
+            resume_flags.append("--executor {}".format(match["executor"]))
+        if match.get("model"):
+            resume_flags.append("--model {}".format(match["model"]))
+        if match.get("reasoning"):
+            resume_flags.append("--reasoning {}".format(match["reasoning"]))
+        if match.get("mcp_config"):
+            resume_flags.append("--mcp-config {}".format(match["mcp_config"]))
+        flag_str = (" " + " ".join(resume_flags)) if resume_flags else ""
+        print("Resume once fixed: ogre execute --job {} --all --background{}".format(job_id, flag_str))
 PY
 }
 
@@ -3596,16 +3632,47 @@ PY
   #     line never resets the count - the count is the number of [AUTO-FIX]
   #     lines that ever existed for that item, closed or not).
   #   - anything else failed -> stop, same as always.
+  # Records that this chain stopped for a real reason - a step failed and
+  # there's nothing safe left to auto-retry - rather than the driver dying.
+  # Sets status=blocked (see maybe_resume_stalled_chain's exclusion) plus a
+  # human-readable block_reason that print_job_summary surfaces via
+  # "Blocked:"/"Resume once fixed:". Only call this from a should_continue_chain
+  # site that is about to `return 1` for a genuine stop - never for the
+  # "pending_left <= 0" success path (that's a normal finish, already
+  # reflected by sync_state_from_plan's own status=completed transition).
+  mark_chain_blocked() {
+    local reason="$1"
+    if [ "${#reason}" -gt 600 ]; then
+      reason="${reason:0:600}..."
+    fi
+    py_state "$spath" "$reason" <<'PY'
+import datetime, sys
+spath, reason = sys.argv[1], sys.argv[2]
+_lk = lock_state(spath)
+d = json.load(open(spath))
+d['status'] = 'blocked'
+d['block_reason'] = reason
+d['updated_at'] = datetime.datetime.now().astimezone().isoformat()
+dump_json(d, spath)
+PY
+  }
+
   should_continue_chain() {
     local link_tid="$1"
     [ "$mode" = "all" ] || return 1
     local link_status
     link_status="$(task_field "$link_tid" status)"
     if [ "$link_status" != "passed" ]; then
-      [ "$link_status" = "failed" ] || return 1
+      if [ "$link_status" != "failed" ]; then
+        mark_chain_blocked "Chain link $link_tid ended in unexpected status \"$link_status\" (neither passed nor failed) - stopping instead of guessing whether to continue."
+        return 1
+      fi
       local current_step
       current_step="$(json_field "$spath" current_step 2>/dev/null)"
-      [ -n "$current_step" ] || return 1
+      if [ -z "$current_step" ]; then
+        mark_chain_blocked "Chain link $link_tid failed but no current pending step could be resolved from state - stopping."
+        return 1
+      fi
       # [AUTO-FIX ...] must be checked BEFORE the generic [browser-check]
       # substring match: a synthesized line embeds the target's own text
       # (which contains "[BROWSER-CHECK]") inside its reason snippet, so the
@@ -3620,7 +3687,10 @@ PY
         link_log="$(task_field "$link_tid" log_path)"
         fail_reason=""
         [ -n "$link_log" ] && [ -f "$link_log" ] && fail_reason="$(tail -n 60 "$link_log" 2>/dev/null)"
-        [ -n "$fail_reason" ] || return 1  # nothing to diagnose - stay failed, same as today
+        if [ -z "$fail_reason" ]; then
+          mark_chain_blocked "[BROWSER-CHECK] step \"$current_step\" failed with no diagnosable log output - stopping."
+          return 1  # nothing to diagnose - stay failed, same as today
+        fi
         fix_result="$(synthesize_auto_fix_step "$current_step" "$fail_reason" "$auto_fix_cap")"
         case "$fix_result" in
           OK)
@@ -3646,11 +3716,20 @@ PY
             err "[BROWSER-CHECK] still failing after $auto_fix_cap ad-hoc [AUTO-FIX] attempts - stopping the chain."
             err "Last verification failure: $last_error"
             err "See the plan's [AUTO-FIX] entries and their logs for every attempt tried."
+            mark_chain_blocked "[BROWSER-CHECK] still failing after $auto_fix_cap ad-hoc [AUTO-FIX] attempts on \"$current_step\": $last_error"
             return 1
             ;;
-          *) return 1 ;;
+          *)
+            mark_chain_blocked "Could not synthesize an [AUTO-FIX] step for \"$current_step\" (synthesize_auto_fix_step returned \"$fix_result\") - stopping."
+            return 1
+            ;;
         esac
       else
+        local link_log fail_reason
+        link_log="$(task_field "$link_tid" log_path)"
+        fail_reason=""
+        [ -n "$link_log" ] && [ -f "$link_log" ] && fail_reason="$(tail -n 60 "$link_log" 2>/dev/null)"
+        mark_chain_blocked "Step failed and needs a human decision: \"$current_step\"${fail_reason:+ - last log output: $fail_reason}"
         return 1
       fi
     fi
@@ -3671,6 +3750,7 @@ PY
     if [ "$iso" != "main" ] && next_step_is_browser_check && ! browser_mcp_available; then
       err "Next step is [BROWSER-CHECK] and no browser MCP was detected for $executor - stopping the --all chain here."
       err "Finish that step with --main ($SCRIPT_DIR/ogre execute $issue --main) or give $executor a browser MCP, then resume: $SCRIPT_DIR/ogre execute $issue --all"
+      mark_chain_blocked "Next step is [BROWSER-CHECK] and no browser MCP is available for $executor. Finish it with --main or configure a browser MCP, then resume."
       return 1
     fi
     return 0

@@ -1208,6 +1208,97 @@ print(rows[-1]['id'] if rows else '')
   [ "$(task_json_field "${tid2}" status)" = "failed" ] || return 1
 }
 
+@test "execute --all --background: a genuine (non-browser-check) step failure blocks the chain and self-heal does not respawn it" {
+  "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
+  write_plan_with_steps 42 "First step" "Second step"
+
+  # Stub `claude`: 1st invocation passes and ticks the plan so the chain
+  # advances; 2nd invocation fails via task-complete (no [BROWSER-CHECK], no
+  # [AUTO-FIX] prefix on the step text) - simulating a step that correctly
+  # refuses to guess (e.g. a NEEDS INSPECTION guardrail) instead of crashing.
+  local call_counter="${TEST_TMP}/claude-calls"
+  local stub_bin="${TEST_TMP}/stub-bin"
+  mkdir -p "${stub_bin}"
+  cat > "${stub_bin}/claude" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+n=0
+[ -f "${call_counter}" ] && n="\$(cat "${call_counter}")"
+n=\$((n + 1))
+echo "\$n" > "${call_counter}"
+if [ "\$n" = "1" ]; then
+  MOCK_CLAUDE_STATUS=passed MOCK_CLAUDE_TICK_PLAN=".ai/.ogre/plans/issue-42.md" exec "${MOCK_BIN}/claude" "\$@"
+else
+  MOCK_CLAUDE_STATUS=failed exec "${MOCK_BIN}/claude" "\$@"
+fi
+EOF
+  chmod +x "${stub_bin}/claude"
+  export PATH="${stub_bin}:${PATH}"
+
+  run "${OGRE_BIN}" execute 42 --all --background
+  [ "${status}" -eq 0 ] || return 1
+
+  # Wait for the SECOND chain link specifically (not just "whatever is last
+  # right now") - right after link 1 finishes there's a brief window where
+  # it's the only "mode=all" row and already terminal, which would otherwise
+  # be mistaken for the (not-yet-created) link 2.
+  local tid2 waited=0
+  while [ "${waited}" -lt 30 ]; do
+    tid2="$(python3 -c "
+import json
+tasks = json.load(open('.ai/.ogre/state/tasks.json'))
+rows = sorted([t for t in tasks if t.get('mode') == 'all'], key=lambda t: t.get('created_at') or '')
+print(rows[1]['id'] if len(rows) >= 2 else '')
+")"
+    [ -n "${tid2}" ] && break
+    sleep 0.2
+    waited=$((waited + 1))
+  done
+  [ -n "${tid2}" ] || return 1
+  wait_for_task_status "${tid2}" failed 30
+
+  # Exactly 2 chain links must have run - a 3rd would mean should_continue_chain
+  # kept retrying a step it should have stopped on.
+  local link_count
+  link_count="$(python3 -c "
+import json
+tasks = json.load(open('.ai/.ogre/state/tasks.json'))
+print(len([t for t in tasks if t.get('mode') == 'all']))
+")"
+  [ "${link_count}" = "2" ] || return 1
+
+  # mark_chain_blocked/finalize_issue_state run just after the task ledger
+  # flips to "failed" (still inside the same background driver subshell) -
+  # give that a moment to land instead of racing it with a single read.
+  local block_waited=0
+  while [ "$(state_field 42 status)" != "blocked" ] && [ "${block_waited}" -lt 30 ]; do
+    sleep 0.2
+    block_waited=$((block_waited + 1))
+  done
+  [ "$(state_field 42 status)" = "blocked" ] || return 1
+  local reason
+  reason="$(state_field 42 block_reason)"
+  [[ "${reason}" == *"Second step"* ]] || return 1
+
+  # A later `ogre status` (standing in for a self-heal check landing after
+  # the chain stopped) must NOT auto-resume a blocked chain - only stopped/
+  # completed/planning/blocked are excluded from maybe_resume_stalled_chain.
+  run "${OGRE_BIN}" status 42
+  [ "${status}" -eq 0 ] || return 1
+  [[ "${output}" != *"Auto-resuming"* ]] || return 1
+  [[ "${output}" == *"Blocked: "* ]] || return 1
+  [[ "${output}" == *"Resume once fixed:"* ]] || return 1
+  [[ "${output}" == *"ogre execute --job"*"--all --background"* ]] || return 1
+
+  local link_count_after
+  link_count_after="$(python3 -c "
+import json
+tasks = json.load(open('.ai/.ogre/state/tasks.json'))
+print(len([t for t in tasks if t.get('mode') == 'all']))
+")"
+  [ "${link_count_after}" = "2" ] || return 1
+}
+
 @test "execute --background: a caught signal to the driver is logged (forensics for the still-unexplained mid-chain deaths)" {
   "${OGRE_BIN}" feature --statement "base feature" --name 42 --main
   write_plan_with_steps 42 "Only step"

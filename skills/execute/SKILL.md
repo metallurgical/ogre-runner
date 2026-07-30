@@ -18,7 +18,15 @@ Accept:
 
 Optional flags:
 
-- `--executor codex|claude` — **every codex spawn runs fully unsandboxed** (`--dangerously-bypass-approvals-and-sandbox`: no filesystem/shell/network confinement, no approval prompts), unconditional, not just `[BROWSER-CHECK]` steps. There is no opt-in flag for this anymore (`--codex-unsandboxed-browser-check`/`codex_unsandboxed_browser_check` are retired) — it's simply how codex always runs in Ogre now, because codex's own sandbox otherwise blocks things Ogre needs outright (real registry/network access, spawning a real browser). Ogre is a dev-only tool as a result. `claude` isolates fine by default (`--permission-mode bypassPermissions`) and needs no such tradeoff. If you see the `WARNING: codex steps run UNSANDBOXED` log line, that is expected on every codex step now, not a bug or a sign something was misconfigured — do not stop the chain over it.
+- `--executor codex|claude` — omitted, this falls back to `defaults.executor` in
+  `.ai/.ogre/config.json`, then `claude`. **Never add `--executor`/`--model` on your
+  own initiative "to be explicit" or "to be safe" when the user's own message
+  didn't name one - omit both and let `config.json` resolve it.** A real caught
+  bug: a driving session hardcoded `--rescuer claude --model claude-sonnet-5` (same
+  pattern applies to `--executor`) on a project whose config had a different
+  provider set as default, silently overriding it with no user request behind it.
+  If you don't know the project's configured default, check `ogre config` first or
+  simply omit the flag - don't guess. **Every codex spawn runs fully unsandboxed** (`--dangerously-bypass-approvals-and-sandbox`: no filesystem/shell/network confinement, no approval prompts), unconditional, not just `[BROWSER-CHECK]` steps. There is no opt-in flag for this anymore (`--codex-unsandboxed-browser-check`/`codex_unsandboxed_browser_check` are retired) — it's simply how codex always runs in Ogre now, because codex's own sandbox otherwise blocks things Ogre needs outright (real registry/network access, spawning a real browser). Ogre is a dev-only tool as a result. `claude` isolates fine by default (`--permission-mode bypassPermissions`) and needs no such tradeoff. If you see the `WARNING: codex steps run UNSANDBOXED` log line, that is expected on every codex step now, not a bug or a sign something was misconfigured — do not stop the chain over it.
 - `--model MODEL`
 - `--reasoning LEVEL` — reasoning effort for the executor (`claude -p` gets `--effort LEVEL`, `codex exec` gets `-c model_reasoning_effort=LEVEL`). Omit it to use the CLI's own default; Ogre never forces one.
 - `--task <task-id>` — target one specific seeded step out of order
@@ -134,6 +142,8 @@ A step tagged `[BROWSER-CHECK]` needs a real rendered browser to verify (visual 
 The cleanest fix for all of this is to give the executor a browser MCP once — then every case above collapses to "runs isolated, nothing to poll for."
 
 `ogre status <issue>` also self-heals a chain whose `--background` driver died outright (observed in the wild: no crash trace, process just gone, pending steps left with nothing running) — it detects a dead pid on the last `mode=all` chain task with steps still pending and auto-relaunches `--all --background` with the same executor/model/reasoning/mcp-config (whichever of those were set on the original invocation, read back off that task's own ledger record). This means the poll loop above (which already calls `ogre status`) recovers from that case for free; no separate dead-process detection needed.
+
+**This self-heal deliberately does NOT cover `status: "blocked"`.** A chain stops `blocked` (instead of just failing) when `should_continue_chain` finds a real, unresolved reason to stop — a genuine step failure, an exhausted `[BROWSER-CHECK]` `[AUTO-FIX]` cap, or a `NEEDS INSPECTION`-style guardrail refusing to guess at ambiguous/missing data — as opposed to the driver merely dying. Auto-respawning that would just re-run the same doomed step forever, which is the exact loop this status exists to prevent. When your poll loop's `ogre status` output shows `Blocked: <reason>` and a `Resume once fixed: ogre execute --job <id> --all --background ...` line, stop polling, read the reason, resolve it yourself or ask the user only if it's a genuine product-decision ambiguity (same bar as the Auto-Fix Cap section below), then re-invoke the printed resume command yourself — same flags, same `--background`/`--live` as the original run — and restart the poll loop. See CLAUDE.md's "Orchestrating `ogre execute`" section for the full protocol.
 
    Do **not** spawn any subagent for any of cases 1-3 above — cases 1-2 already resolve synchronously within the same turn, and case 3's backgrounded poll loop already delivers its own completion notification straight to this session. A subagent would only inherit the whole conversation (or, for a fork, burn Claude quota) for zero added benefit.
 

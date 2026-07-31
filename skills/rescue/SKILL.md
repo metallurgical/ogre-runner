@@ -137,7 +137,16 @@ the user hasn't already been through that tradeoff this session.
    (e.g. "quantity update" -> "quantity stepper") **and never name a file, function,
    route, table, column, config key, or API you haven't personally opened and
    confirmed in this session** - both are guessing, not cleanup, dressed up as
-   helpfulness. `ogre rescue` itself now hard-rejects any `<task>` naming a source
+   helpfulness. A second real caught case, same failure in a subtler form: the user
+   said "setting page now looks nice, only just the each tab's content looks too big
+   consuming space, can compact it" - a driving session condensed that into "settings
+   page tabs content too big, consuming too much space, compact spacing", which reads
+   like harmless tidying but silently added the word "spacing" - a specific guess at
+   *what* to compact (spacing, as opposed to padding, font size, line-height, etc.)
+   that the user never said. Condensing a rambly sentence is still paraphrasing, not
+   "just" filler-trimming, the moment it reorders clauses or picks a more specific
+   word than the user's own - if you're unsure whether an edit crosses that line,
+   it does; leave the wording alone. `ogre rescue` itself now hard-rejects any `<task>` naming a source
    file that doesn't exist anywhere in the repo (`reject_invented_paths`, checked
    against `git ls-files`) as a backstop, but that only catches fabricated
    *filenames* - it can't catch an invented function/route/table name, or a
@@ -340,9 +349,11 @@ actual progress.
   literally-quoted screenshot block are the only allowed touch-ups) - not a paragraph
   you compose to "capture the idea." See Behavior step 1.
 - Do not rewrite/paraphrase the user's own wording into more specific or technical
-  terms on your own initiative (e.g. "quantity update" -> "quantity stepper") - see
-  Behavior step 1. That's guessing, not cleanup, and it costs this session's own
-  tokens for zero benefit.
+  terms on your own initiative (e.g. "quantity update" -> "quantity stepper", or
+  condensing "can compact it" into "compact spacing") - see Behavior step 1. That's
+  guessing, not cleanup, and it costs this session's own tokens for zero benefit.
+  Condensing a rambly sentence down still counts as paraphrasing the moment it
+  reorders clauses or picks a more specific word than the user's own.
 - Do not invent files, methods, routes, tables, columns, config keys, or APIs.
   `ogre rescue` hard-rejects a `<task>` naming a source file not found anywhere in
   the repo (see `--allow-unverified-paths` under Inputs) as a backstop for the

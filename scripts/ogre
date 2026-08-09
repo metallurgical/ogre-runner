@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OGRE_VERSION="1.4.56"
+OGRE_VERSION="1.4.57"
 RUNTIME=".ai/.ogre"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -128,7 +128,12 @@ write_default_config() {
     "rescuer": { "provider": "claude", "model": "claude-sonnet-5" },
     "diff_reviewer": { "provider": "claude", "model": "claude-sonnet-5" }
   },
-  "browser_mcp": null
+  "browser_mcp": null,
+  "stall_watchdog": {
+    "enabled": true,
+    "poll_interval_sec": 30,
+    "timeout_min": { "default": 8, "high": 12, "xhigh_ultra": 20 }
+  }
 }
 JSON
 }
@@ -178,6 +183,201 @@ config_default_role() {
 try: d = json.load(open(sys.argv[1]))
 except Exception: sys.exit(0)
 print(((d.get("defaults") or {}).get(sys.argv[2]) or {}).get(sys.argv[3]) or "")' "$cfg" "$role" "$field"
+}
+
+# --- codex stall watchdog (see project_codex_stall_watchdog_deferred memory
+# and the CLAUDE.md orchestration section) ---------------------------------
+#
+# A codex call can occasionally get zero response from the model API ever -
+# no error, no exception, just an indefinite hang (no client-side read
+# timeout on codex's own streaming connection - confirmed via its own
+# session rollout log showing nothing past the initial task_started event,
+# contrasted against a working run's rollout log which keeps growing).
+# Ogre can't fix codex's client, but it CAN detect "definitely hung, not
+# just legitimately slow" and recover automatically instead of leaving a
+# background chain stuck forever. codex only - no claude occurrence of this
+# failure mode has been observed, and claude's session files are laid out
+# differently, so building detection for it now would be speculative.
+
+# stall_watchdog_enabled - config.json's stall_watchdog.enabled (default
+# true; the escape hatch if this ever misfires).
+stall_watchdog_enabled() {
+  local cfg="$RUNTIME/config.json"
+  [ -f "$cfg" ] || { echo yes; return; }
+  python3 -c '
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    print("yes"); sys.exit(0)
+print("no" if (d.get("stall_watchdog") or {}).get("enabled") is False else "yes")
+' "$cfg"
+}
+
+# stall_poll_interval_sec - how often the watchdog checks the rollout file
+# for new events (config.json's stall_watchdog.poll_interval_sec, default 30).
+stall_poll_interval_sec() {
+  local cfg="$RUNTIME/config.json" val=""
+  [ -f "$cfg" ] && val="$(python3 -c '
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+v = (d.get("stall_watchdog") or {}).get("poll_interval_sec")
+print(v if v is not None else "")
+' "$cfg")"
+  echo "${val:-30}"
+}
+
+# stall_timeout_minutes <reasoning> - how many minutes of zero rollout-event
+# growth before a codex call counts as hung, scaled by the step's own
+# reasoning effort (config.json's stall_watchdog.timeout_min.*, default
+# 8/12/20) - a higher-effort step is expected to legitimately think longer
+# before producing its first real event, so it gets more patience rather
+# than tripping the same flat timeout a quick step would.
+stall_timeout_minutes() {
+  local reasoning="$1" cfg="$RUNTIME/config.json" key="default"
+  case "$reasoning" in
+    high) key="high" ;;
+    xhigh|ultra) key="xhigh_ultra" ;;
+  esac
+  local val=""
+  [ -f "$cfg" ] && val="$(python3 -c '
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+v = ((d.get("stall_watchdog") or {}).get("timeout_min") or {}).get(sys.argv[2])
+print(v if v is not None else "")
+' "$cfg" "$key")"
+  if [ -z "$val" ]; then
+    case "$key" in
+      high) val=12 ;;
+      xhigh_ultra) val=20 ;;
+      *) val=8 ;;
+    esac
+  fi
+  echo "$val"
+}
+
+# codex_rollout_path_for_session <session_id> - locate codex's own per-session
+# event log under ~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<session_id>.jsonl.
+# Checks today's and yesterday's date dirs first (the common case, cheap),
+# falls back to a full-tree search for the rare cross-midnight/clock-skew
+# case. Empty output if not found (yet) - callers treat that as "keep
+# waiting" or "give up monitoring", never as an error.
+codex_rollout_path_for_session() {
+  local sid="$1" today yesterday hit d
+  today="$(date +%Y/%m/%d)"
+  yesterday="$(date -v-1d +%Y/%m/%d 2>/dev/null || date -d yesterday +%Y/%m/%d 2>/dev/null || true)"
+  for d in "$today" "$yesterday"; do
+    [ -n "$d" ] || continue
+    hit="$(find "$HOME/.codex/sessions/$d" -maxdepth 1 -name "*${sid}*.jsonl" 2>/dev/null | head -1)"
+    [ -n "$hit" ] && { echo "$hit"; return 0; }
+  done
+  find "$HOME/.codex/sessions" -name "*${sid}*.jsonl" 2>/dev/null | head -1
+}
+
+# codex_rollout_event_count <rollout-path> - line count of a rollout jsonl
+# file (one JSON event per line, written by codex's own internal event loop
+# directly to disk - unaffected by whatever buffering codex's own stdout
+# does when redirected to a file). 0 if the file doesn't exist yet.
+codex_rollout_event_count() {
+  local p="$1"
+  [ -f "$p" ] || { echo 0; return; }
+  wc -l < "$p" 2>/dev/null | tr -d ' '
+}
+
+# stall_watchdog_arm <codex_pid> <logpath> <reasoning> <json_mode> <stallfile>
+# - launches a background poller and echoes its pid (empty if the watchdog
+# is disabled or never manages to identify the session - callers treat an
+# empty echo as "no watchdog armed", not an error). The poller:
+#   1. polls $logpath for codex's session id (present in the startup banner
+#      even in a fully-hung run - confirmed from the traced occurrence),
+#      giving up quietly after 90s if it never appears (e.g. codex crashed
+#      before printing anything, unrelated to a stall).
+#   2. locates that session's rollout file, giving up quietly after 30s.
+#   3. polls the rollout file's event count every poll_interval_sec; any
+#      growth resets the stall clock. No growth for stall_timeout_minutes
+#      (scaled by reasoning) -> SIGTERM the codex pid (SIGKILL after a 5s
+#      grace period if it's still alive) and write a reason into $stallfile.
+# Never touches the task ledger itself - that's the caller's job once it
+# knows both the real exit code and whether stallfile got written.
+stall_watchdog_arm() {
+  local codex_pid="$1" logpath="$2" reasoning="$3" json_mode="$4" stallfile="$5"
+  if [ "$(stall_watchdog_enabled)" != "yes" ]; then
+    echo ""
+    return
+  fi
+  rm -f "$stallfile"
+  (
+    local session_id="" waited=0
+    while [ -z "$session_id" ] && [ "$waited" -lt 90 ] && kill -0 "$codex_pid" 2>/dev/null; do
+      session_id="$(extract_codex_session_id "$logpath" "$json_mode" 2>/dev/null || true)"
+      [ -n "$session_id" ] && break
+      sleep 3
+      waited=$((waited + 3))
+    done
+    [ -n "$session_id" ] || exit 0
+
+    local rollout="" rwaited=0
+    while [ -z "$rollout" ] && [ "$rwaited" -lt 30 ] && kill -0 "$codex_pid" 2>/dev/null; do
+      rollout="$(codex_rollout_path_for_session "$session_id")"
+      [ -n "$rollout" ] && break
+      sleep 2
+      rwaited=$((rwaited + 2))
+    done
+    [ -n "$rollout" ] || exit 0
+
+    local timeout_sec poll_sec last_count last_change now cur
+    timeout_sec=$(( $(stall_timeout_minutes "$reasoning") * 60 ))
+    poll_sec="$(stall_poll_interval_sec)"
+    last_count="$(codex_rollout_event_count "$rollout")"
+    last_change=$(date +%s)
+    while kill -0 "$codex_pid" 2>/dev/null; do
+      sleep "$poll_sec"
+      kill -0 "$codex_pid" 2>/dev/null || break
+      cur="$(codex_rollout_event_count "$rollout")"
+      now=$(date +%s)
+      if [ "$cur" != "$last_count" ]; then
+        last_count="$cur"
+        last_change="$now"
+      elif [ $((now - last_change)) -ge "$timeout_sec" ]; then
+        kill -TERM "$codex_pid" 2>/dev/null || true
+        sleep 5
+        kill -0 "$codex_pid" 2>/dev/null && kill -KILL "$codex_pid" 2>/dev/null
+        echo "Codex produced no new model activity for ${timeout_sec}s (session $session_id, rollout $rollout) - killed as stalled." > "$stallfile"
+        exit 0
+      fi
+    done
+  # `> /dev/null 2>&1`, not left to inherit this function's own stdout: this
+  # subshell backgrounds via `&` but the caller reads this function's output
+  # through `watchdog_pid="$(stall_watchdog_arm ...)"` - a command
+  # substitution's pipe doesn't see EOF until EVERY process holding its
+  # write end closes it, including an orphaned background job that merely
+  # inherited the fd. Without this redirect, that `$(...)` blocks for the
+  # ENTIRE stall timeout (up to 20 real minutes) before `echo "$!"` below
+  # can even be read back - silently serializing the caller behind the
+  # watchdog instead of racing it in the background. Caught by an actual
+  # timed dry run (fake hung codex, tiny timeout), not by inspection.
+  ) > /dev/null 2>&1 &
+  echo "$!"
+}
+
+# stall_watchdog_reap <watchdog_pid> <stallfile> - stop the poller (codex
+# already finished on its own, no need to keep watching a dead pid) and
+# report whether it fired. Echoes "yes"/"no". Safe to call with an empty
+# watchdog_pid/stallfile (non-codex executor, or watchdog disabled).
+stall_watchdog_reap() {
+  local watchdog_pid="$1" stallfile="$2"
+  [ -n "$watchdog_pid" ] && kill "$watchdog_pid" 2>/dev/null
+  if [ -n "$stallfile" ] && [ -s "$stallfile" ]; then
+    echo "yes"
+  else
+    echo "no"
+  fi
 }
 
 gen_uuid() {
@@ -2012,7 +2212,7 @@ spawn_role_foreground() {
   local tid="$1" runner="$2" logpath="$3" session_id="$4"
   local executor="$5" model="$6" reasoning="$7" mcp_config="$8" expected_output_file="$9"
   local json_mode="${10:-}"
-  local rc child_pid
+  local rc child_pid watchdog_pid="" stallfile=""
   set +e
   case "$executor" in
     codex)
@@ -2038,6 +2238,10 @@ spawn_role_foreground() {
   esac
   child_pid=$!
   task_update "$tid" "pid=$child_pid"
+  if [ "$executor" = "codex" ]; then
+    stallfile="$RUNTIME/tmp/$tid.stall"
+    watchdog_pid="$(stall_watchdog_arm "$child_pid" "$logpath" "$reasoning" "$json_mode" "$stallfile")"
+  fi
   wait "$child_pid"
   rc=$?
   # The process-substitution `tee` can still be draining its last buffered
@@ -2047,7 +2251,12 @@ spawn_role_foreground() {
   # caller's own log tail) see the fully-flushed file, not a truncated one.
   wait
   set -e
-  finalize_role_status "$tid" "$rc" "$expected_output_file"
+  if [ "$(stall_watchdog_reap "$watchdog_pid" "$stallfile")" = "yes" ]; then
+    task_update "$tid" "status=network_failed" "exit_code=$rc" "notes=$(tr '\n' ' ' < "$stallfile" 2>/dev/null)"
+    rm -f "$stallfile"
+  else
+    finalize_role_status "$tid" "$rc" "$expected_output_file"
+  fi
   if [ "$executor" = "codex" ]; then
     local codex_sid
     codex_sid="$(extract_codex_session_id "$logpath" "$json_mode")" || true
@@ -2078,14 +2287,26 @@ spawn_role_background() {
     trap 'echo "$(date "+%Y-%m-%dT%H:%M:%S%z") DRIVER_SIGNAL TERM"; exit 143' TERM
     trap 'echo "$(date "+%Y-%m-%dT%H:%M:%S%z") DRIVER_SIGNAL INT"; exit 130' INT
     trap 'echo "$(date "+%Y-%m-%dT%H:%M:%S%z") DRIVER_EXIT rc=$?"' EXIT
-    local rc
+    local rc watchdog_pid="" stallfile=""
+    # set +e around the spawn+wait: a watchdog-triggered SIGTERM (see below)
+    # makes `wait` return nonzero, and this whole block runs under the
+    # global `set -e` (inherited into this subshell) - without suspending it
+    # here, that nonzero would abort the subshell right at the `wait` line,
+    # never reaching the network_failed/finalize_role_status classification
+    # below (nor the exit-sentinel write), leaving the ledger stuck on
+    # "running" forever instead of recovering.
+    set +e
     case "$executor" in
       codex)
         local -a codex_args=(exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox)
         [ -n "$model" ] && codex_args+=(-m "$model")
         [ -n "$reasoning" ] && codex_args+=(-c "model_reasoning_effort=$reasoning")
         [ "$json_mode" = "yes" ] && codex_args+=(--json)
-        codex "${codex_args[@]}" - < "$runner" > "$logpath" 2>&1
+        codex "${codex_args[@]}" - < "$runner" > "$logpath" 2>&1 &
+        local codex_pid=$!
+        stallfile="$RUNTIME/tmp/issue-$issue/$tid.stall"
+        watchdog_pid="$(stall_watchdog_arm "$codex_pid" "$logpath" "$reasoning" "$json_mode" "$stallfile")"
+        wait "$codex_pid"
         ;;
       claude)
         local -a claude_args=(-p --permission-mode bypassPermissions --session-id "$session_id")
@@ -2097,7 +2318,13 @@ spawn_role_background() {
         ;;
     esac
     rc=$?
-    finalize_role_status "$tid" "$rc" "$expected_output_file"
+    set -e
+    if [ "$executor" = "codex" ] && [ "$(stall_watchdog_reap "$watchdog_pid" "$stallfile")" = "yes" ]; then
+      task_update "$tid" "status=network_failed" "exit_code=$rc" "notes=$(tr '\n' ' ' < "$stallfile" 2>/dev/null)"
+      rm -f "$stallfile"
+    else
+      finalize_role_status "$tid" "$rc" "$expected_output_file"
+    fi
     if [ "$executor" = "codex" ]; then
       local codex_sid
       codex_sid="$(extract_codex_session_id "$logpath" "$json_mode")" || true
@@ -3410,7 +3637,7 @@ PY
   # the exit code as the last line of stdout (caller captures it).
   run_link_foreground() {
     local link_tid="$1" link_runner="$2" link_logpath="$3" link_session="$4"
-    local rc
+    local rc watchdog_pid="" stallfile=""
     set +e
     case "$executor" in
       codex)
@@ -3422,11 +3649,20 @@ PY
         [ -n "$model" ] && codex_args+=(-m "$model")
         [ -n "$reasoning" ] && codex_args+=(-c "model_reasoning_effort=$reasoning")
         [ "$json_mode" = "yes" ] && codex_args+=(--json)
+        # Process substitution (not a plain `| tee`), same reasoning as
+        # spawn_role_foreground's own comment: `$!` must capture codex's own
+        # pid, not tee's, both for the ledger and so the stall watchdog below
+        # can actually kill the right process.
         if [ "$live_chain" = "yes" ]; then
-          codex "${codex_args[@]}" - < "$link_runner" | tee -a "$link_logpath"
+          codex "${codex_args[@]}" - < "$link_runner" > >(tee -a "$link_logpath") &
         else
-          codex "${codex_args[@]}" - < "$link_runner" | tee "$link_logpath"
+          codex "${codex_args[@]}" - < "$link_runner" > >(tee "$link_logpath") &
         fi
+        local codex_pid=$!
+        stallfile="$RUNTIME/tmp/$link_tid.stall"
+        watchdog_pid="$(stall_watchdog_arm "$codex_pid" "$link_logpath" "$reasoning" "$json_mode" "$stallfile")"
+        wait "$codex_pid"
+        rc=$?
         ;;
       claude)
         local -a claude_args=(-p --permission-mode bypassPermissions --session-id "$link_session")
@@ -3439,11 +3675,21 @@ PY
         else
           claude "${claude_args[@]}" < "$link_runner" | tee "$link_logpath"
         fi
+        rc=$?
         ;;
     esac
-    rc=$?
+    # Bare `wait` flushes the codex arm's process-substitution `tee` (see
+    # spawn_role_foreground's identical comment) - deliberately AFTER `rc` is
+    # already captured per-arm above, since a bare `wait` always returns 0
+    # and would otherwise stomp a real nonzero rc if read from it instead.
+    wait
     set -e
-    finalize_link_status "$link_tid" "$rc"
+    if [ "$executor" = "codex" ] && [ "$(stall_watchdog_reap "$watchdog_pid" "$stallfile")" = "yes" ]; then
+      task_update "$link_tid" "status=network_failed" "exit_code=$rc" "notes=$(tr '\n' ' ' < "$stallfile" 2>/dev/null)"
+      rm -f "$stallfile"
+    else
+      finalize_link_status "$link_tid" "$rc"
+    fi
     if [ "$executor" = "codex" ]; then
       local codex_sid
       codex_sid="$(extract_codex_session_id "$link_logpath" "$json_mode")" || true
@@ -3454,6 +3700,14 @@ PY
 
   run_link_background_body() {
     local link_tid="$1" link_runner="$2" link_logpath="$3" link_session="$4"
+    local rc watchdog_pid="" stallfile=""
+    # set +e: a watchdog-triggered SIGTERM makes `wait` return nonzero: under
+    # the global `set -e` (inherited into the background driver subshell
+    # this runs in), that would otherwise abort right at the `wait` line,
+    # skipping the network_failed classification and finalize_link_status
+    # below entirely - same reasoning as spawn_role_background's identical
+    # guard.
+    set +e
     case "$executor" in
       codex)
         local -a codex_args=(exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox)
@@ -3461,10 +3715,14 @@ PY
         [ -n "$reasoning" ] && codex_args+=(-c "model_reasoning_effort=$reasoning")
         [ "$json_mode" = "yes" ] && codex_args+=(--json)
         if [ "$live_chain" = "yes" ]; then
-          codex "${codex_args[@]}" - < "$link_runner" >> "$link_logpath" 2>&1
+          codex "${codex_args[@]}" - < "$link_runner" >> "$link_logpath" 2>&1 &
         else
-          codex "${codex_args[@]}" - < "$link_runner" > "$link_logpath" 2>&1
+          codex "${codex_args[@]}" - < "$link_runner" > "$link_logpath" 2>&1 &
         fi
+        local codex_pid=$!
+        stallfile="$RUNTIME/tmp/issue-$issue/$link_tid.stall"
+        watchdog_pid="$(stall_watchdog_arm "$codex_pid" "$link_logpath" "$reasoning" "$json_mode" "$stallfile")"
+        wait "$codex_pid"
         ;;
       claude)
         local -a claude_args=(-p --permission-mode bypassPermissions --session-id "$link_session")
@@ -3479,8 +3737,14 @@ PY
         fi
         ;;
     esac
-    local rc=$?
-    finalize_link_status "$link_tid" "$rc"
+    rc=$?
+    set -e
+    if [ "$executor" = "codex" ] && [ "$(stall_watchdog_reap "$watchdog_pid" "$stallfile")" = "yes" ]; then
+      task_update "$link_tid" "status=network_failed" "exit_code=$rc" "notes=$(tr '\n' ' ' < "$stallfile" 2>/dev/null)"
+      rm -f "$stallfile"
+    else
+      finalize_link_status "$link_tid" "$rc"
+    fi
     if [ "$executor" = "codex" ]; then
       local codex_sid
       codex_sid="$(extract_codex_session_id "$link_logpath" "$json_mode")" || true
@@ -3662,6 +3926,41 @@ PY
     [ "$mode" = "all" ] || return 1
     local link_status
     link_status="$(task_field "$link_tid" status)"
+    # network_failed (stall watchdog killed a codex call that got zero model
+    # response - see stall_watchdog_arm) is neither a real "failed" step nor
+    # a normal "passed" one. One automatic retry of the identical step
+    # (matches both real occurrences: transient, self-resolves on retry).
+    # If the retry ALSO stalls, that's likely systemic rather than a one-off
+    # network blip - stop for real via mark_chain_blocked instead of
+    # retrying forever (same cap philosophy as auto_fix_cap above).
+    if [ "$link_status" = "network_failed" ]; then
+      local stall_retries
+      stall_retries="$(python3 -c '
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    d = {}
+print(d.get("stall_retries") or 0)
+' "$spath" 2>/dev/null)"
+      [ -n "$stall_retries" ] || stall_retries=0
+      if [ "$stall_retries" -lt 1 ]; then
+        py_state "$spath" <<'PY'
+import datetime, sys
+spath = sys.argv[1]
+_lk = lock_state(spath)
+d = json.load(open(spath))
+d['stall_retries'] = (d.get('stall_retries') or 0) + 1
+d['updated_at'] = datetime.datetime.now().astimezone().isoformat()
+dump_json(d, spath)
+PY
+        log "Chain link $link_tid stalled (codex produced no model response - see its notes) - retrying the same step once before giving up."
+        return 0
+      else
+        mark_chain_blocked "Codex stalled twice in a row on the same step, no model response either time - likely a systemic/network issue rather than a one-off blip. See CLAUDE.md's network_failed section before resuming."
+        return 1
+      fi
+    fi
     if [ "$link_status" != "passed" ]; then
       if [ "$link_status" != "failed" ]; then
         mark_chain_blocked "Chain link $link_tid ended in unexpected status \"$link_status\" (neither passed nor failed) - stopping instead of guessing whether to continue."
@@ -3733,6 +4032,20 @@ PY
         return 1
       fi
     fi
+    # A real "passed" link reaches here - zero any stall_retries left over
+    # from a previous step's stall-then-retry-then-pass, so the NEXT step
+    # that ever stalls gets its own fresh retry instead of inheriting a
+    # stale non-zero count and going straight to blocked.
+    py_state "$spath" <<'PY'
+import datetime, sys
+spath = sys.argv[1]
+_lk = lock_state(spath)
+d = json.load(open(spath))
+if d.get('stall_retries'):
+    d['stall_retries'] = 0
+    d['updated_at'] = datetime.datetime.now().astimezone().isoformat()
+    dump_json(d, spath)
+PY
     local pending_left
     # $spath is passed as argv (not spliced into the source) so a slug can
     # never break out of the string literal - consistent with every other
@@ -4470,6 +4783,26 @@ top_entries = [
     ('  "browser_mcp": {}'.format(bm_shown), "{} | override: --mcp-config PATH (ogre execute, [BROWSER-CHECK] steps)".format(bm_src)),
 ]
 
+sw_src = "config.json" if "stall_watchdog" in d else "fallback"
+sw_enabled = get("stall_watchdog", "enabled")
+sw_enabled = sw_enabled if sw_enabled is not None else True
+sw_poll = get("stall_watchdog", "poll_interval_sec")
+sw_poll = sw_poll if sw_poll is not None else 30
+sw_t_default = get("stall_watchdog", "timeout_min", "default")
+sw_t_default = sw_t_default if sw_t_default is not None else 8
+sw_t_high = get("stall_watchdog", "timeout_min", "high")
+sw_t_high = sw_t_high if sw_t_high is not None else 12
+sw_t_xhigh = get("stall_watchdog", "timeout_min", "xhigh_ultra")
+sw_t_xhigh = sw_t_xhigh if sw_t_xhigh is not None else 20
+
+top_entries += [
+    ('  "stall_watchdog.enabled": {}'.format(json.dumps(bool(sw_enabled))), "{} | no CLI override - a hung codex call (zero model response) gets killed+retried once; set false here to disable".format(sw_src)),
+    ('  "stall_watchdog.poll_interval_sec": {}'.format(sw_poll), "{} | how often codex's rollout log is checked for new activity".format(sw_src)),
+    ('  "stall_watchdog.timeout_min.default": {}'.format(sw_t_default), "{} | none/low/medium reasoning steps".format(sw_src)),
+    ('  "stall_watchdog.timeout_min.high": {}'.format(sw_t_high), "{} | high reasoning steps".format(sw_src)),
+    ('  "stall_watchdog.timeout_min.xhigh_ultra": {}'.format(sw_t_xhigh), "{} | xhigh/ultra reasoning steps".format(sw_src)),
+]
+
 width = max(len(e) for e, _ in role_entries + top_entries)
 print("{")
 print('  "defaults": {')
@@ -4477,8 +4810,9 @@ for i, (entry, note) in enumerate(role_entries):
     comma = "," if i < len(role_entries) - 1 else ""
     print("{:<{w}}  # {}".format(entry + comma, note, w=width + 1))
 print("  },")
-for entry, note in top_entries:
-    print("{:<{w}}  # {}".format(entry, note, w=width))
+for i, (entry, note) in enumerate(top_entries):
+    comma = "," if i < len(top_entries) - 1 else ""
+    print("{:<{w}}  # {}".format(entry + comma, note, w=width + 1))
 print("}")
 PY
 }

@@ -20,7 +20,7 @@ If the user hasn't given an issue and hasn't said what to build, ask: "Do you ha
 
 Optional flags:
 
-- `--blocks 101,102` — attach blockers with no status remark.
+- `--blocks 101,102` — attach blockers with no status remark. Each item can be an issue number, GitHub issue URL, generic URL, local file path, or now plain freeform text (e.g. `--blocks "waiting on legal sign-off"`) — anything that isn't a number/URL/existing file path is written verbatim as the blocker's content. Comma-splits the list, so a freeform item containing a literal comma will get cut in two; use `--blocker "..."` instead for that case.
 - `--blocker 101 --remarks "PR merged"` — attach one blocker with a freeform status remark tied to it. Repeatable: `--blocker 101 --remarks "merged" --blocker 102 --remarks "under review"`. `--remarks` always annotates the `--blocker` (or `--blocks`) immediately before it; a `--remarks` with no preceding blocker is an error. Mix freely with `--blocks`. Use this form whenever the user tells you each blocker's status (merged / under review / in progress / blocking) so the planner can reason about what's already landed vs still in flight.
 - `--plan issue-107.md`
 - `--planner claude|codex` — omitted, this falls back to `defaults.planner` in

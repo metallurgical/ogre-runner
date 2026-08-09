@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OGRE_VERSION="1.4.57"
+OGRE_VERSION="1.4.58"
 RUNTIME=".ai/.ogre"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -14,8 +14,8 @@ Ogre $OGRE_VERSION
 Usage:
   ogre --version                                                 (alias: -v, version - prints "Ogre $OGRE_VERSION" and exits)
   ogre init
-  ogre feature <issue-number|issue-url|issue-file> [--blocks 1,2,url,path] [--plan issue-107.md] [--planner claude|codex] [--model MODEL] [--reasoning LEVEL] [--browser-check] [--main|--background] [--live]
-  ogre feature --statement "free text description" [--name my-feature] [--blocks 1,2,url,path] [--plan NAME.md] [--planner claude|codex] [--model MODEL] [--reasoning LEVEL] [--browser-check] [--main|--background] [--live]
+  ogre feature <issue-number|issue-url|issue-file> [--blocks 1,2,url,path,text] [--plan issue-107.md] [--planner claude|codex] [--model MODEL] [--reasoning LEVEL] [--browser-check] [--main|--background] [--live]
+  ogre feature --statement "free text description" [--name my-feature] [--blocks 1,2,url,path,text] [--plan NAME.md] [--planner claude|codex] [--model MODEL] [--reasoning LEVEL] [--browser-check] [--main|--background] [--live]
                                    (alias: ogre plan - same command, same flags)
                                    (--browser-check: opt-in - the generated plan tags steps needing real browser verification with [BROWSER-CHECK]. Default omits the tag entirely; the user verifies the feature themselves)
                                    (--planner/--model omitted: falls back to defaults.planner in .ai/.ogre/config.json, then claude/claude-sonnet-5)
@@ -1117,15 +1117,15 @@ EOF2
     return
   fi
 
+  # Not a file/URL/issue number - treat the raw input as freeform text
+  # content itself (e.g. `--blocks "waiting on legal sign-off"`), same as
+  # `--statement` does for the main issue.
   cat > "$out" <<EOF2
-# Issue Input
+# Freeform Text (user-provided)
 
-Original input: $input
-
-Ogre could not identify this as a file path, GitHub issue URL, or issue number.
-Paste the issue content here before planning.
+$input
 EOF2
-  log "Created placeholder issue file: $out"
+  log "Not a file path, GitHub URL, or issue number - treating as freeform text: $out"
 }
 
 # Prepend a user-supplied remark to a blocker's issue file so the remark
